@@ -1,0 +1,4 @@
+interface:
+  display_name: "Yuntu Industry Content Rankings Analysis"
+  short_description: "Retrieve a ranking list and seconds-level details"
+  default_prompt: "Use $yuntu-industry-content-rankings-analysis to retrieve a filtered Yuntu ranking list and seconds-level details for its top materials."

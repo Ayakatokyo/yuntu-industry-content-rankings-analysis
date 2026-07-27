@@ -20,11 +20,11 @@ class AnalysisSkillContractTests(unittest.TestCase):
 
         self.assertIsNotNone(frontmatter)
         self.assertIn(
-            "name: yuntu-industry-content-rankings-analysis", frontmatter.group(1)
+            "name: 云图行业内容榜单分析", frontmatter.group(1)
         )
         description = re.search(r"^description: (.+)$", frontmatter.group(1), re.MULTILINE)
         self.assertIsNotNone(description)
-        self.assertTrue(description.group(1).startswith("Use when"))
+        self.assertTrue(description.group(1).startswith("适用于"))
         self.assertNotIn("python", description.group(1).lower())
 
     def test_documents_fixed_connectors_runtime_and_workflow(self):
@@ -40,8 +40,8 @@ class AnalysisSkillContractTests(unittest.TestCase):
             "YUCE_SESSION_ID",
         ):
             self.assertIn(environment_variable, skill)
-        self.assertRegex(skill, r"(?i)credentials?.{0,100}environment")
-        self.assertRegex(skill, r"(?is)list.{0,120}material_id.{0,160}detail")
+        self.assertRegex(skill, r"凭证.{0,100}环境变量")
+        self.assertRegex(skill, r"(?s)列表.{0,300}material_id.{0,160}详情")
 
     def test_documents_all_commands_and_exposes_fetch_options(self):
         skill = self.read_skill()
@@ -91,7 +91,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertRegex(metadata, r'(?m)^  display_name: "[^"\n]+"\s*$')
         self.assertRegex(metadata, r'(?m)^  short_description: "[^"\n]+"\s*$')
         self.assertIn(
-            "$yuntu-industry-content-rankings-analysis",
+            "$云图行业内容榜单分析",
             metadata,
         )
 

@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts" / "rpa_io.py"
+FIXTURE_PATH = ROOT / "tests" / "fixtures" / "yuntu_rpa_export_sample.csv"
 
 
 def load_module():
@@ -190,6 +191,36 @@ class RpaIoTests(unittest.TestCase):
             self.assertEqual(records[0]["material_id"], "101")
             self.assertEqual(records[0]["object_index"], {"ctr": 0.5})
             self.assertEqual(records[0]["tags"], ["轻食", "便携"])
+
+    def test_parse_csv_records_decodes_yuntu_python_literal_cells_from_fixture(self):
+        io = load_module()
+
+        records = io.parse_csv_records(FIXTURE_PATH)
+
+        self.assertEqual(records[0]["show_cnt"], "40-50w")
+        self.assertEqual(records[0]["object_index"]["ctr"], 0.0047685291)
+        self.assertEqual(records[0]["object_index"]["show_cnt"], "418368")
+        self.assertEqual(
+            records[0]["people_tag_entry"][0]["tag_name_list"],
+            ["新锐白领", "小镇青年"],
+        )
+        self.assertEqual(
+            records[0]["material_tag_entry"][0]["tag_name_list"],
+            ["限时抢购", "全场五折"],
+        )
+
+    def test_parse_csv_records_keeps_malformed_python_literal_as_text(self):
+        io = load_module()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "malformed.csv"
+            source.write_text(
+                "material_id\x01object_index\n101\x01{'ctr': invalid}\n",
+                encoding="utf-8",
+            )
+
+            records = io.parse_csv_records(source)
+
+            self.assertEqual(records[0]["object_index"], "{'ctr': invalid}")
 
     def test_parse_csv_records_rejects_bad_headers_and_empty_files(self):
         io = load_module()

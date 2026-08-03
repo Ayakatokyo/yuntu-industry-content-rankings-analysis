@@ -1,5 +1,6 @@
 """RPA gateway result IO helpers for Yuntu analysis workflows."""
 
+import ast
 import csv
 import io
 import json
@@ -29,10 +30,17 @@ def _decode_json_cell(value):
         return ""
     if text[0] not in "[{":
         return value
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return value
+    for decoder, errors in (
+        (json.loads, (json.JSONDecodeError,)),
+        (ast.literal_eval, (ValueError, SyntaxError)),
+    ):
+        try:
+            decoded = decoder(text)
+        except errors:
+            continue
+        if isinstance(decoded, (dict, list)):
+            return decoded
+    return value
 
 
 def _records_from_payload(payload):

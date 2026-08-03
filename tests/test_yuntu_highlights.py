@@ -1,4 +1,6 @@
 import importlib.util
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -120,6 +122,98 @@ class YuntuHighlightTests(unittest.TestCase):
         candidates = highlights.select_highlight_candidates(detail, ["评论指数"])
 
         self.assertTrue(candidates[1]["reasons"][0]["within_high_point"])
+
+    def test_generate_highlights_writes_manifest_and_continues_after_one_frame_failure(self):
+        highlights = load_module()
+
+        class Downloader:
+            def __call__(self, _url, destination):
+                Path(destination).write_bytes(b"video")
+
+        class Extractor:
+            def __call__(self, _video_path, second, destination, *, ffmpeg_bin=None):
+                if second == 0:
+                    raise highlights.HighlightFrameError("broken cover")
+                Path(destination).write_bytes(b"jpeg")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = highlights.generate_highlights(
+                [
+                    {
+                        "material_id": "101",
+                        "video_url": "https://video.example/101.mp4",
+                        "trend_series": [
+                            {
+                                "trend_name": "点击指数",
+                                "series": [
+                                    {"second": 1, "value": 1},
+                                    {"second": 2, "value": 4},
+                                    {"second": 3, "value": 1},
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                ["点击指数"],
+                root,
+                downloader=Downloader(),
+                frame_extractor=Extractor(),
+            )
+
+            manifest = json.loads(
+                (root / "highlights-manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertFalse(result["101"][0]["available"])
+            self.assertEqual(result["101"][0]["failure_reason"], "extract_failed")
+            self.assertTrue(result["101"][1]["available"])
+            self.assertTrue((root / result["101"][1]["relative_path"]).is_file())
+            self.assertEqual(
+                manifest["materials"][0]["frames"][0]["failure_reason"],
+                "extract_failed",
+            )
+
+    def test_generate_highlights_marks_missing_video_url_without_raising(self):
+        highlights = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            result = highlights.generate_highlights(
+                [{"material_id": "101", "video_url": "", "trend_series": []}],
+                ["评论指数"],
+                directory,
+            )
+
+        self.assertFalse(result["101"][0]["available"])
+        self.assertEqual(result["101"][0]["failure_reason"], "missing_video_url")
+
+    def test_download_video_rejects_response_larger_than_limit(self):
+        highlights = load_module()
+
+        class Response:
+            headers = {"Content-Length": "5"}
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                yield b"12345"
+
+            def close(self):
+                return None
+
+        class Session:
+            def get(self, _url, *, stream, timeout):
+                self.stream = stream
+                self.timeout = timeout
+                return Response()
+
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(highlights.HighlightFrameError, "maximum size"):
+                highlights.download_video(
+                    "https://video.example/a.mp4",
+                    Path(directory) / "a.mp4",
+                    session=Session(),
+                    max_bytes=4,
+                )
 
 
 if __name__ == "__main__":

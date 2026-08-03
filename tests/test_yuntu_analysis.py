@@ -21,90 +21,111 @@ def load_module():
 
 
 class YuntuAnalysisTests(unittest.TestCase):
-    def test_prepare_analysis_writes_fact_pack_and_prompt(self):
-        analysis = load_module()
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            (root / "normalized" / "detail-records").mkdir(parents=True)
-            (root / "batch-manifest.json").write_text(
-                json.dumps(
-                    {
-                        "schemaVersion": 1,
-                        "filters": {"industry": "食品饮料"},
-                        "candidateMaterials": [{"rank": 1, "material_id": "101"}],
-                        "selectedMaterials": [
-                            {
-                                "rank": 1,
-                                "material_id": "101",
-                                "detailRecordPath": "normalized/detail-records/101.json",
-                            }
-                        ],
-                        "rejectedMaterials": [
-                            {"rank": 2, "material_id": "202", "reason": "RpaIoError"}
-                        ],
-                    },
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
-            (root / "normalized" / "list-records.json").write_text(
-                json.dumps(
-                    [
-                        {
-                            "material_id": "101",
-                            "title": "高点击素材",
-                            "rank": 1,
-                            "metrics": {"ctr": 0.7, "cvr": 0.2},
-                            "people_tags": ["都市银发"],
-                            "material_tags": ["包装_独立包装"],
-                        }
+    def _write_input(self, root, records, selected, details):
+        (root / "normalized" / "detail-records").mkdir(parents=True)
+        (root / "batch-manifest.json").write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "filters": {"industry": "食品饮料"},
+                    "candidateMaterials": [
+                        {"rank": index + 1, "material_id": record["material_id"]}
+                        for index, record in enumerate(records)
                     ],
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
-            (root / "normalized" / "detail-records" / "101.json").write_text(
-                json.dumps(
-                    {
-                        "material_id": "101",
-                        "high_points": [
-                            {"trend_name": "点击指数", "start_sec": 1, "end_sec": 2}
-                        ],
-                        "loss_points": [
-                            {
-                                "trend_name": "流失指数",
-                                "start_sec": 0,
-                                "end_sec": 1,
-                                "loss_percent": 0.5,
-                            }
-                        ],
-                    },
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
+                    "selectedMaterials": selected,
+                    "rejectedMaterials": [
+                        {"rank": 9, "material_id": "999", "reason": "RpaIoError"}
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (root / "normalized" / "list-records.json").write_text(
+            json.dumps(records, ensure_ascii=False), encoding="utf-8"
+        )
+        for material_id, detail in details.items():
+            (root / "normalized" / "detail-records" / f"{material_id}.json").write_text(
+                json.dumps(detail, ensure_ascii=False), encoding="utf-8"
             )
 
-            status = analysis.prepare_analysis(
-                input_dir=root, output_dir=root / "diagnostic-analysis"
-            )
-            data = json.loads(
-                (
-                    root / "diagnostic-analysis" / "yuntu-analysis-data.json"
-                ).read_text(encoding="utf-8")
-            )
-            prompt = (
-                root / "diagnostic-analysis" / "yuntu-analysis-prompt.md"
-            ).read_text(encoding="utf-8")
+    def test_prepare_analysis_calculates_comparison_tag_and_trend_facts(self):
+        analysis = load_module()
+        records = [
+            {
+                "material_id": "101", "title": "素材一", "rank": 1,
+                "metrics": {"ctr": 0.1, "show_cnt": 100, "play_3s_rate": 0.2},
+                "people_tags": ["新锐白领"], "material_tags": ["限时抢购"],
+                "data_availability": {"metrics": {"available": True, "missing_reason": ""}},
+            },
+            {
+                "material_id": "102", "title": "素材二", "rank": 2,
+                "metrics": {"ctr": 0.2, "show_cnt": 200, "play_3s_rate": 0.3},
+                "people_tags": ["新锐白领"], "material_tags": ["限时抢购"],
+                "data_availability": {"metrics": {"available": True, "missing_reason": ""}},
+            },
+            {
+                "material_id": "103", "title": "素材三", "rank": 3,
+                "metrics": {"ctr": 0.3, "show_cnt": 300, "play_3s_rate": 0.4},
+                "people_tags": ["都市银发"], "material_tags": ["商品展示"],
+                "data_availability": {"metrics": {"available": True, "missing_reason": ""}},
+            },
+            {
+                "material_id": "104", "title": "素材四", "rank": 4,
+                "metrics": {"ctr": 0.4, "show_cnt": 400, "play_3s_rate": 0.5},
+                "people_tags": ["都市银发"], "material_tags": ["商品展示"],
+                "data_availability": {"metrics": {"available": True, "missing_reason": ""}},
+            },
+        ]
+        selected = [
+            {"rank": 1, "material_id": "101", "detailRecordPath": "normalized/detail-records/101.json"},
+            {"rank": 4, "material_id": "104", "detailRecordPath": "normalized/detail-records/104.json"},
+        ]
+        details = {
+            material_id: {
+                "material_id": material_id,
+                "high_points": [{"trend_name": "点击指数", "start_sec": 1, "end_sec": 2}],
+                "loss_points": [{"trend_name": "流失指数", "start_sec": 0, "end_sec": 1, "loss_percent": 0.5}],
+                "data_availability": {"trends": {"available": True, "missing_reason": ""}},
+            }
+            for material_id in ("101", "104")
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            status = analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
+            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+            prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
 
         self.assertEqual(status, 0)
-        self.assertEqual(data["schemaVersion"], 1)
-        self.assertEqual(data["filters"], {"industry": "食品饮料"})
-        self.assertEqual(data["summaryMetrics"]["selectedCount"], 1)
-        self.assertEqual(data["summaryMetrics"]["rejectedCount"], 1)
-        self.assertEqual(data["audienceAggregations"]["都市银发"], 1)
-        self.assertEqual(data["tagAggregations"]["包装_独立包装"], 1)
-        self.assertIn("点击指数", data["trendHighlights"]["highPointNames"])
-        self.assertIn("yuntu-ai-analysis.json", prompt)
+        self.assertEqual(data["schemaVersion"], 2)
+        self.assertEqual(data["candidatePool"]["count"], 4)
+        self.assertEqual(data["candidatePool"]["metrics"]["ctr"]["median"], 0.25)
+        self.assertEqual(data["materialFacts"][1]["metricComparison"]["ctr"]["tier"], "high")
+        self.assertTrue(data["tagInsights"]["eligibleForAssociation"])
+        self.assertEqual(data["trendSummary"]["byTrendName"]["点击指数"]["highPointCount"], 2)
+        self.assertEqual(data["trendSummary"]["byTrendName"]["流失指数"]["lossPointCount"], 2)
+        self.assertIn("xiaoxianDunOpportunityMap", prompt)
+        self.assertIn("experimentMatrix", prompt)
+        self.assertIn("数据不足以判断", prompt)
+
+    def test_prepare_analysis_degrades_when_candidate_pool_is_too_small(self):
+        analysis = load_module()
+        records = [
+            {"material_id": str(index), "title": "素材", "metrics": {"ctr": index / 10}, "people_tags": [], "material_tags": [], "data_availability": {"metrics": {"available": False, "missing_reason": "source_empty"}}}
+            for index in range(1, 4)
+        ]
+        selected = [{"rank": 1, "material_id": "1", "detailRecordPath": "normalized/detail-records/1.json"}]
+        details = {"1": {"material_id": "1", "high_points": [], "loss_points": [], "data_availability": {"trends": {"available": False, "missing_reason": "source_empty"}}}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
+            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+
+        self.assertFalse(data["tagInsights"]["eligibleForAssociation"])
+        self.assertEqual(data["materialFacts"][0]["metricComparison"]["ctr"]["tier"], "observed")
+        self.assertEqual(data["dataAvailabilitySummary"]["source_empty"], 2)
 
 
 if __name__ == "__main__":

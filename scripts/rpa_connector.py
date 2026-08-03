@@ -3,15 +3,37 @@
 
 import argparse
 from datetime import datetime, timedelta
-import ipaddress
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import requests
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+try:
+    from yuntu_batch import ConnectorInvoker, fetch_batch, retry_failed_batch
+except ImportError:
+    ConnectorInvoker = None
+    fetch_batch = None
+    retry_failed_batch = None
+
+try:
+    from yuntu_analysis import prepare_analysis
+except ImportError:
+    prepare_analysis = None
+
+try:
+    from yuntu_report import render_report
+except ImportError:
+    render_report = None
 
 
 LIST_FUNCTION_CODE = "rpa.conn.juliang.yt.industry.content.rankings.list"
@@ -117,23 +139,16 @@ def runtime_config(environ=None):
     except ValueError:
         valid_port = False
     if (
-        parsed.scheme != "https"
+        parsed.scheme not in {"http", "https"}
         or not parsed.hostname
         or "@" in parsed.netloc
-        or parsed.path not in ("", "/")
         or parsed.query
         or parsed.fragment
         or not valid_port
     ):
         raise RpaConnectorError(
-            "ENV_BACKEND_HOST must be an HTTPS URL without credentials, query, or fragment"
+            "ENV_BACKEND_HOST must be an HTTP(S) gateway URL without credentials, query, or fragment"
         )
-    try:
-        ipaddress.ip_address(parsed.hostname)
-    except ValueError:
-        pass
-    else:
-        raise RpaConnectorError("ENV_BACKEND_HOST must use a hostname, not an IP literal")
 
     authorization = environment["YUCE_AUTHORIZATION"].strip()
     session_id = environment["YUCE_SESSION_ID"].strip()
@@ -238,15 +253,9 @@ def validate_list_business_params(raw_params):
             "custom_start_date and custom_end_date are only valid for CUSTOM"
         )
 
-    for field_name, allowed_values in (
-        ("ages", AGE_VALUES),
-        ("genders", GENDER_VALUES),
-        ("crowd_groups", CROWD_GROUP_VALUES),
-    ):
+    for field_name in ("ages", "genders", "crowd_groups"):
         if field_name in raw_params:
-            params[field_name] = _normalize_multivalue(
-                raw_params[field_name], field_name, allowed_values
-            )
+            params[field_name] = _normalize_multivalue(raw_params[field_name], field_name)
 
     scope = raw_params.get("brand_scope_type")
     if scope is not None:
@@ -625,6 +634,59 @@ def fetch_analysis(
     return 1 if has_failures else 0
 
 
+def fetch_batch_analysis(
+    shop_id,
+    raw_list_params,
+    raw_detail_params,
+    *,
+    target_top_n=10,
+    candidate_top_n=None,
+    output_dir,
+):
+    if fetch_batch is None or ConnectorInvoker is None:
+        raise RpaConnectorError("batch fetch support is unavailable")
+    list_params = validate_list_business_params(raw_list_params)
+    detail_date_params = _validate_detail_date_params(raw_detail_params)
+    detail_date_range = {
+        key: value for key, value in detail_date_params.items() if key != "material_id"
+    }
+    target_top_n = _validate_top_n(target_top_n)
+    candidate_top_n = (
+        target_top_n * 3 if candidate_top_n is None else _validate_top_n(candidate_top_n)
+    )
+    try:
+        return fetch_batch(
+            shop_id=shop_id,
+            list_params=list_params,
+            detail_date_params=detail_date_range,
+            target_top_n=target_top_n,
+            candidate_top_n=candidate_top_n,
+            output_dir=output_dir,
+            invoker=ConnectorInvoker(
+                lambda sid, params: invoke_list(sid, params),
+                lambda sid, params: invoke_detail(sid, params),
+            ),
+        )
+    except Exception as exc:
+        raise RpaConnectorError(str(exc)) from exc
+
+
+def retry_failed_batch_analysis(shop_id, *, output_dir):
+    if retry_failed_batch is None or ConnectorInvoker is None:
+        raise RpaConnectorError("batch retry support is unavailable")
+    try:
+        return retry_failed_batch(
+            shop_id=shop_id,
+            output_dir=output_dir,
+            invoker=ConnectorInvoker(
+                lambda sid, params: invoke_list(sid, params),
+                lambda sid, params: invoke_detail(sid, params),
+            ),
+        )
+    except Exception as exc:
+        raise RpaConnectorError(str(exc)) from exc
+
+
 def _positive_int_argument(value):
     try:
         parsed = int(value)
@@ -641,9 +703,24 @@ def _parser():
     commands.add_parser("list-accounts", help="List available RPA accounts")
     commands.add_parser("schema", help="Print analysis parameter metadata")
     commands.add_parser("self-test", help="Run offline connector checks")
+    prepare_parser = commands.add_parser(
+        "prepare-analysis", help="Prepare Yuntu analysis facts"
+    )
+    prepare_parser.add_argument("--input-dir", required=True)
+    prepare_parser.add_argument("--output-dir", required=True)
+    report_parser = commands.add_parser("render-report", help="Render Yuntu final report")
+    report_parser.add_argument("--analysis-json", required=True)
+    report_parser.add_argument("--output-dir", required=True)
+    retry_parser = commands.add_parser(
+        "retry-failed", help="Retry rejected detail fetches from an existing batch"
+    )
+    retry_parser.add_argument("--shop-id", required=True)
+    retry_parser.add_argument("--output-dir", required=True)
     fetch_parser = commands.add_parser("fetch", help="Fetch a list and details")
     fetch_parser.add_argument("--shop-id", required=True)
     fetch_parser.add_argument("--top-n", type=_positive_int_argument, default=10)
+    fetch_parser.add_argument("--target-top-n", type=_positive_int_argument)
+    fetch_parser.add_argument("--candidate-top-n", type=_positive_int_argument)
     fetch_parser.add_argument("--output-dir", required=True)
     fetch_parser.add_argument("--industry")
     fetch_parser.add_argument("--time-range-type")
@@ -709,7 +786,25 @@ def main(argv=None):
         if args.command == "self-test":
             _cmd_self_test()
             return 0
-        status = fetch_analysis(
+        if args.command == "prepare-analysis":
+            if prepare_analysis is None:
+                raise RpaConnectorError("analysis preparation support is unavailable")
+            return prepare_analysis(input_dir=args.input_dir, output_dir=args.output_dir)
+        if args.command == "render-report":
+            if render_report is None:
+                raise RpaConnectorError("report rendering support is unavailable")
+            return render_report(
+                analysis_json=args.analysis_json, output_dir=args.output_dir
+            )
+        if args.command == "retry-failed":
+            status = retry_failed_batch_analysis(
+                args.shop_id,
+                output_dir=args.output_dir,
+            )
+            print(Path(args.output_dir) / "batch-manifest.json")
+            return status
+        target_top_n = args.target_top_n or args.top_n
+        status = fetch_batch_analysis(
             args.shop_id,
             _list_params_from_args(args),
             {
@@ -717,10 +812,11 @@ def main(argv=None):
                 "custom_start_date": args.detail_custom_start_date,
                 "custom_end_date": args.detail_custom_end_date,
             },
-            top_n=args.top_n,
+            target_top_n=target_top_n,
+            candidate_top_n=args.candidate_top_n,
             output_dir=args.output_dir,
         )
-        print(Path(args.output_dir) / "manifest.json")
+        print(Path(args.output_dir) / "batch-manifest.json")
         return status
     except RpaConnectorError as exc:
         parser.error(str(exc))

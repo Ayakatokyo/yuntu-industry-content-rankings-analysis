@@ -43,10 +43,25 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertRegex(skill, r"凭证.{0,100}环境变量")
         self.assertRegex(skill, r"(?s)列表.{0,300}material_id.{0,160}详情")
 
+    def test_guides_platform_injected_gateway_diagnosis(self):
+        skill = self.read_skill()
+
+        self.assertIn("平台运行时注入", skill)
+        self.assertRegex(skill, r"(?s)404.{0,160}基路径")
+        self.assertRegex(skill, r"(?s)504.{0,160}网关超时")
+
     def test_documents_all_commands_and_exposes_fetch_options(self):
         skill = self.read_skill()
-        command = "python yuntu-industry-content-rankings-analysis/scripts/rpa_connector.py"
-        for subcommand in ("list-accounts", "schema", "self-test", "fetch"):
+        command = "python <skill-root>/scripts/rpa_connector.py"
+        for subcommand in (
+            "list-accounts",
+            "schema",
+            "self-test",
+            "fetch",
+            "prepare-analysis",
+            "render-report",
+            "retry-failed",
+        ):
             self.assertIn(f"{command} {subcommand}", skill)
 
         result = subprocess.run(
@@ -69,6 +84,14 @@ class AnalysisSkillContractTests(unittest.TestCase):
         ):
             self.assertIn(option, result.stdout)
             self.assertIn(option, skill)
+        root_help = subprocess.run(
+            [sys.executable, str(CONNECTOR_PATH), "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(root_help.returncode, 0, root_help.stderr)
+        self.assertIn("retry-failed", root_help.stdout)
 
     def test_documents_default_output_and_failure_boundaries(self):
         skill = self.read_skill()
@@ -79,11 +102,39 @@ class AnalysisSkillContractTests(unittest.TestCase):
             "manifest.json",
         ):
             self.assertIn(output_path, skill)
-        self.assertRegex(skill, r"(?is)list.{0,140}(fail|失败).{0,160}(nonzero|非零)")
-        self.assertRegex(skill, r"(?is)detail.{0,160}(continue|继续).{0,160}(nonzero|非零)")
+        self.assertRegex(skill, r"(?s)列表请求失败.{0,160}非零")
+        self.assertRegex(skill, r"(?s)详情请求失败.{0,160}继续.{0,160}非零")
         self.assertRegex(skill, r"(?i)(does not|不).{0,100}(download|下载).{0,80}(video|视频)")
-        self.assertRegex(skill, r"(?i)(does not|不).{0,100}(process|处理).{0,80}(files|文件)")
-        self.assertRegex(skill, r"(?i)(does not|不).{0,100}(report|报告)")
+        self.assertRegex(skill, r"(?s)files-envelope.{0,200}CSV")
+        self.assertRegex(skill, r"(?s)报告.{0,200}render-report")
+
+    def test_documents_csv_first_analysis_workflow(self):
+        skill = self.read_skill()
+        for phrase in (
+            "files-envelope",
+            "raw-csv/list.csv",
+            "raw-csv/details/<material_id>.csv",
+            "normalized/list-records.json",
+            "normalized/detail-records/<material_id>.json",
+            "batch-manifest.json",
+            "prepare-analysis",
+            "render-report",
+            "yuntu-analysis-data.json",
+            "yuntu-ai-analysis.json",
+            "final-report.md",
+        ):
+            self.assertIn(phrase, skill)
+        self.assertRegex(skill, r"(?s)CSV.{0,120}主路径")
+        self.assertRegex(skill, r"(?s)分析.{0,120}normalized")
+        self.assertIn("references/platforms/juliang-yt.md", skill)
+        self.assertIn(
+            "references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_list.md",
+            skill,
+        )
+        self.assertIn(
+            "references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_detail.md",
+            skill,
+        )
 
     def test_openai_metadata_has_required_interface_fields(self):
         metadata = OPENAI_YAML_PATH.read_text(encoding="utf-8")

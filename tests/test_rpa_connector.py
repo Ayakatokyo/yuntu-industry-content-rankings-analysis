@@ -106,7 +106,7 @@ class RpaConnectorTest(unittest.TestCase):
             "requirements.txt must declare requests",
         )
 
-    def test_runtime_config_requires_nonblank_values_and_safe_https_host(self):
+    def test_runtime_config_requires_nonblank_values_and_safe_gateway_host(self):
         connector = self.connector()
         for name in connector.REQUIRED_ENVIRONMENT:
             for value in (None, "", "   "):
@@ -120,22 +120,41 @@ class RpaConnectorTest(unittest.TestCase):
                         connector.runtime_config(environment)
 
         unsafe_hosts = (
-            "http://gateway.example",
             "gateway.example",
             "https://user:password@gateway.example",
-            "https://gateway.example/not-a-base-url",
             "https://gateway.example/?query=value",
             "https://gateway.example/#fragment",
-            "https://127.0.0.1",
         )
         for host in unsafe_hosts:
             with self.subTest(host=host):
                 environment = self.runtime_environment()
                 environment["ENV_BACKEND_HOST"] = host
                 session = RecordingSession(FakeResponse({"success": True, "data": []}))
-                with self.assertRaisesRegex(connector.RpaConnectorError, "HTTPS|hostname"):
+                with self.assertRaisesRegex(connector.RpaConnectorError, "HTTP|gateway"):
                     connector.list_accounts(environ=environment, session=session)
                 self.assertEqual(session.posts, [])
+
+    def test_runtime_config_accepts_platform_injected_gateway_base_urls(self):
+        connector = self.connector()
+        cases = (
+            (
+                "http://127.0.0.1:29090",
+                "http://127.0.0.1:29090/adg/v1/agent/rpa/authorizations/query",
+            ),
+            (
+                "https://gateway.example/api/",
+                "https://gateway.example/api/adg/v1/agent/rpa/authorizations/query",
+            ),
+        )
+        for host, expected_url in cases:
+            with self.subTest(host=host):
+                environment = self.runtime_environment()
+                environment["ENV_BACKEND_HOST"] = host
+                session = RecordingSession(FakeResponse({"success": True, "data": []}))
+
+                connector.list_accounts(environ=environment, session=session)
+
+                self.assertEqual(session.posts[0][0], expected_url)
 
     def test_shanghai_today_uses_the_business_calendar_at_a_timezone_boundary(self):
         connector = self.connector()
@@ -161,10 +180,19 @@ class RpaConnectorTest(unittest.TestCase):
         )
         self.assertEqual(params["ages"], ["AGE_24_30", "AGE_31_35"])
         self.assertEqual(params["brands"], ["燕之屋", "王老吉", "Oreo/奥利奥"])
+        passthrough = connector.validate_list_business_params(
+            {
+                "ages": "18-23,24-30",
+                "genders": ["男"],
+                "crowd_groups": '["都市银发", "小镇中老年"]',
+            }
+        )
+        self.assertEqual(passthrough["ages"], ["18-23", "24-30"])
+        self.assertEqual(passthrough["genders"], ["男"])
+        self.assertEqual(passthrough["crowd_groups"], ["都市银发", "小镇中老年"])
         invalid_cases = (
             ({"unrecognized": "value"}, "unexpected"),
             ({"ages": "AGE_24_30,AGE_24_30"}, "duplicates"),
-            ({"genders": "OTHER"}, "genders"),
             ({"brand_scope_type": "SPECIFIED_BRANDS"}, "brands"),
         )
         for raw_params, message in invalid_cases:

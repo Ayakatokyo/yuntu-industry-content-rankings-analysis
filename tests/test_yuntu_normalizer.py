@@ -1,0 +1,114 @@
+import importlib.util
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MODULE_PATH = ROOT / "scripts" / "yuntu_normalizer.py"
+
+
+def load_module():
+    spec = importlib.util.spec_from_file_location("yuntu_normalizer", MODULE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class YuntuNormalizerTests(unittest.TestCase):
+    def test_normalize_list_records_extracts_metrics_tags_and_rank(self):
+        normalizer = load_module()
+        raw = [
+            {
+                "title": "洽洽你也太卷了，这价拿到这么大一箱！#洽洽",
+                "material_id": "7620993598538301494",
+                "video_duration": "31",
+                "object_index": {
+                    "ctr": 0.664652568,
+                    "show_cnt": "1655",
+                    "cvr": 0.1709090909,
+                    "pvr": 0.1135951662,
+                    "play_over_rate": 0.239633818,
+                    "play_duration_avg": 13.752265861,
+                    "publish_time": "20260325",
+                },
+                "people_tag_entry": [
+                    {
+                        "people_tag_type": 4,
+                        "tag_name_list": ["都市银发", "小镇中老年"],
+                    },
+                    {"people_tag_type": 3, "tag_name_list": ["60+", "51-55"]},
+                ],
+                "material_tag_entry": [
+                    {
+                        "material_tag_type": 52,
+                        "tag_name_list": [
+                            "包装_独立包装",
+                            "使用感受和服务体验_便携",
+                        ],
+                    },
+                    {"material_tag_type": 58, "tag_name_list": ["使用场景_健身"]},
+                ],
+            }
+        ]
+
+        records = normalizer.normalize_list_records(
+            raw, source_path="raw-csv/list.csv"
+        )
+
+        self.assertEqual(records[0]["material_id"], "7620993598538301494")
+        self.assertEqual(records[0]["rank"], 1)
+        self.assertEqual(records[0]["metrics"]["ctr"], 0.664652568)
+        self.assertEqual(records[0]["metrics"]["show_cnt"], 1655)
+        self.assertEqual(
+            records[0]["people_tags"], ["都市银发", "小镇中老年", "60+", "51-55"]
+        )
+        self.assertIn("包装_独立包装", records[0]["material_tags"])
+        self.assertEqual(records[0]["source_paths"]["list"], "raw-csv/list.csv")
+
+    def test_normalize_list_records_rejects_missing_numeric_material_id(self):
+        normalizer = load_module()
+        with self.assertRaisesRegex(normalizer.YuntuNormalizeError, "material_id"):
+            normalizer.normalize_list_records(
+                [{"material_id": "abc"}], source_path="raw-csv/list.csv"
+            )
+
+    def test_normalize_detail_records_extracts_trends(self):
+        normalizer = load_module()
+        raw = [
+            {
+                "materialId": "7648216411198554162",
+                "startDate": "2026-06-23",
+                "endDate": "2026-06-29",
+                "dateRangeType": "LAST_7_DAYS",
+                "videoUrl": "https://video.example/material.mp4",
+                "trends": [
+                    {
+                        "trendName": "点击指数",
+                        "trendType": 3,
+                        "tendList": [{"x": 0, "y": 0.5}, {"x": 1, "y": 1}],
+                        "highPoint": {"start_point": "1", "end_point": "2"},
+                        "lossPoint": {
+                            "start_point": "0",
+                            "end_point": "1",
+                            "loss_percent": 0.5,
+                        },
+                    }
+                ],
+            }
+        ]
+
+        record = normalizer.normalize_detail_records(
+            raw,
+            material_id="7648216411198554162",
+            source_path="raw-csv/details/7648216411198554162.csv",
+        )
+
+        self.assertEqual(record["material_id"], "7648216411198554162")
+        self.assertEqual(record["date_range"]["type"], "LAST_7_DAYS")
+        self.assertEqual(record["trend_series"][0]["trend_name"], "点击指数")
+        self.assertEqual(record["high_points"][0]["start_sec"], 1)
+        self.assertEqual(record["loss_points"][0]["loss_percent"], 0.5)
+
+
+if __name__ == "__main__":
+    unittest.main()

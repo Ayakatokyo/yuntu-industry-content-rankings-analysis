@@ -1,0 +1,187 @@
+"""RPA gateway result IO helpers for Yuntu analysis workflows."""
+
+import csv
+import io
+import json
+import os
+from pathlib import Path
+import tempfile
+
+import requests
+
+
+class RpaIoError(RuntimeError):
+    """Raised when RPA gateway output cannot be materialized safely."""
+
+
+class GatewayResult:
+    def __init__(self, kind, records=None, file_url=None):
+        self.kind = kind
+        self.records = records
+        self.file_url = file_url
+
+
+def _decode_json_cell(value):
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return ""
+    if text[0] not in "[{":
+        return value
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return value
+
+
+def _records_from_payload(payload):
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise RpaIoError("RPA payload string must contain valid JSON records") from exc
+    if not isinstance(payload, list):
+        raise RpaIoError("RPA gateway payload must be a record list")
+    return payload
+
+
+def _file_url_from_envelope(result):
+    if result.get("success") is not True or result.get("code") not in (200, "200"):
+        raise RpaIoError("RPA gateway files response was not successful")
+    data = result.get("data")
+    content = data.get("result_content") if isinstance(data, dict) else None
+    if not isinstance(content, dict):
+        raise RpaIoError("RPA gateway files response is missing result_content")
+    if content.get("status") != "COMPLETED" or content.get("failedInstances") != 0:
+        raise RpaIoError("RPA gateway files task did not complete successfully")
+    files = content.get("files")
+    if not isinstance(files, list) or not files or not isinstance(files[0], dict):
+        raise RpaIoError("RPA gateway files response has no fileUrl")
+    file_url = files[0].get("fileUrl")
+    if not isinstance(file_url, str) or not file_url.strip():
+        raise RpaIoError("RPA gateway files response fileUrl is missing")
+    return file_url.strip()
+
+
+def unpack_gateway_result(result):
+    if isinstance(result, list):
+        return GatewayResult(kind="records", records=result)
+    if not isinstance(result, dict):
+        raise RpaIoError("RPA gateway result must be a list or object")
+
+    data = result.get("data")
+    if isinstance(data, dict) and data.get("result_type") == "files":
+        return GatewayResult(kind="files", file_url=_file_url_from_envelope(result))
+    if isinstance(data, dict) and data.get("result_type") == "payload":
+        return GatewayResult(
+            kind="records", records=_records_from_payload(data.get("payload"))
+        )
+    if isinstance(data, list):
+        return GatewayResult(kind="records", records=data)
+    if "payload" in result:
+        return GatewayResult(kind="records", records=_records_from_payload(result.get("payload")))
+    if result.get("success") is True:
+        return GatewayResult(kind="records", records=[result])
+    raise RpaIoError("RPA gateway result did not contain records or files")
+
+
+def download_file(file_url, target_path, *, session=None, timeout=300):
+    session = requests.Session() if session is None else session
+    target = Path(target_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        suffix=".tmp",
+        dir=target.parent,
+        delete=False,
+    ) as staging_file:
+        staging_path = Path(staging_file.name)
+        try:
+            response = session.get(file_url, stream=True, timeout=timeout)
+            response.raise_for_status()
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    staging_file.write(chunk)
+        except Exception as exc:
+            try:
+                staging_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise RpaIoError(f"unable to download RPA file: {exc}") from exc
+    try:
+        if staging_path.stat().st_size == 0:
+            raise RpaIoError("downloaded RPA file is empty")
+        os.replace(staging_path, target)
+    except Exception:
+        try:
+            staging_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return target
+
+
+def _detect_delimiter(header_line):
+    for delimiter in ("\x01", ",", "\t"):
+        if delimiter in header_line:
+            return delimiter
+    raise RpaIoError("RPA CSV header must use a supported delimiter")
+
+
+def parse_csv_records(path):
+    source = Path(path)
+    try:
+        text = source.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as exc:
+        raise RpaIoError(f"unable to read RPA CSV {source}: {exc}") from exc
+    first_line = text.partition("\n")[0]
+    delimiter = _detect_delimiter(first_line)
+    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+    headers = reader.fieldnames
+    if not headers or any(not header for header in headers):
+        raise RpaIoError(f"RPA CSV {source} has an invalid header")
+    if len(headers) != len(set(headers)):
+        raise RpaIoError(f"RPA CSV {source} has duplicate header names")
+
+    records = []
+    for row_number, row in enumerate(reader, start=2):
+        if None in row:
+            raise RpaIoError(f"RPA CSV {source} row {row_number} has too many fields")
+        if not any(value not in (None, "") for value in row.values()):
+            continue
+        records.append({key: _decode_json_cell(value) for key, value in row.items()})
+    if not records:
+        raise RpaIoError(f"RPA CSV {source} has no records")
+    return records
+
+
+def write_json_atomically(result, output_path):
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        suffix=".tmp",
+        dir=target.parent,
+        delete=False,
+    ) as staging_file:
+        staging_path = Path(staging_file.name)
+        try:
+            json.dump(result, staging_file, ensure_ascii=False, indent=2)
+            staging_file.write("\n")
+        except Exception:
+            try:
+                staging_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+    try:
+        os.replace(staging_path, target)
+    except Exception:
+        try:
+            staging_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return target

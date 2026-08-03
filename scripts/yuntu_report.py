@@ -134,17 +134,37 @@ def _render_markdown(analysis):
     return "\n".join(lines)
 
 
-def _render_html(markdown):
-    body = html.escape(markdown).replace("\n", "<br>\n")
-    return (
-        '<!doctype html>\n<html lang="zh-CN">\n<meta charset="utf-8">\n'
-        "<title>云图行业内容榜单分析报告</title>\n<body>\n"
-        + body
-        + "\n</body>\n</html>\n"
-    )
+def _material_frames(fact_pack):
+    frames = {}
+    for fact in fact_pack.get("materialFacts", []) if isinstance(fact_pack, dict) else []:
+        material_id = fact.get("material_id")
+        if isinstance(material_id, str):
+            frames[material_id] = fact.get("highlightFrames", [])
+    return frames
 
 
-def render_report(*, analysis_json, output_dir):
+def _render_html(analysis, material_frames):
+    sections = []
+    for title, field in SECTION_TITLES:
+        cards = []
+        for item in analysis[field]:
+            summary = html.escape(str(item.get("summary", item.get("hypothesis", ""))))
+            material_id = item.get("material_id")
+            gallery = ""
+            if field == "materialDiagnoses" and isinstance(material_id, str):
+                usable = [frame for frame in material_frames.get(material_id, []) if frame.get("available") and str(frame.get("relative_path", "")).endswith(".jpg")]
+                if usable:
+                    gallery = '<div class="highlight-gallery">' + "".join(
+                        '<figure><img src="%s" alt="%ss 高光帧"><figcaption>%s</figcaption></figure>' % (html.escape(frame["relative_path"], quote=True), frame.get("second", 0), "封面" if frame.get("is_cover") else f'{frame.get("second", 0)}s')
+                        for frame in usable
+                    ) + "</div>"
+            cards.append(f'<article class="insight-card"><p>{summary}</p>{gallery}</article>')
+        sections.append(f'<section class="report-section"><p class="section-number">{html.escape(title.split("｜")[0])}</p><h2>{html.escape(title.split("｜", 1)[1])}</h2>{"".join(cards)}</section>')
+    return '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>云图行业内容榜单分析报告</title><style>
+:root{--ink:#2d2018;--gold:#b88a45;--paper:#f7f0e4;--line:#d9c9b1}*{box-sizing:border-box}body{margin:0;background:#2d2018;color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}main{width:min(1100px,calc(100% - 32px));margin:auto;padding:32px 0 64px}.report-cover{padding:42px 34px;color:#fff;border-bottom:3px solid var(--gold)}.report-cover p{color:#d9bd91;font-size:13px;letter-spacing:0}.report-cover h1{font-size:42px;margin:14px 0 0}.report-section{margin-top:20px;padding:28px;background:var(--paper);border:1px solid var(--line);border-radius:8px}.section-number{color:var(--gold);font-weight:700;margin:0 0 8px}.report-section h2{margin:0 0 18px;font-size:26px}.insight-card{padding:16px 0;border-top:1px solid var(--line);line-height:1.7}.highlight-gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:14px}.highlight-gallery figure{margin:0;background:#fff;padding:8px}.highlight-gallery img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}.highlight-gallery figcaption{font-size:13px;color:#765b40;margin-top:6px}@media(max-width:560px){main{width:min(100% - 20px,1100px);padding-top:10px}.report-cover{padding:30px 20px}.report-cover h1{font-size:32px}.report-section{padding:20px}.highlight-gallery{grid-template-columns:1fr 1fr}}</style></head><body><main><header class="report-cover"><p>小仙炖｜行业内容策略</p><h1>云图行业内容榜单分析报告</h1></header>''' + "".join(sections) + "</main></body></html>"
+
+
+def render_report(*, analysis_json, output_dir, fact_pack=None):
     analysis = _load_analysis(analysis_json)
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -152,5 +172,5 @@ def render_report(*, analysis_json, output_dir):
     write_json_atomically(data, output / "final-report-data.json")
     markdown = _render_markdown(analysis)
     (output / "final-report.md").write_text(markdown, encoding="utf-8")
-    (output / "final-report.html").write_text(_render_html(markdown), encoding="utf-8")
+    (output / "final-report.html").write_text(_render_html(analysis, _material_frames(fact_pack or {})), encoding="utf-8")
     return 0

@@ -73,6 +73,19 @@ class YuntuReportTests(unittest.TestCase):
             with self.assertRaisesRegex(report.YuntuReportError, "control"):
                 report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
 
+    def test_render_report_renders_styled_cover_and_highlight_gallery(self):
+        report = load_module()
+        fact_pack = {"materialFacts": [{"material_id": "101", "highlightFrames": [{"second": 0, "available": True, "relative_path": "../highlights/101/01-000s.jpg", "is_cover": True, "reasons": [{"type": "cover"}]}]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertIn('class="report-cover"', rendered)
+        self.assertIn('class="highlight-gallery"', rendered)
+        self.assertIn('src="../highlights/101/01-000s.jpg"', rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

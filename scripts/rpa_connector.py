@@ -719,6 +719,7 @@ def _parser():
     report_parser = commands.add_parser("render-report", help="Render Yuntu final report")
     report_parser.add_argument("--analysis-json", required=True)
     report_parser.add_argument("--output-dir", required=True)
+    report_parser.add_argument("--fact-pack-json")
     retry_parser = commands.add_parser(
         "retry-failed", help="Retry rejected detail fetches from an existing batch"
     )
@@ -805,9 +806,11 @@ def main(argv=None):
         if args.command == "render-report":
             if render_report is None:
                 raise RpaConnectorError("report rendering support is unavailable")
-            return render_report(
-                analysis_json=args.analysis_json, output_dir=args.output_dir
-            )
+            fact_pack_path = Path(args.fact_pack_json) if args.fact_pack_json else Path(args.analysis_json).with_name("yuntu-analysis-data.json")
+            fact_pack = {}
+            if fact_pack_path.exists():
+                fact_pack = json.loads(fact_pack_path.read_text(encoding="utf-8"))
+            return render_report(analysis_json=args.analysis_json, output_dir=args.output_dir, fact_pack=fact_pack)
         if args.command == "retry-failed":
             status = retry_failed_batch_analysis(
                 args.shop_id,

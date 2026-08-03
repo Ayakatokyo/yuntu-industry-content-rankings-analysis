@@ -83,6 +83,17 @@ python <skill-root>/scripts/rpa_connector.py prepare-analysis \
   --output-dir "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis"
 ```
 
+需要截取高光帧时，在 `prepare-analysis` 增加 `--highlight-trends`，可多选“点赞指数”“流失指数”“点击指数”“互动指数”“评论指数”：
+
+```bash
+python <skill-root>/scripts/rpa_connector.py prepare-analysis \
+  --input-dir "RPA数据汇总/yuntu-rankings-analysis" \
+  --output-dir "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis" \
+  --highlight-trends "点击指数" "互动指数"
+```
+
+每条素材固定截取 `0s` 封面帧；每个选中指标另取最多 3 个局部波峰，跨指标同秒只保留一张并合并指标说明。帧写入 `highlights/<material_id>/`，清单为 `highlights-manifest.json`。视频下载或截图失败只记录失败原因，不阻断事实包或最终报告；HTML 会展示成功帧，不输出失败图片。
+
 模型读取 `diagnostic-analysis/yuntu-analysis-data.json` 和 `diagnostic-analysis/yuntu-analysis-prompt.md` 后，生成 `diagnostic-analysis/yuntu-ai-analysis.json`。渲染最终报告：
 
 ```bash

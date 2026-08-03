@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -126,6 +127,50 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertFalse(data["tagInsights"]["eligibleForAssociation"])
         self.assertEqual(data["materialFacts"][0]["metricComparison"]["ctr"]["tier"], "observed")
         self.assertEqual(data["dataAvailabilitySummary"]["source_empty"], 2)
+
+    def test_prepare_analysis_includes_generated_highlight_frames_when_requested(self):
+        analysis = load_module()
+        records = [
+            {"material_id": "1", "title": "素材", "metrics": {}, "people_tags": [], "material_tags": [], "data_availability": {}},
+        ]
+        selected = [{"rank": 1, "material_id": "1", "detailRecordPath": "normalized/detail-records/1.json"}]
+        details = {"1": {"material_id": "1", "high_points": [], "loss_points": [], "data_availability": {}}}
+        frames = [{"second": 0, "is_cover": True, "reasons": [{"type": "cover"}], "available": True, "relative_path": "highlights/1/01-000s.jpg"}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            with mock.patch.object(analysis, "generate_highlights", return_value={"1": frames}) as generate:
+                analysis.prepare_analysis(
+                    input_dir=root,
+                    output_dir=root / "diagnostic-analysis",
+                    highlight_trends=["点击指数"],
+                )
+            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+
+        generate.assert_called_once_with(mock.ANY, ["点击指数"], root)
+        self.assertEqual(data["materialFacts"][0]["highlightFrames"], frames)
+        self.assertEqual(data["materialFacts"][0]["highlightFrameAvailability"], {"available": True, "missing_reason": ""})
+
+    def test_prepare_analysis_skips_highlight_generation_when_not_requested(self):
+        analysis = load_module()
+        records = [
+            {"material_id": "1", "title": "素材", "metrics": {}, "people_tags": [], "material_tags": [], "data_availability": {}},
+        ]
+        selected = [{"rank": 1, "material_id": "1", "detailRecordPath": "normalized/detail-records/1.json"}]
+        details = {"1": {"material_id": "1", "high_points": [], "loss_points": [], "data_availability": {}}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            with mock.patch.object(analysis, "generate_highlights") as generate:
+                analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
+            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+
+        generate.assert_not_called()
+        self.assertEqual(data["materialFacts"][0]["highlightFrames"], [])
+        self.assertEqual(
+            data["materialFacts"][0]["highlightFrameAvailability"],
+            {"available": False, "missing_reason": "not_requested"},
+        )
 
 
 if __name__ == "__main__":

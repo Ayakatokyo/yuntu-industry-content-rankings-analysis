@@ -5,6 +5,7 @@ from pathlib import Path
 from statistics import median
 
 from rpa_io import write_json_atomically
+from yuntu_highlights import generate_highlights, normalize_highlight_trends
 
 
 class YuntuAnalysisError(RuntimeError):
@@ -127,6 +128,24 @@ def _availability_summary(material_facts):
     return dict(sorted(summary.items()))
 
 
+def _highlight_frame_availability(frames, *, requested):
+    if not requested:
+        return {"available": False, "missing_reason": "not_requested"}
+    if any(frame.get("available") for frame in frames if isinstance(frame, dict)):
+        return {"available": True, "missing_reason": ""}
+    reasons = sorted(
+        {
+            frame.get("failure_reason")
+            for frame in frames
+            if isinstance(frame, dict) and frame.get("failure_reason")
+        }
+    )
+    return {
+        "available": False,
+        "missing_reason": reasons[0] if len(reasons) == 1 else "no_available_frames",
+    }
+
+
 def _prompt_text():
     return """# 小仙炖云图行业内容榜单分析任务
 
@@ -140,9 +159,10 @@ def _prompt_text():
 """
 
 
-def prepare_analysis(*, input_dir, output_dir):
+def prepare_analysis(*, input_dir, output_dir, highlight_trends=None):
     root = Path(input_dir)
     output = Path(output_dir)
+    selected_trends = normalize_highlight_trends(highlight_trends or [])
     manifest = _load_json(root / "batch-manifest.json")
     list_records = _load_json(root / "normalized" / "list-records.json")
     selected = manifest.get("selectedMaterials", [])
@@ -176,6 +196,15 @@ def prepare_analysis(*, input_dir, output_dir):
                 "listDataAvailability": list_record.get("data_availability", {}),
                 "detailDataAvailability": detail.get("data_availability", {}),
             }
+        )
+    highlights = (
+        generate_highlights(details, selected_trends, root) if selected_trends else {}
+    )
+    for fact in material_facts:
+        frames = highlights.get(str(fact["material_id"]), [])
+        fact["highlightFrames"] = frames
+        fact["highlightFrameAvailability"] = _highlight_frame_availability(
+            frames, requested=bool(selected_trends)
         )
     fact_pack = {
         "schemaVersion": 2,

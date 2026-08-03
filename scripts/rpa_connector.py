@@ -31,6 +31,11 @@ except ImportError:
     prepare_analysis = None
 
 try:
+    from yuntu_highlights import ALLOWED_HIGHLIGHT_TRENDS
+except ImportError:
+    ALLOWED_HIGHLIGHT_TRENDS = ()
+
+try:
     from yuntu_report import render_report
 except ImportError:
     render_report = None
@@ -708,6 +713,9 @@ def _parser():
     )
     prepare_parser.add_argument("--input-dir", required=True)
     prepare_parser.add_argument("--output-dir", required=True)
+    prepare_parser.add_argument(
+        "--highlight-trends", nargs="+", choices=ALLOWED_HIGHLIGHT_TRENDS
+    )
     report_parser = commands.add_parser("render-report", help="Render Yuntu final report")
     report_parser.add_argument("--analysis-json", required=True)
     report_parser.add_argument("--output-dir", required=True)
@@ -789,7 +797,11 @@ def main(argv=None):
         if args.command == "prepare-analysis":
             if prepare_analysis is None:
                 raise RpaConnectorError("analysis preparation support is unavailable")
-            return prepare_analysis(input_dir=args.input_dir, output_dir=args.output_dir)
+            return prepare_analysis(
+                input_dir=args.input_dir,
+                output_dir=args.output_dir,
+                highlight_trends=args.highlight_trends,
+            )
         if args.command == "render-report":
             if render_report is None:
                 raise RpaConnectorError("report rendering support is unavailable")

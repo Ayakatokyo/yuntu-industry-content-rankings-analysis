@@ -60,6 +60,24 @@ def _flatten_tag_entries(value):
     return tags
 
 
+def _availability(value, *, has_values):
+    if has_values:
+        return {"available": True, "missing_reason": ""}
+    if value in (None, "") or value == []:
+        return {"available": False, "missing_reason": "source_empty"}
+    if isinstance(value, str):
+        return {"available": False, "missing_reason": "unparsed_source_value"}
+    return {"available": False, "missing_reason": "no_usable_values"}
+
+
+def _detail_availability(trends, trend_series, high_points, loss_points):
+    return {
+        "trends": _availability(trends, has_values=bool(trend_series)),
+        "high_points": _availability(trends, has_values=bool(high_points)),
+        "loss_points": _availability(trends, has_values=bool(loss_points)),
+    }
+
+
 def normalize_list_records(raw_records, *, source_path):
     if not isinstance(raw_records, list):
         raise YuntuNormalizeError("list records must be a list")
@@ -68,9 +86,12 @@ def normalize_list_records(raw_records, *, source_path):
         if not isinstance(raw, dict):
             raise YuntuNormalizeError("list record must be an object")
         material_id = _require_material_id(raw.get("material_id") or raw.get("materialId"))
-        object_index = raw.get("object_index")
-        if not isinstance(object_index, dict):
+        object_index_value = raw.get("object_index")
+        object_index = object_index_value
+        if not isinstance(object_index_value, dict):
             object_index = {}
+        people_tag_entry = raw.get("people_tag_entry")
+        material_tag_entry = raw.get("material_tag_entry")
         metrics = {}
         for field in METRIC_FIELDS:
             metric_value = _number(object_index.get(field, raw.get(field)))
@@ -88,8 +109,22 @@ def normalize_list_records(raw_records, *, source_path):
                     object_index.get("publish_time") or raw.get("publish_time")
                 ),
                 "metrics": metrics,
-                "people_tags": _flatten_tag_entries(raw.get("people_tag_entry")),
-                "material_tags": _flatten_tag_entries(raw.get("material_tag_entry")),
+                "people_tags": _flatten_tag_entries(people_tag_entry),
+                "material_tags": _flatten_tag_entries(material_tag_entry),
+                "data_availability": {
+                    "metrics": _availability(
+                        object_index_value if object_index_value is not None else raw,
+                        has_values=bool(metrics),
+                    ),
+                    "people_tags": _availability(
+                        people_tag_entry,
+                        has_values=bool(_flatten_tag_entries(people_tag_entry)),
+                    ),
+                    "material_tags": _availability(
+                        material_tag_entry,
+                        has_values=bool(_flatten_tag_entries(material_tag_entry)),
+                    ),
+                },
                 "source_paths": {"list": source_path},
             }
         )
@@ -146,8 +181,9 @@ def normalize_detail_records(raw_records, *, material_id, source_path):
     trend_series = []
     high_points = []
     loss_points = []
-    trends = raw.get("trends")
-    if not isinstance(trends, list):
+    trends_value = raw.get("trends")
+    trends = trends_value
+    if not isinstance(trends_value, list):
         trends = []
     for raw_trend in trends:
         if not isinstance(raw_trend, dict):
@@ -184,5 +220,11 @@ def normalize_detail_records(raw_records, *, material_id, source_path):
         "trend_series": trend_series,
         "high_points": high_points,
         "loss_points": loss_points,
+        "data_availability": _detail_availability(
+            trends_value,
+            trend_series,
+            high_points,
+            loss_points,
+        ),
         "source_paths": {"detail": source_path},
     }

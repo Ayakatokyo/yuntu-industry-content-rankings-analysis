@@ -64,6 +64,45 @@ class YuntuNormalizerTests(unittest.TestCase):
         )
         self.assertIn("包装_独立包装", records[0]["material_tags"])
         self.assertEqual(records[0]["source_paths"]["list"], "raw-csv/list.csv")
+        self.assertEqual(
+            records[0]["data_availability"],
+            {
+                "metrics": {"available": True, "missing_reason": ""},
+                "people_tags": {"available": True, "missing_reason": ""},
+                "material_tags": {"available": True, "missing_reason": ""},
+            },
+        )
+
+    def test_normalize_list_records_marks_unparsed_nested_values_unavailable(self):
+        normalizer = load_module()
+
+        record = normalizer.normalize_list_records(
+            [
+                {
+                    "material_id": "101",
+                    "object_index": "{'ctr': invalid}",
+                    "people_tag_entry": "[bad]",
+                    "material_tag_entry": "[bad]",
+                }
+            ],
+            source_path="raw-csv/list.csv",
+        )[0]
+
+        self.assertEqual(record["metrics"], {})
+        self.assertEqual(record["people_tags"], [])
+        self.assertEqual(record["material_tags"], [])
+        self.assertEqual(
+            record["data_availability"]["metrics"]["missing_reason"],
+            "unparsed_source_value",
+        )
+        self.assertEqual(
+            record["data_availability"]["people_tags"]["missing_reason"],
+            "unparsed_source_value",
+        )
+        self.assertEqual(
+            record["data_availability"]["material_tags"]["missing_reason"],
+            "unparsed_source_value",
+        )
 
     def test_normalize_list_records_rejects_missing_numeric_material_id(self):
         normalizer = load_module()
@@ -108,6 +147,27 @@ class YuntuNormalizerTests(unittest.TestCase):
         self.assertEqual(record["trend_series"][0]["trend_name"], "点击指数")
         self.assertEqual(record["high_points"][0]["start_sec"], 1)
         self.assertEqual(record["loss_points"][0]["loss_percent"], 0.5)
+        self.assertEqual(
+            record["data_availability"]["trends"],
+            {"available": True, "missing_reason": ""},
+        )
+        self.assertTrue(record["data_availability"]["high_points"]["available"])
+        self.assertTrue(record["data_availability"]["loss_points"]["available"])
+
+    def test_normalize_detail_records_marks_unparsed_trends_unavailable(self):
+        normalizer = load_module()
+
+        record = normalizer.normalize_detail_records(
+            [{"materialId": "101", "trends": "not a list"}],
+            material_id="101",
+            source_path="raw-csv/details/101.csv",
+        )
+
+        self.assertEqual(record["trend_series"], [])
+        self.assertEqual(
+            record["data_availability"]["trends"]["missing_reason"],
+            "unparsed_source_value",
+        )
 
 
 if __name__ == "__main__":

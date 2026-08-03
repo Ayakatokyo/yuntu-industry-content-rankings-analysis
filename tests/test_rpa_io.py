@@ -197,6 +197,8 @@ class RpaIoTests(unittest.TestCase):
 
         records = io.parse_csv_records(FIXTURE_PATH)
 
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["title"], "立夏养生提前吃起来")
         self.assertEqual(records[0]["show_cnt"], "40-50w")
         self.assertEqual(records[0]["object_index"]["ctr"], 0.0047685291)
         self.assertEqual(records[0]["object_index"]["show_cnt"], "418368")

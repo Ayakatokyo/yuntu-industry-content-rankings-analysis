@@ -11,6 +11,9 @@ import tempfile
 import requests
 
 
+_EDGE_CONTROL_CHARACTERS = "".join(chr(value) for value in range(32))
+
+
 class RpaIoError(RuntimeError):
     """Raised when RPA gateway output cannot be materialized safely."""
 
@@ -40,6 +43,12 @@ def _decode_json_cell(value):
             continue
         if isinstance(decoded, (dict, list)):
             return decoded
+    return value
+
+
+def _clean_csv_value(value):
+    if isinstance(value, str):
+        return value.strip(_EDGE_CONTROL_CHARACTERS)
     return value
 
 
@@ -156,9 +165,12 @@ def parse_csv_records(path):
     for row_number, row in enumerate(reader, start=2):
         if None in row:
             raise RpaIoError(f"RPA CSV {source} row {row_number} has too many fields")
-        if not any(value not in (None, "") for value in row.values()):
+        cleaned_row = {key: _clean_csv_value(value) for key, value in row.items()}
+        if not any(value not in (None, "") for value in cleaned_row.values()):
             continue
-        records.append({key: _decode_json_cell(value) for key, value in row.items()})
+        records.append(
+            {key: _decode_json_cell(value) for key, value in cleaned_row.items()}
+        )
     if not records:
         raise RpaIoError(f"RPA CSV {source} has no records")
     return records

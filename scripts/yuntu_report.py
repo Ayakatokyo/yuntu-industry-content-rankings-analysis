@@ -12,24 +12,32 @@ class YuntuReportError(RuntimeError):
 
 
 REQUIRED_FIELDS = (
-    "overallConclusion",
-    "rankingInsights",
-    "audienceInsights",
-    "tagInsights",
-    "trendInsights",
-    "materialAnalyses",
-    "creativePatterns",
-    "nextActions",
+    "rankingOverview",
+    "materialComparison",
+    "materialDiagnoses",
+    "competitorPatterns",
+    "xiaoxianDunOpportunityMap",
+    "experimentMatrix",
 )
 
 SECTION_TITLES = (
-    ("01｜行业榜单整体结论", "overallConclusion"),
-    ("02｜Top 素材表现分层", "rankingInsights"),
-    ("03｜人群与内容标签洞察", "audienceInsights"),
-    ("04｜单素材秒级诊断", "materialAnalyses"),
-    ("05｜高表现素材共性", "creativePatterns"),
-    ("06｜小仙炖可借鉴创意方向", "tagInsights"),
-    ("07｜下一轮素材建议", "nextActions"),
+    ("01｜榜单机会总览", "rankingOverview"),
+    ("02｜素材表现对比", "materialComparison"),
+    ("03｜单素材秒级诊断", "materialDiagnoses"),
+    ("04｜竞品创意模式", "competitorPatterns"),
+    ("05｜小仙炖机会地图", "xiaoxianDunOpportunityMap"),
+    ("06｜下一轮实验矩阵", "experimentMatrix"),
+)
+
+EVIDENCE_FIELDS = tuple(field for _, field in SECTION_TITLES[:-1])
+EXPERIMENT_FIELDS = (
+    "priority",
+    "hypothesis",
+    "creative_variable",
+    "target_audience",
+    "success_metric",
+    "control",
+    "review_action",
 )
 
 
@@ -45,7 +53,45 @@ def _load_analysis(path):
         raise YuntuReportError(
             "analysis JSON is missing required fields: " + ", ".join(missing)
         )
+    for field in EVIDENCE_FIELDS:
+        _validate_evidence_section(analysis[field], field)
+    _validate_experiments(analysis["experimentMatrix"])
     return analysis
+
+
+def _validate_evidence_section(items, field):
+    if not isinstance(items, list) or not items:
+        raise YuntuReportError(f"{field} must be a nonempty list")
+    for item in items:
+        if not isinstance(item, dict):
+            raise YuntuReportError(f"{field} items must be objects")
+        evidence = item.get("evidence")
+        if not isinstance(evidence, list) or not evidence:
+            raise YuntuReportError(f"{field} items must include evidence")
+        material_id = item.get("material_id")
+        material_ids = item.get("material_ids")
+        if isinstance(material_id, str) and material_id.isdigit():
+            continue
+        if isinstance(material_ids, list) and material_ids and all(
+            isinstance(value, str) and value.isdigit() for value in material_ids
+        ):
+            continue
+        raise YuntuReportError(
+            f"{field} items must include material_id or material_ids"
+        )
+
+
+def _validate_experiments(items):
+    if not isinstance(items, list) or not items:
+        raise YuntuReportError("experimentMatrix must be a nonempty list")
+    for item in items:
+        if not isinstance(item, dict):
+            raise YuntuReportError("experimentMatrix items must be objects")
+        for field in EXPERIMENT_FIELDS:
+            if not isinstance(item.get(field), str) or not item[field].strip():
+                raise YuntuReportError(
+                    f"experimentMatrix items must include {field}"
+                )
 
 
 def _markdown_value(value):
@@ -55,11 +101,25 @@ def _markdown_value(value):
         lines = []
         for item in value:
             if isinstance(item, dict):
-                text = (
-                    item.get("summary")
-                    or item.get("body")
-                    or json.dumps(item, ensure_ascii=False, sort_keys=True)
-                )
+                if "hypothesis" in item:
+                    text = (
+                        f"{item['priority']}｜假设：{item['hypothesis']}；变量："
+                        f"{item['creative_variable']}；目标人群：{item['target_audience']}；"
+                        f"成功指标：{item['success_metric']}；对照：{item['control']}；"
+                        f"复盘：{item['review_action']}"
+                    )
+                else:
+                    material_ids = item.get("material_ids") or [item.get("material_id")]
+                    material_text = "、".join(
+                        str(material_id) for material_id in material_ids if material_id
+                    )
+                    evidence = json.dumps(
+                        item.get("evidence", []), ensure_ascii=False, sort_keys=True
+                    )
+                    text = (
+                        f"{item.get('summary') or item.get('body') or ''} "
+                        f"素材：{material_text}；证据：{evidence}"
+                    ).strip()
             else:
                 text = str(item)
             lines.append(f"- {text}")
@@ -71,7 +131,6 @@ def _render_markdown(analysis):
     lines = ["# 云图行业内容榜单分析报告", ""]
     for title, field in SECTION_TITLES:
         lines.extend([f"## {title}", "", _markdown_value(analysis[field]), ""])
-    lines.extend(["## 附：秒级趋势洞察", "", _markdown_value(analysis["trendInsights"]), ""])
     return "\n".join(lines)
 
 

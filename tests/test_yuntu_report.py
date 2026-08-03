@@ -23,61 +23,55 @@ def load_module():
 class YuntuReportTests(unittest.TestCase):
     def analysis_json(self):
         return {
-            "overallConclusion": "本批次素材以价格钩子和独立包装卖点表现突出。",
-            "rankingInsights": ["101 CTR 高于批次均值。"],
-            "audienceInsights": ["都市银发标签出现 1 次。"],
-            "tagInsights": ["包装_独立包装出现 1 次。"],
-            "trendInsights": ["101 点击指数在 1-2 秒形成高点。"],
-            "materialAnalyses": [{"material_id": "101", "summary": "首秒承接点击。"}],
-            "creativePatterns": ["价格利益点前置。"],
-            "nextActions": ["测试小仙炖礼盒装价格锚点表达。"],
+            "rankingOverview": [{"summary": "竞品出现价格利益点。", "material_ids": ["101"], "evidence": [{"metric": "ctr", "value": 0.7}]}],
+            "materialComparison": [{"material_id": "101", "summary": "CTR 位于候选池高位。", "evidence": [{"metric": "ctr", "value": 0.7}]}],
+            "materialDiagnoses": [{"material_id": "101", "summary": "第 1-2 秒出现点击高点。", "evidence": [{"trend_name": "点击指数", "start_sec": 1, "end_sec": 2}]}],
+            "competitorPatterns": [{"summary": "价格利益点前置。", "material_ids": ["101"], "evidence": [{"tag": "限时抢购"}]}],
+            "xiaoxianDunOpportunityMap": [{"summary": "测试通勤滋补场景。", "material_ids": ["101"], "evidence": [{"tag": "商品展示(有语音)"}]}],
+            "experimentMatrix": [{"priority": "P1", "hypothesis": "通勤开场提升 3 秒播放率", "creative_variable": "前 3 秒场景钩子", "target_audience": "新锐白领", "success_metric": "play_3s_rate", "control": "现有商品直展示素材", "review_action": "按人群拆分复盘"}],
         }
 
-    def test_render_report_writes_data_markdown_and_html(self):
+    def test_render_report_writes_the_six_xiaoxian_dun_chapters(self):
         report = load_module()
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            analysis_path = root / "diagnostic-analysis" / "yuntu-ai-analysis.json"
-            analysis_path.parent.mkdir()
-            analysis_path.write_text(
-                json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8"
-            )
-            status = report.render_report(
-                analysis_json=analysis_path,
-                output_dir=root / "final-report",
-            )
-
-            data = json.loads(
-                (root / "final-report" / "final-report-data.json").read_text(
-                    encoding="utf-8"
-                )
-            )
-            markdown = (root / "final-report" / "final-report.md").read_text(
-                encoding="utf-8"
-            )
-            html = (root / "final-report" / "final-report.html").read_text(
-                encoding="utf-8"
-            )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            status = report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+            data = json.loads((root / "final-report" / "final-report-data.json").read_text(encoding="utf-8"))
+            markdown = (root / "final-report" / "final-report.md").read_text(encoding="utf-8")
+            html = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
 
         self.assertEqual(status, 0)
         self.assertEqual(data["status"], "complete")
-        self.assertIn("行业榜单整体结论", markdown)
-        self.assertIn("本批次素材以价格钩子", markdown)
+        for title in ("榜单机会总览", "素材表现对比", "单素材秒级诊断", "竞品创意模式", "小仙炖机会地图", "下一轮实验矩阵"):
+            self.assertIn(title, markdown)
+        self.assertIn("素材：101", markdown)
+        self.assertIn("证据：", markdown)
+        self.assertIn("假设：通勤开场提升 3 秒播放率", markdown)
+        self.assertIn("成功指标：play_3s_rate", markdown)
+        self.assertNotIn("附：秒级趋势洞察", markdown)
         self.assertIn("<html", html)
 
-    def test_render_report_rejects_missing_required_sections(self):
+    def test_render_report_rejects_evidence_less_conclusion(self):
         report = load_module()
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            analysis_path = Path(temporary_directory) / "analysis.json"
-            analysis_path.write_text(
-                json.dumps({"overallConclusion": "只有结论"}, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(report.YuntuReportError, "missing"):
-                report.render_report(
-                    analysis_json=analysis_path,
-                    output_dir=Path(temporary_directory) / "report",
-                )
+        analysis = self.analysis_json()
+        del analysis["materialComparison"][0]["evidence"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "evidence"):
+                report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
+
+    def test_render_report_rejects_incomplete_experiment(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        del analysis["experimentMatrix"][0]["control"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "control"):
+                report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
 
 
 if __name__ == "__main__":

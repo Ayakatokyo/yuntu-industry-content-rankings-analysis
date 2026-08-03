@@ -1,6 +1,6 @@
 ---
 name: 云图行业内容榜单分析
-description: 适用于需要通过固定预策 RPA 连接器，将云图行业内容榜单限制在选定素材范围内并获取秒级详情的场景。
+description: 适用于通过固定预策 RPA 连接器获取竞品内容榜单与秒级详情，并生成小仙炖内容策略报告的场景。
 ---
 
 # 云图行业内容榜单分析
@@ -16,7 +16,7 @@ description: 适用于需要通过固定预策 RPA 连接器，将云图行业�
 - `references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_list.md`
 - `references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_detail.md`
 
-主流程是：列表取数 -> 按响应顺序挑选唯一数字型 `material_id` -> 拉取秒级详情 -> 规范化 -> 准备分析事实包 -> 渲染最终报告。RPA 大概率返回 `files-envelope` 和 CSV 文件；脚本会下载原始 CSV、转换为 `normalized` JSON records，再基于规范化数据生成分析事实包和报告。
+主流程是：列表取数 -> 按响应顺序挑选唯一数字型 `material_id` -> 拉取秒级详情 -> 规范化 -> 准备分析事实包 -> 生成小仙炖结构化洞察 -> 渲染最终报告。RPA 大概率返回 `files-envelope` 和 CSV 文件；脚本会下载原始 CSV、转换为 `normalized` JSON records，再基于规范化数据生成分析事实包和报告。
 
 ## 运行环境要求
 
@@ -114,7 +114,24 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 - `normalized/top-materials-rpa-ready.json`：最终可分析素材列表。
 - `batch-manifest.json`：候选、提交、入选、失败、取消素材及路径和耗时。
 
-分析阶段只读取 `normalized/` 和 `diagnostic-analysis/`，不直接读取原始 CSV、RPA response 或临时 `fileUrl`。
+分析阶段只读取 `normalized/` 和 `diagnostic-analysis/`，不直接读取原始 CSV、RPA response 或临时 `fileUrl`。CSV 单元格同时兼容标准 JSON 和安全的 Python 字面量；RPA 导出的字段边缘控制字符与控制字符空行会被清理，不会被误识别为素材。无法安全解析的嵌套字段保留原文本，并在规范化产物中标记缺失原因。
+
+## 商业分析与报告
+
+`prepare-analysis` 会以完整榜单作为候选池、以成功详情素材作为秒级诊断范围，计算指标均值、中位数、分位与分层，汇总人群和内容标签覆盖，并归纳高点与流失区间。候选池少于四条时不输出高表现分层或标签关联；缺少指标、标签或趋势时必须写“数据不足以判断”，不得补造结论。
+
+模型读取事实包后，必须写入包含以下六个键的 `yuntu-ai-analysis.json`：
+
+1. `rankingOverview`：榜单机会总览
+2. `materialComparison`：素材表现对比
+3. `materialDiagnoses`：单素材秒级诊断
+4. `competitorPatterns`：竞品创意模式
+5. `xiaoxianDunOpportunityMap`：小仙炖机会地图
+6. `experimentMatrix`：下一轮实验矩阵
+
+前五章中每项必须带有 `summary`、`evidence` 及 `material_id` 或 `material_ids`。实验矩阵每项必须包含 `priority`、`hypothesis`、`creative_variable`、`target_audience`、`success_metric`、`control` 和 `review_action`。涉及滋补、孕期、功效或健康人群的方向只能作为需业务和合规确认的测试假设。
+
+`render-report` 会拒绝缺少章节、证据、素材引用或实验字段的 JSON；它只将已验证的洞察渲染为 Markdown/HTML，不新增业务判断。
 
 ## 输出与失败处理
 

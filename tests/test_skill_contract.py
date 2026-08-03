@@ -136,6 +136,22 @@ class AnalysisSkillContractTests(unittest.TestCase):
             skill,
         )
 
+    def test_documents_xiaoxian_dun_closed_loop_report(self):
+        skill = self.read_skill()
+        for chapter in (
+            "榜单机会总览",
+            "素材表现对比",
+            "单素材秒级诊断",
+            "竞品创意模式",
+            "小仙炖机会地图",
+            "下一轮实验矩阵",
+        ):
+            self.assertIn(chapter, skill)
+        self.assertIn("Python 字面量", skill)
+        self.assertIn("数据不足以判断", skill)
+        self.assertNotIn("数据范围与可信度", skill)
+        self.assertNotIn("风险与待补数据", skill)
+
     def test_openai_metadata_has_required_interface_fields(self):
         metadata = OPENAI_YAML_PATH.read_text(encoding="utf-8")
         self.assertRegex(metadata, r'(?m)^interface:\s*$')

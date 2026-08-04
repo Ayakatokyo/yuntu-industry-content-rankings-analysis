@@ -203,7 +203,7 @@ def extract_frame(video_path, second, destination, *, ffmpeg_bin=None):
     """Use FFmpeg to produce one non-empty JPEG, publishing it atomically."""
     target = Path(destination)
     target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_name(f".{target.name}.part")
+    partial = target.with_name(f".{target.stem}.part{target.suffix}")
     command = [
         _resolve_ffmpeg(ffmpeg_bin),
         "-y",

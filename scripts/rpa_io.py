@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
 
 import requests
@@ -135,6 +136,43 @@ def download_file(file_url, target_path, *, session=None, timeout=300):
             staging_path.unlink(missing_ok=True)
         except OSError:
             pass
+        raise
+    return target
+
+
+def materialize_local_artifact(input_dir, target_path, *, suffix):
+    """Atomically copy the only nonempty matching runtime artifact into a run."""
+    source_dir = Path(input_dir)
+    if not source_dir.is_dir():
+        raise RpaIoError("local RPA artifact directory is missing")
+    candidates = sorted(
+        path
+        for path in source_dir.iterdir()
+        if path.is_file() and path.suffix.lower() == suffix.lower() and path.stat().st_size
+    )
+    if not candidates:
+        raise RpaIoError("local RPA artifact is missing")
+    if len(candidates) != 1:
+        raise RpaIoError("local RPA artifact is ambiguous")
+
+    target = Path(target_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="wb", suffix=".tmp", dir=target.parent, delete=False
+    ) as staging_file:
+        staging_path = Path(staging_file.name)
+        try:
+            with candidates[0].open("rb") as source_file:
+                shutil.copyfileobj(source_file, staging_file)
+        except Exception as exc:
+            staging_path.unlink(missing_ok=True)
+            raise RpaIoError(f"unable to materialize local RPA artifact: {exc}") from exc
+    try:
+        if staging_path.stat().st_size == 0:
+            raise RpaIoError("materialized local RPA artifact is empty")
+        os.replace(staging_path, target)
+    except Exception:
+        staging_path.unlink(missing_ok=True)
         raise
     return target
 

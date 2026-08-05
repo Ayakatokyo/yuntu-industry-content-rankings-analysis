@@ -18,6 +18,11 @@ description: 适用于通过固定预策 RPA 连接器获取竞品内容榜单�
 
 主流程是：列表取数 -> 按响应顺序挑选唯一数字型 `material_id` -> 拉取秒级详情 -> 规范化 -> 准备分析事实包 -> 生成小仙炖结构化洞察 -> 渲染最终报告。RPA 大概率返回 `files-envelope` 和 CSV 文件；脚本会下载原始 CSV、转换为 `normalized` JSON records，再基于规范化数据生成分析事实包和报告。
 
+一次 `fetch` 执行只允许调用一次列表连接器：先调用
+`rpa.conn.juliang.yt.industry.content.rankings.list`，再从列表响应中按顺序选取
+`material_id`，逐个调用 `rpa.conn.juliang.yt.industry.content.rankings.detail`。
+详情阶段中断后，用相同筛选参数重新执行时，若 `raw-csv/list.csv` 已完整落盘，脚本会复用该列表文件并只补调详情，不重复调用列表连接器；变更筛选参数才会重新取列表。
+
 ## 运行环境要求
 
 调用网关前，设置以下环境变量：

@@ -118,6 +118,53 @@ class YuntuBatchTests(unittest.TestCase):
             )
             self.assertTrue((root / "raw-csv" / "details" / "101.csv").exists())
 
+    def test_fetch_batch_reuses_completed_list_artifact_after_detail_interruption(self):
+        batch = load_batch()
+        invoker = FakeInvoker(
+            {"success": False},
+            [
+                {
+                    "success": True,
+                    "data": [{"materialId": "101", "dateRangeType": "LAST_7_DAYS", "trends": []}],
+                }
+            ],
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "raw-csv").mkdir(parents=True)
+            (root / "raw-csv" / "list.csv").write_text(
+                "material_id\x01title\x01object_index\x01people_tag_entry\x01material_tag_entry\n"
+                '101\x01A\x01{"ctr":0.7}\x01[]\x01[]\n',
+                encoding="utf-8",
+            )
+            (root / "batch-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "status": "running",
+                        "filters": {"industry": "食品饮料"},
+                        "detailDateRange": {"date_range_type": "LAST_7_DAYS"},
+                        "targetTopN": 1,
+                        "candidateTopN": 1,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            status = batch.fetch_batch(
+                shop_id="shop-42",
+                list_params={"industry": "食品饮料"},
+                detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                target_top_n=1,
+                candidate_top_n=1,
+                output_dir=root,
+                invoker=invoker,
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(len(invoker.list_calls), 0)
+        self.assertEqual(len(invoker.detail_calls), 1)
+
     def test_fetch_batch_rejects_failed_details_and_continues_to_candidate_replacement(
         self,
     ):

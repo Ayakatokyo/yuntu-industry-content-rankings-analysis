@@ -88,6 +88,24 @@ def _load_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _reusable_list_artifact(root, list_params, detail_date_params):
+    """Return a completed list CSV from the same run, if one is available."""
+    manifest_path = root / "batch-manifest.json"
+    list_path = root / "raw-csv" / "list.csv"
+    if not manifest_path.is_file() or not list_path.is_file() or not list_path.stat().st_size:
+        return None
+    try:
+        previous = _load_json(manifest_path)
+    except (OSError, ValueError):
+        return None
+    if (
+        previous.get("filters") != list_params
+        or previous.get("detailDateRange") != detail_date_params
+    ):
+        return None
+    return list_path
+
+
 def _selected_ids(manifest):
     return {item["material_id"] for item in manifest.get("selectedMaterials", [])}
 
@@ -139,15 +157,20 @@ def fetch_batch(
         target_top_n=target_top_n,
         candidate_top_n=candidate_top_n,
     )
+    write_json_atomically(manifest, manifest_path)
 
     started = time.monotonic()
     try:
-        raw_list, list_source = _materialize_records(
-            invoker.invoke_list(shop_id, list_params),
-            csv_path=root / "raw-csv" / "list.csv",
-            json_path=root / "raw-json" / "list-response.json",
-            downloader=downloader,
-        )
+        reusable_list = _reusable_list_artifact(root, list_params, detail_date_params)
+        if reusable_list is not None:
+            raw_list, list_source = parse_csv_records(reusable_list), str(reusable_list)
+        else:
+            raw_list, list_source = _materialize_records(
+                invoker.invoke_list(shop_id, list_params),
+                csv_path=root / "raw-csv" / "list.csv",
+                json_path=root / "raw-json" / "list-response.json",
+                downloader=downloader,
+            )
         list_records = normalize_list_records(raw_list, source_path=_relative(root, list_source))
         write_json_atomically(list_records, root / "normalized" / "list-records.json")
     except Exception as exc:

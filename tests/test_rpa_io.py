@@ -176,6 +176,28 @@ class RpaIoTests(unittest.TestCase):
                     session=FakeSession(FakeDownloadResponse([])),
                 )
 
+    def test_materialize_local_artifact_requires_one_nonempty_csv(self):
+        io = load_module()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            incoming = root / "incoming"
+            incoming.mkdir()
+            target = root / "raw-csv" / "list.csv"
+
+            with self.assertRaisesRegex(io.RpaIoError, "missing"):
+                io.materialize_local_artifact(incoming, target, suffix=".csv")
+
+            first = incoming / "list-a.csv"
+            first.write_text("material_id\n101\n", encoding="utf-8")
+            self.assertEqual(
+                io.materialize_local_artifact(incoming, target, suffix=".csv"), target
+            )
+            self.assertEqual(target.read_text(encoding="utf-8"), first.read_text(encoding="utf-8"))
+
+            (incoming / "list-b.csv").write_text("material_id\n102\n", encoding="utf-8")
+            with self.assertRaisesRegex(io.RpaIoError, "ambiguous"):
+                io.materialize_local_artifact(incoming, target, suffix=".csv")
+
     def test_parse_csv_records_supports_common_delimiters_and_json_cells(self):
         io = load_module()
         with tempfile.TemporaryDirectory() as temporary_directory:

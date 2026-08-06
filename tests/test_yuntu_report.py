@@ -41,6 +41,7 @@ class YuntuReportTests(unittest.TestCase):
             data = json.loads((root / "final-report" / "final-report-data.json").read_text(encoding="utf-8"))
             markdown = (root / "final-report" / "final-report.md").read_text(encoding="utf-8")
             html = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+            template_html = (root / "final-report" / "template.html").read_text(encoding="utf-8")
 
         self.assertEqual(status, 0)
         self.assertEqual(data["status"], "complete")
@@ -52,6 +53,8 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("成功指标：play_3s_rate", markdown)
         self.assertNotIn("附：秒级趋势洞察", markdown)
         self.assertIn("<html", html)
+        self.assertEqual(template_html, html)
+        self.assertNotIn("$subtitle", template_html)
 
     def test_render_report_rejects_evidence_less_conclusion(self):
         report = load_module()

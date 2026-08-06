@@ -342,5 +342,10 @@ def render_report(*, analysis_json, output_dir, fact_pack=None):
     write_json_atomically(data, output / "final-report-data.json")
     markdown = _render_markdown(analysis)
     (output / "final-report.md").write_text(markdown, encoding="utf-8")
-    (output / "final-report.html").write_text(_render_html(analysis, _material_frames(fact_pack or {}), fact_pack or {}), encoding="utf-8")
+    rendered_html = _render_html(
+        analysis, _material_frames(fact_pack or {}), fact_pack or {}
+    )
+    (output / "final-report.html").write_text(rendered_html, encoding="utf-8")
+    # Keep a directly viewable template-named artifact alongside the report.
+    (output / "template.html").write_text(rendered_html, encoding="utf-8")
     return 0

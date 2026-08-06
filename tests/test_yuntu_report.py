@@ -105,6 +105,35 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("食品饮料行业｜小仙炖、诺特兰德｜2026-07-26 至 2026-08-01", rendered)
         self.assertNotIn("好丽友、香飘飘", rendered)
 
+    def test_render_report_separates_insight_evidence_into_details(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertIn('class="insight-card insight-card-primary"', rendered)
+        self.assertIn('class="material-reference"', rendered)
+        self.assertIn('<details class="evidence-details">', rendered)
+        self.assertIn("查看数据依据", rendered)
+
+    def test_render_report_uses_accessible_highlight_gallery(self):
+        report = load_module()
+        fact_pack = {"materialFacts": [{"material_id": "101", "highlightFrames": [{
+            "second": 0, "available": True, "relative_path": "../highlights/101/01-000s.jpg",
+            "is_cover": True, "reasons": [{"type": "cover"}],
+        }]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertIn("--paper:#fff8ec", rendered)
+        self.assertIn('aria-label="查看封面高光帧"', rendered)
+        self.assertIn('aria-label="关闭高光帧预览"', rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

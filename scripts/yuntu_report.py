@@ -143,6 +143,30 @@ def _material_frames(fact_pack):
     return frames
 
 
+def _render_material_reference(item, esc):
+    material_ids = item.get("material_ids") or (
+        [item.get("material_id")] if item.get("material_id") else []
+    )
+    links = "".join(
+        f'<a class="material-reference" href="#material-{esc(material_id)}">素材 {esc(material_id)}</a>'
+        for material_id in material_ids
+        if material_id
+    )
+    return f'<div class="material-references">{links}</div>' if links else ""
+
+
+def _render_evidence(evidence, esc):
+    if not evidence:
+        return ""
+    rows = "".join(
+        f"<li>{esc(json.dumps(item, ensure_ascii=False))}</li>" for item in evidence
+    )
+    return (
+        '<details class="evidence-details"><summary>查看数据依据</summary>'
+        f"<ul>{rows}</ul></details>"
+    )
+
+
 def _render_html(analysis, material_frames, fact_pack):
     def esc(value):
         return html.escape(str(value))
@@ -174,10 +198,16 @@ def _render_html(analysis, material_frames, fact_pack):
                 label = {"ctr":"CTR", "play_3s_rate":"3秒播放率", "play_duration_avg":"平均播放时长", "interact_rate":"互动率"}[key]
                 shown = f"{value * 100:.2f}%" if key != "play_duration_avg" else f"{value:.2f}s"
                 metric_items.append(f'<div class="metric"><span>{label}</span><b>{shown}</b></div>')
-        gallery = "".join(
-            f'<button class="frame-button" type="button" data-frame="{html.escape(image_src(frame), quote=True)}" data-caption="{esc("封面" if frame.get("is_cover") else str(frame.get("second", 0)) + "s")}"><img src="{html.escape(image_src(frame), quote=True)}" alt="{esc(material_id)} {esc(frame.get("second", 0))}秒高光帧"><span>{esc("封面" if frame.get("is_cover") else str(frame.get("second", 0)) + "s")}</span></button>'
-            for frame in frame_list
-        )
+        frame_buttons = []
+        for frame in frame_list:
+            label = "封面" if frame.get("is_cover") else f'{frame.get("second", 0)}s'
+            frame_buttons.append(
+                f'<button class="frame-button" type="button" aria-label="查看{esc(label)}高光帧" '
+                f'data-frame="{html.escape(image_src(frame), quote=True)}" data-caption="{esc(label)}">'
+                f'<img src="{html.escape(image_src(frame), quote=True)}" alt="{esc(material_id)} {esc(label)}高光帧">'
+                f"<span>{esc(label)}</span></button>"
+            )
+        gallery = "".join(frame_buttons)
         tags = "".join(f'<span class="tag">{esc(tag)}</span>' for tag in fact.get("material_tags", []))
         people = "".join(f'<span class="tag tag-person">{esc(tag)}</span>' for tag in fact.get("people_tags", []))
         materials.append(f'''<article class="material-card" id="material-{esc(material_id)}">
@@ -192,16 +222,21 @@ def _render_html(analysis, material_frames, fact_pack):
     for title, field in SECTION_TITLES:
         if field == "materialDiagnoses":
             continue
-        cards = "".join(f'<article class="insight-card"><b>{esc(item.get("priority", ""))}</b><p>{esc(item.get("summary", item.get("hypothesis", "")))}</p><small>证据：{esc(json.dumps(item.get("evidence", []), ensure_ascii=False))}</small></article>' for item in analysis[field])
+        cards = "".join(
+            f'<article class="insight-card insight-card-primary"><b>{esc(item.get("priority", ""))}</b>'
+            f'<p>{esc(item.get("summary", item.get("hypothesis", "")))}</p>'
+            f'{_render_material_reference(item, esc)}{_render_evidence(item.get("evidence", []), esc)}</article>'
+            for item in analysis[field]
+        )
         sections.append(f'<section class="section"><p class="section-kicker">{esc(title.split("｜")[0])}</p><h2>{esc(title.split("｜", 1)[1])}</h2><div class="insight-stack">{cards}</div></section>')
 
     style = """
-:root{--bg:#17100d;--paper:#fff8ed;--panel:#fffdf8;--ink:#2c1b13;--muted:#866e5d;--gold:#d79a4b;--line:#eadac5;--shadow:0 18px 55px rgba(58,31,15,.14)}
+:root{--bg:#120b08;--paper:#fff8ec;--panel:rgba(255,248,236,.94);--ink:#2a170f;--muted:#806758;--gold:#d79a4b;--line:rgba(82,45,24,.15);--shadow:0 28px 80px rgba(43,23,12,.18)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:linear-gradient(135deg,#17100d 0 23%,#342017 23%,#f7e5c9 75%,#fff8ed 100%);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}
 main{width:min(1240px,calc(100% - 34px));margin:auto;padding:34px 0 76px}.hero,.report-cover{color:#fff;padding:26px 30px 34px;border-bottom:1px solid rgba(255,255,255,.2)}.eyebrow,.section-kicker{color:var(--gold);font-size:12px;font-weight:800;letter-spacing:.12em}
 h1{font-size:clamp(36px,5vw,68px);line-height:1;margin:14px 0 18px}h2{font-size:30px;margin:0 0 16px}h3{font-size:20px;line-height:1.45;margin:7px 0 8px}p{line-height:1.75;margin:0}.subtitle{max-width:780px;color:rgba(255,255,255,.75);font-size:17px}
 .dashboard{display:grid;grid-template-columns:1.5fr repeat(3,1fr);gap:12px;margin:24px 0}.dash-card,.section,.material-card{background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px}.dash-card{padding:18px}.dash-card b{display:block;font-size:24px;margin-top:6px}.dash-card p{font-size:13px;color:var(--muted)}
-.section{padding:25px;margin:18px 0}.section-kicker{margin-bottom:7px}.insight-stack{display:grid;gap:12px}.insight-card{border:1px solid var(--line);border-radius:13px;padding:16px;background:#fff}.insight-card b{color:#9b6a37;font-size:13px}.insight-card small{display:block;color:var(--muted);margin-top:10px;line-height:1.6}
+.section{padding:28px;margin:22px 0;border-radius:28px}.section-kicker{margin-bottom:7px}.insight-stack{display:grid;gap:12px}.insight-card{border:1px solid var(--line);border-radius:16px;padding:15px 16px;background:rgba(255,255,255,.72)}.insight-card-primary{background:#fff}.insight-card b{color:#9b6a37;font-size:13px}.material-references{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}.material-reference{color:#7d4a25;background:rgba(215,154,75,.14);font-weight:800;padding:2px 5px;border-radius:4px}.evidence-details{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}.evidence-details summary{cursor:pointer;color:#7d4a25;font-weight:800}.evidence-details ul{padding-left:20px;color:var(--muted);line-height:1.6}.frame-button:focus-visible,.material-reference:focus-visible,#close-lightbox:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
 .material-nav{display:flex;gap:8px;overflow:auto;padding:2px 0 14px;position:sticky;top:0;background:rgba(247,229,201,.94);z-index:3}.material-nav a{white-space:nowrap;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:999px;padding:8px 12px;text-decoration:none;font-size:13px}
 .material-card{padding:21px;margin:14px 0;scroll-margin-top:68px}.material-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.rank{color:#9b6a37;font-weight:800}code{color:var(--muted);font-size:12px}.jump{color:#9b6a37;font-size:13px;text-decoration:none;white-space:nowrap}
 .metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:17px 0}.metric{background:#fff4e5;border-radius:11px;padding:11px}.metric span{display:block;color:var(--muted);font-size:12px}.metric b{display:block;font-size:18px;margin-top:4px}.tag-row{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}.tag{display:inline-block;background:#f5e7d3;color:#7b542e;border-radius:999px;padding:4px 8px;font-size:11px}.tag-person{background:#e8efe9;color:#49634e}
@@ -219,7 +254,7 @@ details{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}summar
     subtitle = f"{industry}行业｜{brand_text}{date_text}｜以素材表现、逐秒趋势和高光帧为证据的创意复盘"
 
     from string import Template
-    template = Template("""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>云图行业内容榜单分析报告</title><style>$style</style></head><body><main><header class="report-cover"><div class="eyebrow">小仙炖｜云图行业内容策略</div><h1>云图行业内容榜单分析报告</h1><p class="subtitle">$subtitle</p></header><section class="dashboard"><div class="dash-card wide"><p>组合结论</p><b>$overview</b></div><div class="dash-card"><p>候选素材</p><b>$candidate_count</b></div><div class="dash-card"><p>入选素材</p><b>$selected_count</b></div><div class="dash-card"><p>高光帧</p><b>$frame_count</b></div></section><nav class="material-nav">$nav</nav>$sections<section class="section"><p class="section-kicker">03</p><h2>素材诊断与高光帧</h2><div>$materials</div></section></main><div id="lightbox" role="dialog" aria-modal="true"><button type="button" id="close-lightbox">关闭</button><img id="lightbox-image" alt="高光帧大图"></div><script>document.querySelectorAll('.frame-button').forEach(function(button){button.addEventListener('click',function(){document.getElementById('lightbox-image').src=button.dataset.frame;document.getElementById('lightbox').classList.add('open')})});function closeBox(){document.getElementById('lightbox').classList.remove('open');document.getElementById('lightbox-image').src=''}document.getElementById('close-lightbox').addEventListener('click',closeBox);document.getElementById('lightbox').addEventListener('click',function(e){if(e.target.id==='lightbox')closeBox()});document.addEventListener('keydown',function(e){if(e.key==='Escape')closeBox()});</script></body></html>""")
+    template = Template("""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>云图行业内容榜单分析报告</title><style>$style</style></head><body><main><header class="report-cover"><div class="eyebrow">小仙炖｜云图行业内容策略</div><h1>云图行业内容榜单分析报告</h1><p class="subtitle">$subtitle</p></header><section class="dashboard"><div class="dash-card wide"><p>组合结论</p><b>$overview</b></div><div class="dash-card"><p>候选素材</p><b>$candidate_count</b></div><div class="dash-card"><p>入选素材</p><b>$selected_count</b></div><div class="dash-card"><p>高光帧</p><b>$frame_count</b></div></section><nav class="material-nav">$nav</nav>$sections<section class="section"><p class="section-kicker">03</p><h2>素材诊断与高光帧</h2><div>$materials</div></section></main><div id="lightbox" role="dialog" aria-modal="true"><button type="button" id="close-lightbox" aria-label="关闭高光帧预览">关闭</button><img id="lightbox-image" alt="高光帧大图"></div><script>document.querySelectorAll('.frame-button').forEach(function(button){button.addEventListener('click',function(){document.getElementById('lightbox-image').src=button.dataset.frame;document.getElementById('lightbox').classList.add('open')})});function closeBox(){document.getElementById('lightbox').classList.remove('open');document.getElementById('lightbox-image').src=''}document.getElementById('close-lightbox').addEventListener('click',closeBox);document.getElementById('lightbox').addEventListener('click',function(e){if(e.target.id==='lightbox')closeBox()});document.addEventListener('keydown',function(e){if(e.key==='Escape')closeBox()});</script></body></html>""")
     return template.safe_substitute(style=style, overview=esc(overview), subtitle=esc(subtitle), candidate_count=esc(summary_metrics.get("candidateCount", "-")), selected_count=esc(summary_metrics.get("selectedCount", "-")), frame_count=str(sum(len([f for f in material_frames.get(str(item.get("material_id")), []) if f.get("available")]) for item in selected)), nav="".join(f'<a href="#material-{esc(item.get("material_id"))}">#{esc(item.get("rank"))} {esc(item.get("material_id"))}</a>' for item in selected), sections="".join(sections), materials="".join(materials))
 
 

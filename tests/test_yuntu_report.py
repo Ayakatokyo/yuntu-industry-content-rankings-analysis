@@ -134,6 +134,17 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('aria-label="查看封面高光帧"', rendered)
         self.assertIn('aria-label="关闭高光帧预览"', rendered)
 
+    def test_render_report_uses_the_shared_background_tokens(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertIn("body{margin:0;background:var(--bg)", rendered)
+        self.assertIn("background:var(--paper)", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

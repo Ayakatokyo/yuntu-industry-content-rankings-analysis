@@ -346,6 +346,4 @@ def render_report(*, analysis_json, output_dir, fact_pack=None):
         analysis, _material_frames(fact_pack or {}), fact_pack or {}
     )
     (output / "final-report.html").write_text(rendered_html, encoding="utf-8")
-    # Keep a directly viewable template-named artifact alongside the report.
-    (output / "template.html").write_text(rendered_html, encoding="utf-8")
     return 0

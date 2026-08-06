@@ -41,7 +41,6 @@ class YuntuReportTests(unittest.TestCase):
             data = json.loads((root / "final-report" / "final-report-data.json").read_text(encoding="utf-8"))
             markdown = (root / "final-report" / "final-report.md").read_text(encoding="utf-8")
             html = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
-            template_html = (root / "final-report" / "template.html").read_text(encoding="utf-8")
 
         self.assertEqual(status, 0)
         self.assertEqual(data["status"], "complete")
@@ -53,8 +52,6 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("成功指标：play_3s_rate", markdown)
         self.assertNotIn("附：秒级趋势洞察", markdown)
         self.assertIn("<html", html)
-        self.assertEqual(template_html, html)
-        self.assertNotIn("$subtitle", template_html)
 
     def test_render_report_rejects_evidence_less_conclusion(self):
         report = load_module()
@@ -169,8 +166,8 @@ class YuntuReportTests(unittest.TestCase):
             analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
-        self.assertLess(rendered.index("竞品内容模式"), rendered.index("秒级创意结构"))
-        self.assertEqual(rendered.count("秒级创意结构"), 2)
+        self.assertLess(rendered.index('id="competitor"'), rendered.index('id="second-by-second"'))
+        self.assertEqual(rendered.count('id="second-by-second"'), 1)
 
     def test_render_report_constrains_all_highlight_images(self):
         report = load_module()

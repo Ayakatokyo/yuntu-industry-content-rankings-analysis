@@ -100,6 +100,19 @@ def normalize_list_records(raw_records, *, source_path):
         normalized.append(
             {
                 "material_id": material_id,
+                "item_id": _text(raw.get("item_id") or raw.get("itemId")),
+                "object_type": _text(raw.get("object_type") or raw.get("objectType")),
+                "material_uri": _text(raw.get("material_uri") or raw.get("materialUri")),
+                "account_id": _text(raw.get("accountId") or raw.get("account_id")),
+                "business_date": _text(raw.get("bizDate") or raw.get("business_date")),
+                "list_context": {
+                    "industry": _text(raw.get("page_industry") or raw.get("industry")),
+                    "time_range": _text(raw.get("page_time_range") or raw.get("time_range")),
+                    "custom_date_range": _text(raw.get("page_custom_date_range")),
+                    "brand_scope": _text(raw.get("page_brand_scope")),
+                    "brands": raw.get("page_brands") if isinstance(raw.get("page_brands"), list) else [],
+                    "ranking_limit": _text(raw.get("page_ranking_limit")),
+                },
                 "title": _text(raw.get("title")),
                 "rank": rank,
                 "video_duration": _number(

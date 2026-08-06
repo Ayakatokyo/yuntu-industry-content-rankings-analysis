@@ -86,6 +86,25 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('class="highlight-gallery"', rendered)
         self.assertIn('src="../highlights/101/01-000s.jpg"', rendered)
 
+    def test_render_report_uses_fact_pack_filters_in_cover_subtitle(self):
+        report = load_module()
+        fact_pack = {
+            "filters": {
+                "industry": "食品饮料",
+                "brands": ["小仙炖", "诺特兰德"],
+                "custom_start_date": "2026-07-26",
+                "custom_end_date": "2026-08-01",
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertIn("食品饮料行业｜小仙炖、诺特兰德｜2026-07-26 至 2026-08-01", rendered)
+        self.assertNotIn("好丽友、香飘飘", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,9 +1,25 @@
 ---
 name: 云图行业内容榜单分析
 description: 适用于通过固定预策 RPA 连接器获取竞品内容榜单与秒级详情，并生成小仙炖内容策略报告的场景。
+argument_hint: 输入行业、分析时间范围（优先填云图界面显示的真实起止日期）、榜单筛选项和 Top素材数量，生成小仙炖行业内容榜单分析报告。
+metadata:
+  pre_input: 帮我生成云图行业内容榜单分析报告，行业是 ____，分析时间范围是 ____（云图界面真实起止日期，如 2026-07-26 至 2026-08-01；未填写则列表和素材详情均使用云图默认近七天），榜单筛选项是 ____，Top素材数量是 ____。
 ---
 
 # 云图行业内容榜单分析
+
+## 用户输入与时间口径
+
+调用本技能时，提示词应提供以下业务信息：
+
+- `行业`：必填，例如“食品饮料”。
+- `分析时间范围`：榜单和素材详情共用。优先填写云图界面日期控件实际展示的闭区间，例如截图中的“近七天”应写为 `2026-07-26 至 2026-08-01`，不要只写“近七天”。未填写时，二者均使用云图默认“近七天”。
+- `榜单筛选项`：按需填写品牌范围、指定品牌、年龄、性别、八大人群和榜单限制；未填写的筛选项保持云图默认，不擅自补充。
+- `Top素材数量`：最终希望完成秒级拆解并纳入报告的素材数；未填写时为 `10`。
+
+时间范围必须以云图界面当次实际显示的日期为准，且首尾日期均包含在内。用户写“近七天”或其他相对周期时，执行前先在云图界面确认并在运行记录中写明对应的真实起止日期。榜单和素材详情必须使用同一时间范围：用户给出明确起止日时，二者均使用该闭区间；不得以执行机本地日期自行推算或将示例日期当作固定默认值。
+
+默认映射如下：未指定时间范围时，榜单和详情均使用 `LAST_7_DAYS`。提供真实起止日期时，榜单使用 `--time-range-type CUSTOM --custom-start-date/--custom-end-date`，详情同时使用 `--detail-date-range-type CUSTOM --detail-custom-start-date/--detail-custom-end-date`，两端传入相同的起止日期。
 
 本技能使用固定连接器：
 
@@ -21,6 +37,7 @@ description: 适用于通过固定预策 RPA 连接器获取竞品内容榜单�
 一次 `fetch` 执行只允许调用一次列表连接器：先调用
 `rpa.conn.juliang.yt.industry.content.rankings.list`，再从列表响应中按顺序选取
 `material_id`，逐个调用 `rpa.conn.juliang.yt.industry.content.rankings.detail`。
+列表连接器完成后必须先完成结构化落盘：`normalized/list-records.json` 保存素材本身的标题、身份、发布时间、指标、标签和列表筛选上下文；`normalized/detail-request-params.json` 保存下一步详情连接器所需的 `material_id` 与详情日期参数。详情连接器只消费后者，分析事实包消费前者和成功详情记录。
 详情阶段中断后，用相同筛选参数重新执行时，若 `raw-csv/list.csv` 已完整落盘，脚本会复用该列表文件并只补调详情，不重复调用列表连接器；变更筛选参数才会重新取列表。
 
 ## 运行环境要求
@@ -37,7 +54,7 @@ description: 适用于通过固定预策 RPA 连接器获取竞品内容榜单�
 
 `fetch` 接受列表连接器可选的 `--industry`、时间范围、年龄、性别、人群、品牌范围、品牌和榜单限制筛选项。`ages`、`genders`、`crowd_groups` 只做格式校验，不做本地枚举阻断，以兼容平台新增或未固化值。列表自定义日期与列表技能使用相同的 Asia/Shanghai 限制。
 
-详情日期使用 `--detail-date-range-type`（`LAST_7_DAYS`、`LAST_30_DAYS` 或 `CUSTOM`）；详情自定义日期必须同时提供 `--detail-custom-start-date` 和 `--detail-custom-end-date`，且结束日期不得早于开始日期。
+详情日期使用 `--detail-date-range-type`（`LAST_7_DAYS`、`LAST_30_DAYS` 或 `CUSTOM`），但必须与榜单时间范围一致；详情自定义日期必须同时提供 `--detail-custom-start-date` 和 `--detail-custom-end-date`，且结束日期不得早于开始日期。
 
 `--top-n` 必须为正整数，默认值为 `10`，兼容旧用法。新增批次口径中，`--target-top-n` 表示最终希望分析成功的素材数量；`--candidate-top-n` 表示从榜单中保留的候选池上限，默认可按目标数量的 3 倍理解。`material_id` 始终从列表响应中选择，不能作为详情覆盖参数提供。
 
@@ -78,7 +95,7 @@ python <skill-root>/scripts/rpa_connector.py fetch \
   --output-dir "RPA数据汇总/yuntu-rankings-analysis"
 ```
 
-对于自定义详情范围，添加 `--detail-date-range-type "CUSTOM"`，并同时提供 `--detail-custom-start-date` 与 `--detail-custom-end-date`。
+对于自定义范围，榜单与详情均使用 `CUSTOM`，并传入相同的起止日期。
 
 准备分析事实包：
 
@@ -126,6 +143,7 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 - `raw-json/list-response.json`：直接 JSON 或 payload 兼容路径下的榜单原始响应。
 - `raw-json/details/<material_id>.json`：直接 JSON 或 payload 兼容路径下的详情原始响应。
 - `normalized/list-records.json`：规范化榜单 records。
+- `normalized/detail-request-params.json`：传入详情 RPA 的素材 ID 与日期参数。
 - `normalized/detail-records/<material_id>.json`：规范化详情 records。
 - `normalized/top-materials-rpa-ready.json`：最终可分析素材列表。
 - `batch-manifest.json`：候选、提交、入选、失败、取消素材及路径和耗时。

@@ -15,6 +15,28 @@ def load_module():
 
 
 class YuntuNormalizerTests(unittest.TestCase):
+    def test_normalize_list_records_preserves_material_identity_and_business_date(self):
+        normalizer = load_module()
+        record = normalizer.normalize_list_records(
+            [{
+                "material_id": "101",
+                "item_id": "item-1",
+                "object_type": "video",
+                "bizDate": "2026-07-01",
+                "material_uri": "aweme://101",
+                "accountId": "shop-1",
+                "page_industry": "食品饮料",
+            }],
+            source_path="raw-csv/list.csv",
+        )[0]
+
+        self.assertEqual(record["item_id"], "item-1")
+        self.assertEqual(record["object_type"], "video")
+        self.assertEqual(record["business_date"], "2026-07-01")
+        self.assertEqual(record["material_uri"], "aweme://101")
+        self.assertEqual(record["account_id"], "shop-1")
+        self.assertEqual(record["list_context"]["industry"], "食品饮料")
+
     def test_normalize_list_records_extracts_metrics_tags_and_rank(self):
         normalizer = load_module()
         raw = [

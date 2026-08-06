@@ -117,6 +117,14 @@ class YuntuBatchTests(unittest.TestCase):
                 (root / "normalized" / "detail-records" / "101.json").exists()
             )
             self.assertTrue((root / "raw-csv" / "details" / "101.csv").exists())
+            detail_requests = json.loads(
+                (root / "normalized" / "detail-request-params.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(detail_requests, [
+                {"material_id": "101", "date_range_type": "LAST_7_DAYS"},
+                {"material_id": "202", "date_range_type": "LAST_7_DAYS"},
+            ])
+            self.assertEqual(manifest["detailRequestPath"], "normalized/detail-request-params.json")
 
     def test_fetch_batch_reuses_completed_list_artifact_after_detail_interruption(self):
         batch = load_batch()

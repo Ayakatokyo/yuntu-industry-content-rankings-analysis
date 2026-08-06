@@ -27,6 +27,33 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertTrue(description.group(1).startswith("适用于"))
         self.assertNotIn("python", description.group(1).lower())
 
+    def test_declares_user_preinput_and_yuntu_time_defaults(self):
+        skill = self.read_skill()
+        frontmatter = re.match(r"\A---\n(.*?)\n---", skill, re.DOTALL)
+
+        self.assertIsNotNone(frontmatter)
+        self.assertRegex(frontmatter.group(1), r"(?m)^argument_hint: .+时间范围")
+        self.assertRegex(frontmatter.group(1), r"(?m)^  pre_input: .+时间范围")
+        for phrase in (
+            "近七天",
+            "云图界面",
+            "行业",
+            "Top素材数量",
+            "默认",
+            "同一时间范围",
+        ):
+            self.assertIn(phrase, skill)
+
+    def test_requires_the_same_time_range_for_ranking_and_detail(self):
+        skill = self.read_skill()
+
+        self.assertIn("榜单和素材详情必须使用同一时间范围", skill)
+        self.assertRegex(
+            skill,
+            r'(?s)--time-range-type "LAST_7_DAYS".{0,80}'
+            r'--detail-date-range-type "LAST_7_DAYS"',
+        )
+
     def test_documents_fixed_connectors_runtime_and_workflow(self):
         skill = self.read_skill()
         for connector in (

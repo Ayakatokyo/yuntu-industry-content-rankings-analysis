@@ -185,6 +185,13 @@ def fetch_batch(
         {"rank": index, "material_id": material_id}
         for index, material_id in enumerate(candidate_ids, start=1)
     ]
+    detail_requests = [
+        {"material_id": material_id, **detail_date_params}
+        for material_id in candidate_ids
+    ]
+    detail_request_path = root / "normalized" / "detail-request-params.json"
+    write_json_atomically(detail_requests, detail_request_path)
+    manifest["detailRequestPath"] = _relative(root, detail_request_path)
     list_by_id = {record["material_id"]: record for record in list_records}
 
     had_rejection = False

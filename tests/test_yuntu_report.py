@@ -31,7 +31,7 @@ class YuntuReportTests(unittest.TestCase):
             "experimentMatrix": [{"priority": "P1", "hypothesis": "通勤开场提升 3 秒播放率", "creative_variable": "前 3 秒场景钩子", "target_audience": "新锐白领", "success_metric": "play_3s_rate", "control": "现有商品直展示素材", "review_action": "按人群拆分复盘"}],
         }
 
-    def test_render_report_writes_the_six_xiaoxian_dun_chapters(self):
+    def test_render_report_writes_the_six_revised_chapters(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -44,7 +44,7 @@ class YuntuReportTests(unittest.TestCase):
 
         self.assertEqual(status, 0)
         self.assertEqual(data["status"], "complete")
-        for title in ("榜单机会总览", "素材表现对比", "单素材秒级诊断", "竞品创意模式", "小仙炖机会地图", "下一轮实验矩阵"):
+        for title in ("榜单竞争格局", "内容表现地图", "内容与人群机会", "竞品内容模式", "秒级创意结构", "机会与实验"):
             self.assertIn(title, markdown)
         self.assertIn("素材：101", markdown)
         self.assertIn("证据：", markdown)
@@ -113,7 +113,7 @@ class YuntuReportTests(unittest.TestCase):
             analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
-        self.assertIn('class="insight-card insight-card-primary"', rendered)
+        self.assertIn('class="insight-row"', rendered)
         self.assertIn('class="material-reference"', rendered)
         self.assertIn('<details class="evidence-details">', rendered)
         self.assertIn("查看数据依据", rendered)
@@ -131,7 +131,7 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
         self.assertIn("--paper:#fff8ec", rendered)
-        self.assertIn('aria-label="查看封面高光帧"', rendered)
+        self.assertIn('aria-label="查看 101 封面 高光帧"', rendered)
         self.assertIn('aria-label="关闭高光帧预览"', rendered)
 
     def test_render_report_uses_the_shared_background_tokens(self):
@@ -143,7 +143,70 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
         self.assertIn("body{margin:0;background:var(--bg)", rendered)
-        self.assertIn("background:var(--paper)", rendered)
+        self.assertIn("--paper:#fff8ec", rendered)
+
+    def test_render_report_removes_summary_dashboard_and_material_nav(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertNotIn('class="dashboard"', rendered)
+        self.assertNotIn('class="material-nav"', rendered)
+        self.assertNotIn("候选素材", rendered)
+        self.assertIn('class="report-nav"', rendered)
+
+    def test_render_report_places_second_level_structure_after_competitor_section(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertLess(rendered.index("竞品内容模式"), rendered.index("秒级创意结构"))
+        self.assertEqual(rendered.count("秒级创意结构"), 2)
+
+    def test_render_report_constrains_all_highlight_images(self):
+        report = load_module()
+        fact_pack = {"materialFacts": [{"material_id": "101", "highlightFrames": [
+            {"second": 0, "available": True, "relative_path": "../highlights/101/01-000s.jpg", "is_cover": True},
+            {"second": 2, "available": True, "relative_path": "../highlights/101/02-002s.jpg"},
+        ]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertIn(".highlight-gallery{display:grid", rendered)
+        self.assertIn(".frame-button img{display:block;width:100%", rendered)
+        self.assertIn("minmax(88px,1fr)", rendered)
+
+    def test_render_report_has_dashboard_controls_and_source_traceability(self):
+        report = load_module()
+        fact_pack = {
+            "candidatePool": {"metrics": {"ctr": {"median": 0.1}}},
+            "tagInsights": {"materialTags": {"人群_白领": {"count": 3, "selectedMaterialCount": 1}}},
+            "trendSummary": {"byTrendName": {"点击指数": {"highPointCount": 2, "lossPointCount": 1}}},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertIn('id="metric-sort"', rendered)
+        self.assertIn('id="material-search"', rendered)
+        self.assertIn('id="tag-category"', rendered)
+        self.assertIn('id="frame-material"', rendered)
+        self.assertIn("来源：Top1000 榜单数据", rendered)
+        self.assertIn("来源：单素材秒级详情", rendered)
+        self.assertIn("来源：榜单 + 秒级详情派生", rendered)
+        self.assertIn("高光帧汇总", rendered)
+        self.assertIn('<dialog id="lightbox">', rendered)
 
 
 if __name__ == "__main__":

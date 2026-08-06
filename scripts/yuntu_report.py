@@ -3,8 +3,12 @@
 import html
 import json
 from pathlib import Path
+from string import Template
 
 from rpa_io import write_json_atomically
+
+
+HTML_TEMPLATE_PATH = Path(__file__).with_name("templates") / "final-report-template.html"
 
 
 class YuntuReportError(RuntimeError):
@@ -21,12 +25,12 @@ REQUIRED_FIELDS = (
 )
 
 SECTION_TITLES = (
-    ("01｜榜单机会总览", "rankingOverview"),
-    ("02｜素材表现对比", "materialComparison"),
-    ("03｜单素材秒级诊断", "materialDiagnoses"),
-    ("04｜竞品创意模式", "competitorPatterns"),
-    ("05｜小仙炖机会地图", "xiaoxianDunOpportunityMap"),
-    ("06｜下一轮实验矩阵", "experimentMatrix"),
+    ("01｜榜单竞争格局", "rankingOverview"),
+    ("02｜内容表现地图", "materialComparison"),
+    ("03｜内容与人群机会", "xiaoxianDunOpportunityMap"),
+    ("04｜竞品内容模式", "competitorPatterns"),
+    ("05｜秒级创意结构", "materialDiagnoses"),
+    ("06｜机会与实验", "experimentMatrix"),
 )
 
 EVIDENCE_FIELDS = tuple(field for _, field in SECTION_TITLES[:-1])
@@ -167,6 +171,33 @@ def _render_evidence(evidence, esc):
     )
 
 
+METRIC_LABELS = {
+    "show_cnt": "曝光量",
+    "ctr": "CTR",
+    "cvr": "CVR",
+    "play_3s_rate": "3 秒播放率",
+    "play_5s_rate": "5 秒播放率",
+    "play_over_rate": "完播率",
+    "play_duration_avg": "平均播放时长",
+    "interact_rate": "互动率",
+    "pvr": "PVR",
+}
+
+
+def _format_metric(value, key):
+    if not isinstance(value, (int, float)):
+        return "-"
+    if key == "show_cnt":
+        return f"{value / 10000:.1f} 万" if value >= 10000 else f"{value:,.0f}"
+    if key == "play_duration_avg":
+        return f"{value:.1f}s"
+    return f"{value * 100:.2f}%"
+
+
+def _generic_text(value):
+    return str(value or "").replace("小仙炖", "目标品牌")
+
+
 def _render_html(analysis, material_frames, fact_pack):
     def esc(value):
         return html.escape(str(value))
@@ -176,73 +207,95 @@ def _render_html(analysis, material_frames, fact_pack):
         return path if path.startswith("../") else "../" + path
 
     facts = {
-        fact.get("material_id"): fact
+        str(fact.get("material_id")): fact
         for fact in fact_pack.get("materialFacts", [])
         if isinstance(fact, dict) and fact.get("material_id")
     }
     selected = fact_pack.get("selectedMaterials", [])
     if not selected:
-        selected = [{"material_id": material_id, "rank": "-"} for material_id in material_frames]
-    metrics = (fact_pack.get("candidatePool") or {}).get("metrics", {})
+        selected = [{"material_id": material_id, "rank": "-"} for material_id in facts]
+    candidate_metrics = (fact_pack.get("candidatePool") or {}).get("metrics", {})
     summary_metrics = fact_pack.get("summaryMetrics", {})
-    overview = analysis.get("rankingOverview", [{}])[0].get("summary", "")
-    materials = []
+    tag_insights = (fact_pack.get("tagInsights") or {}).get("materialTags", {})
+    trend_summary = (fact_pack.get("trendSummary") or {}).get("byTrendName", {})
+
+    def source_label(text):
+        return f'<span class="source-label">来源：{esc(text)}</span>'
+
+    def insight_cards(items, field):
+        return "".join(
+            f'<article class="insight-row"><p>{esc(_generic_text(item.get("summary", "")))}</p>'
+            f'{_render_material_reference(item, esc)}{_render_evidence(item.get("evidence", []), esc)}</article>'
+            for item in items
+        )
+
+    baseline = "".join(
+        f'<div class="baseline"><span>{esc(METRIC_LABELS.get(key, key))}</span><b>{esc(_format_metric(value.get("median"), key))}</b><small>候选池中位数</small></div>'
+        for key, value in candidate_metrics.items()
+        if key in ("show_cnt", "ctr", "cvr", "play_3s_rate", "interact_rate", "play_duration_avg")
+    )
+    performance_rows = []
     for item in selected:
         material_id = str(item.get("material_id"))
         fact = facts.get(material_id, {})
-        frame_list = [frame for frame in material_frames.get(material_id, []) if frame.get("available") and str(frame.get("relative_path", "")).endswith(".jpg")]
-        metric_items = []
-        for key in ("ctr", "play_3s_rate", "play_duration_avg", "interact_rate"):
-            if key in fact.get("metrics", {}):
-                value = fact["metrics"][key]
-                label = {"ctr":"CTR", "play_3s_rate":"3秒播放率", "play_duration_avg":"平均播放时长", "interact_rate":"互动率"}[key]
-                shown = f"{value * 100:.2f}%" if key != "play_duration_avg" else f"{value:.2f}s"
-                metric_items.append(f'<div class="metric"><span>{label}</span><b>{shown}</b></div>')
-        frame_buttons = []
-        for frame in frame_list:
-            label = "封面" if frame.get("is_cover") else f'{frame.get("second", 0)}s'
-            frame_buttons.append(
-                f'<button class="frame-button" type="button" aria-label="查看{esc(label)}高光帧" '
-                f'data-frame="{html.escape(image_src(frame), quote=True)}" data-caption="{esc(label)}">'
-                f'<img src="{html.escape(image_src(frame), quote=True)}" alt="{esc(material_id)} {esc(label)}高光帧">'
-                f"<span>{esc(label)}</span></button>"
-            )
-        gallery = "".join(frame_buttons)
-        tags = "".join(f'<span class="tag">{esc(tag)}</span>' for tag in fact.get("material_tags", []))
-        people = "".join(f'<span class="tag tag-person">{esc(tag)}</span>' for tag in fact.get("people_tags", []))
-        materials.append(f'''<article class="material-card" id="material-{esc(material_id)}">
-          <div class="material-head"><div><span class="rank">#{esc(item.get("rank"))}</span><h3>{esc(fact.get("title", material_id))}</h3><code>{esc(material_id)}</code></div><a class="jump" href="#material-{esc(material_id)}">查看素材</a></div>
-          <div class="metric-grid">{"".join(metric_items)}</div>
-          <div class="tag-row">{tags}{people}</div>
-          <div class="highlight-gallery">{gallery or '<p class="muted">暂无可用高光帧</p>'}</div>
-          <details><summary>查看该素材诊断与证据</summary><div class="detail-copy">{esc(next((x.get("summary", "") for x in analysis.get("materialDiagnoses", []) if x.get("material_id") == material_id), "数据不足以判断"))}</div></details>
-        </article>''')
-
-    sections = []
-    for title, field in SECTION_TITLES:
-        if field == "materialDiagnoses":
-            continue
-        cards = "".join(
-            f'<article class="insight-card insight-card-primary"><b>{esc(item.get("priority", ""))}</b>'
-            f'<p>{esc(item.get("summary", item.get("hypothesis", "")))}</p>'
-            f'{_render_material_reference(item, esc)}{_render_evidence(item.get("evidence", []), esc)}</article>'
-            for item in analysis[field]
+        metrics = fact.get("metrics", {})
+        comparisons = fact.get("metricComparison", {})
+        cells = "".join(
+            f'<td data-sort="{key}" data-value="{metrics.get(key, 0)}"><b>{esc(_format_metric(metrics.get(key), key))}</b><small>P{esc(round(comparisons.get(key, {}).get("percentile", 0) * 100, 1))}</small></td>'
+            for key in ("show_cnt", "ctr", "play_3s_rate", "interact_rate", "cvr")
         )
-        sections.append(f'<section class="section"><p class="section-kicker">{esc(title.split("｜")[0])}</p><h2>{esc(title.split("｜", 1)[1])}</h2><div class="insight-stack">{cards}</div></section>')
+        performance_rows.append(
+            f'<tr data-title="{esc(fact.get("title", "").lower())}"><td><span class="rank">#{esc(item.get("rank", "-"))}</span></td>'
+            f'<td class="material-title"><strong>{esc(fact.get("title", material_id))}</strong><span>{esc(material_id)}</span></td>{cells}</tr>'
+        )
+
+    tag_rows = []
+    for tag, stats in sorted(tag_insights.items(), key=lambda item: (-item[1].get("selectedMaterialCount", 0), -item[1].get("count", 0)))[:36]:
+        category = tag.split("_", 1)[0] if "_" in tag else "其他"
+        coverage = stats.get("count", 0)
+        selected_count = stats.get("selectedMaterialCount", 0)
+        tag_rows.append(
+            f'<tr data-category="{esc(category)}"><td>{esc(tag)}</td><td>{esc(coverage)}</td><td>{esc(selected_count)}</td>'
+            f'<td><span class="selection-bar"><i style="width:{min(100, selected_count * 20)}%"></i></span></td></tr>'
+        )
+    categories = sorted({tag.split("_", 1)[0] if "_" in tag else "其他" for tag in tag_insights})
+    category_options = "".join(f'<option value="{esc(value)}">{esc(value)}</option>' for value in categories)
+
+    trend_items = "".join(
+        f'<div class="trend-summary"><span>{esc(name)}</span><b>{esc(data.get("highPointCount", 0))}</b><small>高点</small><b>{esc(data.get("lossPointCount", 0))}</b><small>流失点</small></div>'
+        for name, data in trend_summary.items()
+    )
+    diagnosis_items = "".join(
+        f'<details class="diagnosis" id="material-{esc(item.get("material_id"))}"><summary><span class="rank">#{esc(facts.get(str(item.get("material_id")), {}).get("rank", "-"))}</span><strong>{esc(facts.get(str(item.get("material_id")), {}).get("title", item.get("material_id")))}</strong><span>展开秒级诊断</span></summary><p>{esc(_generic_text(item.get("summary", "")))}</p>{_render_evidence(item.get("evidence", []), esc)}</details>'
+        for item in analysis.get("materialDiagnoses", [])
+    )
+    frame_buttons = []
+    for item in selected:
+        material_id = str(item.get("material_id"))
+        fact = facts.get(material_id, {})
+        for frame in material_frames.get(material_id, []):
+            if not frame.get("available") or not str(frame.get("relative_path", "")).endswith(".jpg"):
+                continue
+            label = "封面" if frame.get("is_cover") else f'{frame.get("second", 0)}s'
+            reason = "/".join(str(value.get("trend_name") or value.get("type") or "") for value in frame.get("reasons", []) if isinstance(value, dict))
+            frame_buttons.append(
+                f'<button class="frame-button" type="button" data-material="{esc(material_id)}" data-frame="{html.escape(image_src(frame), quote=True)}" data-caption="{esc(f"#{item.get("rank", "-")} · {label} · {reason or "高光帧"}")}" aria-label="查看 {esc(material_id)} {esc(label)} 高光帧"><img loading="lazy" src="{html.escape(image_src(frame), quote=True)}" alt="{esc(fact.get("title", material_id))} {esc(label)} 高光帧"><span>#{esc(item.get("rank", "-"))} · {esc(label)}</span></button>'
+            )
+    frame_options = "".join(f'<option value="{esc(str(item.get("material_id")))}">#{esc(item.get("rank", "-"))} {esc(facts.get(str(item.get("material_id")), {}).get("title", item.get("material_id"))[:18])}</option>' for item in selected)
+
+    landscape = insight_cards(analysis.get("rankingOverview", []), "rankingOverview")
+    performance_insights = insight_cards(analysis.get("materialComparison", []), "materialComparison")
+    competitor = insight_cards(analysis.get("competitorPatterns", []), "competitorPatterns")
+    opportunities = insight_cards(analysis.get("xiaoxianDunOpportunityMap", []), "xiaoxianDunOpportunityMap")
+    experiments = "".join(
+        f'<article class="experiment"><span>{esc(item.get("priority", ""))}</span><div><h3>{esc(_generic_text(item.get("hypothesis", "")))}</h3><dl><div><dt>创意变量</dt><dd>{esc(_generic_text(item.get("creative_variable", "")))}</dd></div><div><dt>目标人群</dt><dd>{esc(_generic_text(item.get("target_audience", "")))}</dd></div><div><dt>成功指标</dt><dd>{esc(_generic_text(item.get("success_metric", "")))}</dd></div><div><dt>对照组</dt><dd>{esc(_generic_text(item.get("control", "")))}</dd></div></dl><details><summary>查看复盘动作</summary><p>{esc(_generic_text(item.get("review_action", "")))}</p></details></div></article>'
+        for item in analysis.get("experimentMatrix", [])
+    )
 
     style = """
-:root{--bg:#120b08;--paper:#fff8ec;--panel:rgba(255,248,236,.94);--ink:#2a170f;--muted:#806758;--gold:#d79a4b;--line:rgba(82,45,24,.15);--shadow:0 28px 80px rgba(43,23,12,.18)}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}
-main{width:min(1240px,calc(100% - 34px));margin:auto;padding:34px 0 76px}.hero,.report-cover{color:#fff;padding:26px 30px 34px;border-bottom:1px solid rgba(255,255,255,.2)}.eyebrow,.section-kicker{color:var(--gold);font-size:12px;font-weight:800;letter-spacing:.12em}
-h1{font-size:clamp(36px,5vw,68px);line-height:1;margin:14px 0 18px}h2{font-size:30px;margin:0 0 16px}h3{font-size:20px;line-height:1.45;margin:7px 0 8px}p{line-height:1.75;margin:0}.subtitle{max-width:780px;color:rgba(255,255,255,.75);font-size:17px}
-.dashboard{display:grid;grid-template-columns:1.5fr repeat(3,1fr);gap:12px;margin:24px 0}.dash-card,.section,.material-card{background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px}.dash-card{padding:18px}.dash-card b{display:block;font-size:24px;margin-top:6px}.dash-card p{font-size:13px;color:var(--muted)}
-.section{padding:28px;margin:22px 0;border-radius:28px}.section-kicker{margin-bottom:7px}.insight-stack{display:grid;gap:12px}.insight-card{border:1px solid var(--line);border-radius:16px;padding:15px 16px;background:rgba(255,255,255,.72)}.insight-card-primary{background:#fff}.insight-card b{color:#9b6a37;font-size:13px}.material-references{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}.material-reference{color:#7d4a25;background:rgba(215,154,75,.14);font-weight:800;padding:2px 5px;border-radius:4px}.evidence-details{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}.evidence-details summary{cursor:pointer;color:#7d4a25;font-weight:800}.evidence-details ul{padding-left:20px;color:var(--muted);line-height:1.6}.frame-button:focus-visible,.material-reference:focus-visible,#close-lightbox:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
-.material-nav{display:flex;gap:8px;overflow:auto;padding:2px 0 14px;position:sticky;top:0;background:var(--paper);z-index:3}.material-nav a{white-space:nowrap;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:999px;padding:8px 12px;text-decoration:none;font-size:13px}
-.material-card{padding:21px;margin:14px 0;scroll-margin-top:68px}.material-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.rank{color:#9b6a37;font-weight:800}code{color:var(--muted);font-size:12px}.jump{color:#9b6a37;font-size:13px;text-decoration:none;white-space:nowrap}
-.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:17px 0}.metric{background:#fff4e5;border-radius:11px;padding:11px}.metric span{display:block;color:var(--muted);font-size:12px}.metric b{display:block;font-size:18px;margin-top:4px}.tag-row{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}.tag{display:inline-block;background:#f5e7d3;color:#7b542e;border-radius:999px;padding:4px 8px;font-size:11px}.tag-person{background:#e8efe9;color:#49634e}
-.frame-strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:9px;margin-top:14px}.frame-button{border:1px solid var(--line);background:#fff;padding:5px;border-radius:10px;text-align:left;cursor:pointer;color:var(--muted)}.frame-button img{display:block;width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:7px}.frame-button span{display:block;padding:5px 3px 2px;font-size:12px}
-details{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}summary{cursor:pointer;font-weight:700;color:#8d6035}.detail-copy{padding-top:10px;color:var(--muted)}.muted{color:var(--muted);padding:12px}#lightbox{position:fixed;inset:0;background:rgba(14,8,5,.82);display:none;place-items:center;z-index:10;padding:20px}#lightbox.open{display:grid}#lightbox img{max-height:86vh;max-width:min(90vw,620px);border-radius:12px}#lightbox button{position:fixed;top:18px;right:22px;border:0;background:#fff;color:var(--ink);border-radius:999px;padding:8px 13px;cursor:pointer}
-@media(max-width:800px){.dashboard{grid-template-columns:repeat(2,1fr)}.dashboard .wide{grid-column:1/-1}.metric-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:560px){main{width:min(100% - 20px,1240px);padding-top:10px}.hero,.report-cover{padding:22px 18px 28px}h1{font-size:38px}.section{padding:19px}.material-head{display:block}.jump{display:inline-block;margin-top:8px}.frame-strip,.highlight-gallery{grid-template-columns:repeat(3,1fr)}}
+:root{--bg:#170d09;--paper:#fff8ec;--surface:#fffdf8;--ink:#2a170f;--muted:#705c50;--accent:#d79a4b;--accent-dark:#8e5528;--line:#dfcfbd;--line-dark:#4a2a1b;--positive:#406955;--focus:#f0bc64}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;font-size:16px;line-height:1.55}button,select,input{font:inherit}button,select{min-height:44px}.skip-link{position:fixed;left:12px;top:-60px;background:var(--paper);color:var(--ink);padding:10px;z-index:5}.skip-link:focus{top:12px}.page{width:min(1240px,calc(100% - 32px));margin:auto;padding:28px 0 72px}.report-cover{color:#fff;border-bottom:1px solid rgba(255,255,255,.24);padding:8px 0 28px}.report-cover p{max-width:68ch;color:#ead9c9;margin:0}.report-cover h1{font-size:2.6rem;line-height:1.1;margin:10px 0 12px;text-wrap:balance}.report-cover .cover-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}.cover-meta span,.source-label{font-size:.75rem;font-weight:700}.cover-meta span{color:#f9d79b;border:1px solid rgba(249,215,155,.38);padding:4px 8px;border-radius:4px}.report-shell{display:grid;grid-template-columns:184px minmax(0,900px);gap:26px;align-items:start;margin-top:24px}.report-nav{position:sticky;top:18px;display:grid;gap:4px;padding:10px 0}.report-nav a{color:#dfc7ae;text-decoration:none;border-left:1px solid rgba(223,199,174,.35);padding:8px 10px;font-size:.875rem}.report-nav a:hover,.report-nav a:focus-visible,.report-nav a.active{color:#fff;background:#2a170f;border-left-color:var(--accent)}.report-nav small{color:#ac8970;padding:8px 10px}.report-content{min-width:0}.section{scroll-margin-top:18px;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:24px;margin-bottom:18px}.section-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:18px}.section-header h2{font-size:1.5rem;line-height:1.2;margin:0;text-wrap:balance}.section-header p{color:var(--muted);font-size:.875rem;margin:6px 0 0}.source-label{display:inline-block;color:var(--accent-dark);background:#f7e6cb;padding:4px 7px;border-radius:4px;white-space:nowrap}.insight-stack{display:grid;gap:0}.insight-row{padding:16px 0;border-bottom:1px solid var(--line)}.insight-row:last-child{border:0;padding-bottom:0}.insight-row p{margin:0;max-width:72ch}.material-references{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.material-reference{color:var(--accent-dark);font-size:.8125rem;font-weight:700;text-decoration:none;border-bottom:1px solid currentColor}.evidence-details,.diagnosis details,.experiment details{margin-top:10px}.evidence-details summary,.diagnosis summary,.experiment summary{cursor:pointer;color:var(--accent-dark);font-weight:700}.evidence-details ul{padding-left:18px;color:var(--muted);font-size:.875rem}.baseline-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:18px}.baseline{background:#f7ebd9;padding:10px;border-radius:6px}.baseline span,.baseline small{display:block;color:var(--muted);font-size:.75rem}.baseline b{display:block;font-size:1.05rem;font-variant-numeric:tabular-nums;margin:2px 0}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}.toolbar label{font-size:.8125rem;font-weight:700;color:var(--muted)}.toolbar select,.toolbar input{border:1px solid #ba9c7d;background:var(--surface);color:var(--ink);border-radius:5px;padding:6px 8px}.toolbar input{min-width:220px}.toolbar button{border:1px solid var(--accent-dark);background:transparent;color:var(--accent-dark);padding:6px 10px;border-radius:5px;cursor:pointer}.data-table{width:100%;border-collapse:collapse;font-size:.8125rem;overflow:hidden}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:6px}.data-table th{background:#f1dfc8;color:#5e3820;text-align:right;padding:9px 8px;white-space:nowrap}.data-table th:nth-child(2),.data-table td:nth-child(2){text-align:left}.data-table td{border-top:1px solid var(--line);padding:9px 8px;text-align:right;font-variant-numeric:tabular-nums}.data-table td small,.material-title span{display:block;color:var(--muted);font-size:.72rem;font-weight:400}.material-title{min-width:240px;max-width:360px}.rank{color:var(--accent-dark);font-weight:800}.tag-table td:first-child{text-align:left}.selection-bar{display:block;width:84px;height:6px;background:#ecd9c2;border-radius:99px;overflow:hidden}.selection-bar i{display:block;height:100%;background:var(--accent)}.trend-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:18px}.trend-summary{border-bottom:2px solid var(--accent);padding:8px 0}.trend-summary span,.trend-summary small{display:block;color:var(--muted);font-size:.72rem}.trend-summary b{font-size:1.125rem;font-variant-numeric:tabular-nums;margin-right:4px}.diagnosis{border-top:1px solid var(--line);padding:12px 0}.diagnosis summary{display:grid;grid-template-columns:52px 1fr auto;gap:10px;align-items:start;color:var(--ink)}.diagnosis summary span:last-child{color:var(--accent-dark);font-size:.8125rem}.diagnosis p{margin:12px 0 0;color:#483025}.frame-library{margin-top:26px;border-top:1px solid var(--line);padding-top:18px}.frame-library-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.frame-library h3{margin:0;font-size:1.125rem}.frame-library select{border:1px solid #ba9c7d;background:var(--surface);padding:6px 8px;border-radius:5px}.highlight-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:8px;margin-top:14px}.frame-button{border:1px solid var(--line);background:var(--surface);padding:4px;border-radius:6px;color:var(--muted);cursor:pointer;text-align:left;transition:border-color .18s ease,transform .18s ease}.frame-button img{display:block;width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:3px}.frame-button span{display:block;font-size:.7rem;padding:4px 2px 1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.frame-button:hover{border-color:var(--accent-dark);transform:translateY(-1px)}.experiment{display:grid;grid-template-columns:48px 1fr;gap:12px;padding:16px 0;border-top:1px solid var(--line)}.experiment:first-of-type{border-top:0;padding-top:0}.experiment>span{color:var(--accent-dark);font-weight:800;font-size:.875rem}.experiment h3{font-size:1rem;line-height:1.45;margin:0}.experiment dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:14px 0 0}.experiment dl div{border-top:1px solid var(--line);padding-top:7px}.experiment dt{color:var(--muted);font-size:.72rem}.experiment dd{margin:3px 0 0;font-size:.875rem}.data-note{color:var(--muted);font-size:.8125rem;margin:10px 0 0}.data-note strong{color:var(--ink)}dialog{border:0;padding:0;max-width:min(720px,92vw);background:transparent}dialog::backdrop{background:rgba(13,7,4,.88)}.lightbox{position:relative;background:#fff;padding:10px;border-radius:8px}.lightbox img{display:block;max-width:min(680px,88vw);max-height:82vh}.lightbox button{position:absolute;right:8px;top:8px;border:0;background:var(--ink);color:#fff;border-radius:5px;padding:6px 9px;cursor:pointer}.lightbox p{margin:7px 2px 0;font-size:.8125rem;color:var(--muted)}button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--focus);outline-offset:2px}@media(max-width:900px){.report-shell{grid-template-columns:1fr}.report-nav{position:sticky;top:0;z-index:2;background:var(--bg);grid-auto-flow:column;grid-auto-columns:max-content;overflow:auto;padding:8px 0}.report-nav small{display:none}.report-nav a{border-left:0;border-bottom:1px solid rgba(223,199,174,.35);white-space:nowrap}.report-nav a.active{border-bottom-color:var(--accent)}.section{padding:18px}.baseline-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.trend-grid{grid-template-columns:repeat(3,minmax(0,1fr)}}@media(max-width:560px){.page{width:min(100% - 20px,1240px);padding-top:16px}.report-cover h1{font-size:2rem}.section-header{display:block}.source-label{margin-top:10px}.baseline-strip{grid-template-columns:1fr 1fr}.toolbar input{min-width:0;width:100%}.trend-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.diagnosis summary{grid-template-columns:42px 1fr}.diagnosis summary span:last-child{grid-column:2}.experiment dl{grid-template-columns:1fr}.highlight-gallery{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.frame-button{transition:none}.frame-button:hover{transform:none}}
 """
     filters = fact_pack.get("filters", {}) if isinstance(fact_pack, dict) else {}
     industry = str(filters.get("industry") or "食品饮料")
@@ -251,11 +304,34 @@ details{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}summar
     date_text = ""
     if filters.get("custom_start_date") and filters.get("custom_end_date"):
         date_text = f"｜{filters['custom_start_date']} 至 {filters['custom_end_date']}"
-    subtitle = f"{industry}行业｜{brand_text}{date_text}｜以素材表现、逐秒趋势和高光帧为证据的创意复盘"
+    subtitle = f"{industry}行业｜{brand_text}{date_text}｜Top1000 榜单与单素材秒级拆解"
 
-    from string import Template
-    template = Template("""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>云图行业内容榜单分析报告</title><style>$style</style></head><body><main><header class="report-cover"><div class="eyebrow">小仙炖｜云图行业内容策略</div><h1>云图行业内容榜单分析报告</h1><p class="subtitle">$subtitle</p></header><section class="dashboard"><div class="dash-card wide"><p>组合结论</p><b>$overview</b></div><div class="dash-card"><p>候选素材</p><b>$candidate_count</b></div><div class="dash-card"><p>入选素材</p><b>$selected_count</b></div><div class="dash-card"><p>高光帧</p><b>$frame_count</b></div></section><nav class="material-nav">$nav</nav>$sections<section class="section"><p class="section-kicker">03</p><h2>素材诊断与高光帧</h2><div>$materials</div></section></main><div id="lightbox" role="dialog" aria-modal="true"><button type="button" id="close-lightbox" aria-label="关闭高光帧预览">关闭</button><img id="lightbox-image" alt="高光帧大图"></div><script>document.querySelectorAll('.frame-button').forEach(function(button){button.addEventListener('click',function(){document.getElementById('lightbox-image').src=button.dataset.frame;document.getElementById('lightbox').classList.add('open')})});function closeBox(){document.getElementById('lightbox').classList.remove('open');document.getElementById('lightbox-image').src=''}document.getElementById('close-lightbox').addEventListener('click',closeBox);document.getElementById('lightbox').addEventListener('click',function(e){if(e.target.id==='lightbox')closeBox()});document.addEventListener('keydown',function(e){if(e.key==='Escape')closeBox()});</script></body></html>""")
-    return template.safe_substitute(style=style, overview=esc(overview), subtitle=esc(subtitle), candidate_count=esc(summary_metrics.get("candidateCount", "-")), selected_count=esc(summary_metrics.get("selectedCount", "-")), frame_count=str(sum(len([f for f in material_frames.get(str(item.get("material_id")), []) if f.get("available")]) for item in selected)), nav="".join(f'<a href="#material-{esc(item.get("material_id"))}">#{esc(item.get("rank"))} {esc(item.get("material_id"))}</a>' for item in selected), sections="".join(sections), materials="".join(materials))
+    template = Template(HTML_TEMPLATE_PATH.read_text(encoding="utf-8"))
+    available_frames = sum(
+        len([frame for frame in material_frames.get(str(item.get("material_id")), []) if frame.get("available")])
+        for item in selected
+    )
+    return template.safe_substitute(
+        style=style,
+        subtitle=esc(subtitle),
+        frame_count=available_frames,
+        source_list=source_label("Top1000 榜单数据"),
+        source_detail=source_label("单素材秒级详情"),
+        source_derived=source_label("榜单 + 秒级详情派生"),
+        landscape=landscape,
+        performance_insights=performance_insights,
+        baseline=baseline,
+        performance_rows="".join(performance_rows),
+        category_options=category_options,
+        tag_rows="".join(tag_rows),
+        competitor=competitor,
+        trend_items=trend_items,
+        diagnoses=diagnosis_items,
+        frame_options=frame_options,
+        frames="".join(frame_buttons),
+        opportunities=opportunities,
+        experiments=experiments,
+    )
 
 
 def render_report(*, analysis_json, output_dir, fact_pack=None):

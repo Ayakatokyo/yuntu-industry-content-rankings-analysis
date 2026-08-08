@@ -6,6 +6,7 @@ from statistics import median
 
 from rpa_io import write_json_atomically
 from yuntu_highlights import generate_highlights, normalize_highlight_trends
+from yuntu_top_materials import build_top_material_combination
 
 
 class YuntuAnalysisError(RuntimeError):
@@ -151,7 +152,9 @@ def _prompt_text():
 
 读取同目录的 `yuntu-analysis-data.json`，生成 `yuntu-ai-analysis.json`。
 
-输出必须是 JSON 对象，包含：rankingOverview、materialComparison、materialDiagnoses、competitorPatterns、xiaoxianDunOpportunityMap、experimentMatrix。
+输出必须是 JSON 对象，包含：topMaterialCombination、rankingOverview、materialComparison、materialDiagnoses、competitorPatterns、xiaoxianDunOpportunityMap、experimentMatrix。
+
+`topMaterialCombination` 必须是对象，包含 `overallConclusions` 与 `brandConclusions` 两个数组。每个整体结论必须含 summary、evidence、material_ids。每个品牌结论必须含 brand、classificationSource、summary、evidence、material_ids，且 classificationSource 必须为 `title_rule`。标题匹配归属是业务分类，不得称作 RPA 原生品牌字段；人群标签曝光覆盖可重叠，不得解释为可加总至 100% 的真实受众占比。CPM 缺失或标签比较样本不足时写“数据不足以判断”。标签与指标只能描述共现关系，不得声称因果。
 
 前五个章节的每一项必须含 summary、evidence，以及 material_id 或 material_ids。experimentMatrix 的每一项必须含 priority、hypothesis、creative_variable、target_audience、success_metric、control、review_action。
 
@@ -207,12 +210,13 @@ def prepare_analysis(*, input_dir, output_dir, highlight_trends=None):
             frames, requested=bool(selected_trends)
         )
     fact_pack = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "filters": manifest.get("filters", {}),
         "selectedMaterials": selected,
         "rejectedMaterials": rejected,
         "summaryMetrics": {"selectedCount": len(selected), "rejectedCount": len(rejected), "candidateCount": len(pool_records)},
         "candidatePool": _candidate_pool(pool_records),
+        "topMaterialCombination": build_top_material_combination(pool_records),
         "tagInsights": _tag_insights(pool_records, selected_ids),
         "trendSummary": _trend_summary(details),
         "dataAvailabilitySummary": _availability_summary(material_facts),

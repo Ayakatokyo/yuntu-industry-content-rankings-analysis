@@ -99,7 +99,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
 
         self.assertEqual(status, 0)
-        self.assertEqual(data["schemaVersion"], 2)
+        self.assertEqual(data["schemaVersion"], 3)
         self.assertEqual(data["candidatePool"]["count"], 4)
         self.assertEqual(data["candidatePool"]["metrics"]["ctr"]["median"], 0.25)
         self.assertEqual(data["materialFacts"][1]["metricComparison"]["ctr"]["tier"], "high")
@@ -170,6 +170,67 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(
             data["materialFacts"][0]["highlightFrameAvailability"],
             {"available": False, "missing_reason": "not_requested"},
+        )
+
+    def test_prepare_analysis_writes_top_material_combination_and_prompt_contract(self):
+        analysis = load_module()
+        records = [
+            {
+                "material_id": "1",
+                "title": "五个女博士富铁软糖",
+                "rank": 1,
+                "metrics": {"show_cnt": 200, "ctr": 0.2},
+                "people_tags": ["24-30", "女"],
+                "material_tags": ["成分配方原料_铁元素"],
+                "data_availability": {},
+            }
+        ]
+        selected = [
+            {
+                "rank": 1,
+                "material_id": "1",
+                "detailRecordPath": "normalized/detail-records/1.json",
+            }
+        ]
+        details = {
+            "1": {
+                "material_id": "1",
+                "high_points": [],
+                "loss_points": [],
+                "data_availability": {},
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            analysis.prepare_analysis(
+                input_dir=root, output_dir=root / "diagnostic-analysis"
+            )
+            data = json.loads(
+                (root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertEqual(
+            data["topMaterialCombination"]["overall"]["topMaterials"][0][
+                "material_id"
+            ],
+            "1",
+        )
+        self.assertIn("topMaterialCombination", prompt)
+        self.assertIn("标题匹配归属", prompt)
+        self.assertIn("brandComparisonConclusion", prompt)
+        self.assertIn("dimension", prompt)
+        self.assertIn("dataSummary", prompt)
+        self.assertIn("peopleSummary", prompt)
+        self.assertIn("marketingSummary", prompt)
+        self.assertIn(
+            "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。",
+            prompt,
         )
 
 

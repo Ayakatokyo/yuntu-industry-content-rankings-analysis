@@ -154,20 +154,25 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 
 `prepare-analysis` 会以完整榜单作为候选池、以成功详情素材作为秒级诊断范围，计算指标均值、中位数、分位与分层，汇总人群和内容标签覆盖，并归纳高点与流失区间。候选池少于四条时不输出高表现分层或标签关联；缺少指标、标签或趋势时必须写“数据不足以判断”，不得补造结论。
 
-模型读取事实包后，必须写入包含以下六个键的 `yuntu-ai-analysis.json`：
+模型读取事实包后，必须写入包含以下七个键的 `yuntu-ai-analysis.json`：
 
-1. `rankingOverview`：榜单机会总览
-2. `materialComparison`：素材表现对比
-3. `materialDiagnoses`：单素材秒级诊断
-4. `competitorPatterns`：竞品创意模式
-5. `xiaoxianDunOpportunityMap`：小仙炖机会地图
-6. `experimentMatrix`：下一轮实验矩阵
+1. `topMaterialCombination`：TOP 素材组合结论
+2. `rankingOverview`：榜单机会总览
+3. `materialComparison`：素材表现对比
+4. `materialDiagnoses`：单素材秒级诊断
+5. `competitorPatterns`：竞品创意模式
+6. `xiaoxianDunOpportunityMap`：小仙炖机会地图
+7. `experimentMatrix`：下一轮实验矩阵
+
+`topMaterialCombination` 包含 `overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。`overallConclusions` 必须且只能包含 `data`、`people`、`marketing` 三个维度；`brandConclusions` 的每个品牌必须包含 `dataSummary`、`peopleSummary`、`marketingSummary`；`brandComparisonConclusion` 必须基于每个参与品牌的指标证据总结横向差异。整体结论分析品牌筛选条件下 TOP30 的曝光、CTR、CVR、PVR、3S/5S/完播、互动、组件点击和平均播放时长，以及年龄、性别、八大画像和营销卖点。品牌结论按标题匹配规则独立分析各品牌下 TOP30：万益蓝/WONDERLAB 命中“万益蓝”或“wonderlab”，五个女博士命中“五个女博士”，燕之屋命中“燕之屋”。标题匹配是业务分类，不是 RPA 原生品牌字段；未知品牌保留在品牌筛选条件下 TOP30，但不进入品牌 TOP30；命中多个品牌的标题标为歧义并不进入品牌对比。
+
+人群标签同时给出素材数量占比和曝光加权覆盖率。标签可以重叠，因此曝光加权覆盖率不可相加为 100%，也不得写成真实人群比例。CPM 未由 RPA 提供时必须显示不可用，禁止从曝光或其他指标推算。卖点与指标只能描述共现，不得声称因果；某标签的有/无标签比较任一侧样本少于 3 条时写“数据不足以判断”。
 
 前五章中每项必须带有 `summary`、`evidence` 及 `material_id` 或 `material_ids`。实验矩阵每项必须包含 `priority`、`hypothesis`、`creative_variable`、`target_audience`、`success_metric`、`control` 和 `review_action`。涉及滋补、孕期、功效或健康人群的方向只能作为需业务和合规确认的测试假设。
 
 `render-report` 会拒绝缺少章节、证据、素材引用或实验字段的 JSON；它只将已验证的洞察渲染为 Markdown/HTML，不新增业务判断。
 
-HTML 报告使用深棕、暖金、米白的离线视觉系统。每张洞察卡优先展示业务结论与素材引用，数据证据以可展开区域保留，避免将结构化 JSON 作为主体阅读内容。高光帧预览必须支持点击、键盘焦点和 Escape 关闭；失败帧不输出损坏图片，素材诊断继续保留。
+HTML 报告使用深棕、暖金、米白的离线视觉系统。报告正文只展示结论与必要关键数字，结构化 `evidence` 保留在 `final-report-data.json`，不进入用户可读报告正文，也不展示为可展开区域。高光帧预览必须支持点击、键盘焦点和 Escape 关闭；失败帧不输出损坏图片，素材诊断继续保留。
 
 交付前必须用桌面 `1440x1000` 与移动 `390x844` 视口检查封面、章节、标签、证据、高光帧网格和预览层，确认无文本遮挡、正文横向溢出或不可见的键盘焦点。HTML 不得依赖远程图片、脚本或数据请求；归档为单文件时，高光帧须压缩后以 data URI 内嵌。
 

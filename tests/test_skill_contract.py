@@ -179,6 +179,25 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertNotIn("数据范围与可信度", skill)
         self.assertNotIn("风险与待补数据", skill)
 
+    def test_documents_top_material_combination_and_title_brand_limits(self):
+        skill = self.read_skill()
+
+        for phrase in (
+            "TOP 素材组合结论",
+            "品牌筛选条件下 TOP30",
+            "标题匹配",
+            "未知品牌",
+            "CPM",
+            "不可相加为 100%",
+            "brandComparisonConclusion",
+            "dataSummary",
+            "peopleSummary",
+            "marketingSummary",
+            "不进入用户可读报告正文",
+        ):
+            self.assertIn(phrase, skill)
+        self.assertNotIn("数据证据以可展开区域保留", skill)
+
     def test_openai_metadata_has_required_interface_fields(self):
         metadata = OPENAI_YAML_PATH.read_text(encoding="utf-8")
         self.assertRegex(metadata, r'(?m)^interface:\s*$')

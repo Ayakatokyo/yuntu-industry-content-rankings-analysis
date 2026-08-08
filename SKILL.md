@@ -154,14 +154,19 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 
 `prepare-analysis` 会以完整榜单作为候选池、以成功详情素材作为秒级诊断范围，计算指标均值、中位数、分位与分层，汇总人群和内容标签覆盖，并归纳高点与流失区间。候选池少于四条时不输出高表现分层或标签关联；缺少指标、标签或趋势时必须写“数据不足以判断”，不得补造结论。
 
-模型读取事实包后，必须写入包含以下六个键的 `yuntu-ai-analysis.json`：
+模型读取事实包后，必须写入包含以下七个键的 `yuntu-ai-analysis.json`：
 
-1. `rankingOverview`：榜单机会总览
-2. `materialComparison`：素材表现对比
-3. `materialDiagnoses`：单素材秒级诊断
-4. `competitorPatterns`：竞品创意模式
-5. `xiaoxianDunOpportunityMap`：小仙炖机会地图
-6. `experimentMatrix`：下一轮实验矩阵
+1. `topMaterialCombination`：TOP 素材组合结论
+2. `rankingOverview`：榜单机会总览
+3. `materialComparison`：素材表现对比
+4. `materialDiagnoses`：单素材秒级诊断
+5. `competitorPatterns`：竞品创意模式
+6. `xiaoxianDunOpportunityMap`：小仙炖机会地图
+7. `experimentMatrix`：下一轮实验矩阵
+
+`topMaterialCombination` 包含 `overallConclusions` 与 `brandConclusions`。整体结论分析品牌筛选条件下 TOP30 的曝光、CTR、CVR、PVR、3S/5S/完播、互动、组件点击和平均播放时长，以及年龄、性别、八大画像和营销卖点。品牌结论按标题匹配规则独立分析各品牌下 TOP30：万益蓝/WONDERLAB 命中“万益蓝”或“wonderlab”，五个女博士命中“五个女博士”，燕之屋命中“燕之屋”。标题匹配是业务分类，不是 RPA 原生品牌字段；未知品牌保留在品牌筛选条件下 TOP30，但不进入品牌 TOP30；命中多个品牌的标题标为歧义并不进入品牌对比。
+
+人群标签同时给出素材数量占比和曝光加权覆盖率。标签可以重叠，因此曝光加权覆盖率不可相加为 100%，也不得写成真实人群比例。CPM 未由 RPA 提供时必须显示不可用，禁止从曝光或其他指标推算。卖点与指标只能描述共现，不得声称因果；某标签的有/无标签比较任一侧样本少于 3 条时写“数据不足以判断”。
 
 前五章中每项必须带有 `summary`、`evidence` 及 `material_id` 或 `material_ids`。实验矩阵每项必须包含 `priority`、`hypothesis`、`creative_variable`、`target_audience`、`success_metric`、`control` 和 `review_action`。涉及滋补、孕期、功效或健康人群的方向只能作为需业务和合规确认的测试假设。
 

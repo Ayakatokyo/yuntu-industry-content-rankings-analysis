@@ -16,6 +16,7 @@ class YuntuReportError(RuntimeError):
 
 
 REQUIRED_FIELDS = (
+    "topMaterialCombination",
     "rankingOverview",
     "materialComparison",
     "materialDiagnoses",
@@ -25,12 +26,12 @@ REQUIRED_FIELDS = (
 )
 
 SECTION_TITLES = (
-    ("01｜榜单竞争格局", "rankingOverview"),
-    ("02｜内容表现地图", "materialComparison"),
-    ("03｜内容与人群机会", "xiaoxianDunOpportunityMap"),
-    ("04｜竞品内容模式", "competitorPatterns"),
-    ("05｜秒级创意结构", "materialDiagnoses"),
-    ("06｜机会与实验", "experimentMatrix"),
+    ("02｜榜单竞争格局", "rankingOverview"),
+    ("03｜内容表现地图", "materialComparison"),
+    ("04｜内容与人群机会", "xiaoxianDunOpportunityMap"),
+    ("05｜竞品内容模式", "competitorPatterns"),
+    ("06｜秒级创意结构", "materialDiagnoses"),
+    ("07｜机会与实验", "experimentMatrix"),
 )
 
 EVIDENCE_FIELDS = tuple(field for _, field in SECTION_TITLES[:-1])
@@ -59,6 +60,7 @@ def _load_analysis(path):
         )
     for field in EVIDENCE_FIELDS:
         _validate_evidence_section(analysis[field], field)
+    _validate_top_material_combination(analysis["topMaterialCombination"])
     _validate_experiments(analysis["experimentMatrix"])
     return analysis
 
@@ -83,6 +85,24 @@ def _validate_evidence_section(items, field):
         raise YuntuReportError(
             f"{field} items must include material_id or material_ids"
         )
+
+
+def _validate_top_material_combination(value):
+    if not isinstance(value, dict):
+        raise YuntuReportError("topMaterialCombination must be an object")
+    overall = value.get("overallConclusions")
+    _validate_evidence_section(overall, "topMaterialCombination.overallConclusions")
+    brands = value.get("brandConclusions")
+    if not isinstance(brands, list):
+        raise YuntuReportError("topMaterialCombination.brandConclusions must be a list")
+    for item in brands:
+        if not isinstance(item, dict):
+            raise YuntuReportError("topMaterialCombination.brandConclusions items must be objects")
+        if not isinstance(item.get("brand"), str) or not item["brand"].strip():
+            raise YuntuReportError("topMaterialCombination.brandConclusions items must include brand")
+        if item.get("classificationSource") != "title_rule":
+            raise YuntuReportError("topMaterialCombination.brandConclusions classificationSource must be title_rule")
+    _validate_evidence_section(brands, "topMaterialCombination.brandConclusions") if brands else None
 
 
 def _validate_experiments(items):
@@ -133,6 +153,16 @@ def _markdown_value(value):
 
 def _render_markdown(analysis):
     lines = ["# 云图行业内容榜单分析报告", ""]
+    combination = analysis["topMaterialCombination"]
+    lines.extend(["## 01｜TOP 素材组合结论", "", _markdown_value(combination["overallConclusions"]), ""])
+    for item in combination["brandConclusions"]:
+        lines.append(
+            f"- [{item['brand']}｜标题匹配归属] {item['summary']} 素材："
+            + "、".join(item["material_ids"])
+            + "；证据："
+            + json.dumps(item["evidence"], ensure_ascii=False, sort_keys=True)
+        )
+    lines.append("")
     for title, field in SECTION_TITLES:
         lines.extend([f"## {title}", "", _markdown_value(analysis[field]), ""])
     return "\n".join(lines)
@@ -216,6 +246,20 @@ def _render_html(analysis, material_frames, fact_pack):
             f'{_render_evidence(item.get("evidence", []), esc)}</article>'
             for item in items
         )
+
+    def top_material_combination_cards(value):
+        overall = insight_cards(value["overallConclusions"])
+        brands = "".join(
+            '<article class="insight-row"><p><strong>'
+            + esc(item["brand"])
+            + "｜标题匹配归属</strong> "
+            + esc(_generic_text(item["summary"]))
+            + "</p>"
+            + _render_evidence(item["evidence"], esc)
+            + "</article>"
+            for item in value["brandConclusions"]
+        )
+        return overall + brands
 
     def pie_chart(items, chart_id):
         colors = ("#d79a4b", "#b56e38", "#6d8c72", "#9b6a92", "#59778b", "#bd8a62", "#958268")
@@ -312,6 +356,9 @@ def _render_html(analysis, material_frames, fact_pack):
     frame_options = "".join(f'<option value="{esc(str(item.get("material_id")))}">#{esc(item.get("rank", "-"))} {esc(facts.get(str(item.get("material_id")), {}).get("title", item.get("material_id"))[:18])}</option>' for item in selected)
 
     landscape = insight_cards(analysis.get("rankingOverview", []))
+    top_material_combination = top_material_combination_cards(
+        analysis["topMaterialCombination"]
+    )
     performance = insight_cards(analysis.get("materialComparison", []))
     opportunities = insight_cards(analysis.get("xiaoxianDunOpportunityMap", []))
     competitor_patterns = analysis.get("competitorPatterns", [])
@@ -357,6 +404,7 @@ def _render_html(analysis, material_frames, fact_pack):
         source_list=source_label("Top1000 榜单数据"),
         source_detail=source_label("单素材秒级详情"),
         source_derived=source_label("榜单 + 秒级详情派生"),
+        top_material_combination=top_material_combination,
         landscape=landscape,
         baseline=baseline,
         performance=performance,

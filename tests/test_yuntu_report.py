@@ -156,6 +156,124 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("附：秒级趋势洞察", markdown)
         self.assertIn("<html", html)
 
+    def test_render_report_writes_audience_dashboard_from_fact_pack(self):
+        report = load_module()
+        audience_dashboard = {
+            "sample": {
+                "scope": "candidate_pool_top_1000",
+                "requestedLimit": 1000,
+                "recordCount": 3,
+            },
+            "dimensions": {
+                "age": {
+                    "labelMode": "normalized_tag_share",
+                    "recordCount": 3,
+                    "labeledRecordCount": 2,
+                    "unlabeledRecordCount": 1,
+                    "tagOccurrenceCount": 2,
+                    "buckets": [
+                        {"label": "24-30", "materialCount": 2, "materialShare": 2 / 3, "chartShare": 1},
+                    ],
+                },
+                "gender": {
+                    "labelMode": "normalized_tag_share",
+                    "recordCount": 3,
+                    "labeledRecordCount": 3,
+                    "unlabeledRecordCount": 0,
+                    "tagOccurrenceCount": 3,
+                    "buckets": [
+                        {"label": "女", "materialCount": 3, "materialShare": 1, "chartShare": 1},
+                    ],
+                },
+                "crowd": {
+                    "labelMode": "normalized_tag_share",
+                    "recordCount": 3,
+                    "labeledRecordCount": 2,
+                    "unlabeledRecordCount": 1,
+                    "tagOccurrenceCount": 3,
+                    "buckets": [
+                        {"label": "新锐白领", "materialCount": 2, "materialShare": 2 / 3, "chartShare": 2 / 3},
+                        {"label": "精致妈妈", "materialCount": 1, "materialShare": 1 / 3, "chartShare": 1 / 3},
+                    ],
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack={"audienceDashboard": audience_dashboard},
+            )
+            markdown = (root / "final-report" / "final-report.md").read_text(encoding="utf-8")
+            html = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        for rendered in (markdown, html):
+            self.assertIn("02｜人群洞察", rendered)
+            self.assertIn("候选池 TOP1000", rendered)
+            self.assertIn("实际 3 条", rendered)
+            self.assertIn("年龄", rendered)
+            self.assertIn("性别", rendered)
+            self.assertIn("八大人群", rendered)
+            self.assertIn("图表按素材标签出现次数归一化展示", rendered)
+            self.assertIn("用于观察标签结构，不代表真实人群分布", rendered)
+        self.assertIn('href="#audience-insights"', html)
+        self.assertIn("conic-gradient(", html)
+        self.assertEqual(html.count(' data-audience-pie '), 2)
+        self.assertEqual(html.count(' data-audience-column '), 1)
+        self.assertIn('class="chart-card audience-chart audience-chart-age"', html)
+        self.assertIn('class="chart-card audience-chart audience-chart-gender"', html)
+        self.assertIn('class="chart-card audience-chart audience-chart-crowd"', html)
+        self.assertIn('class="audience-column-chart"', html)
+        self.assertIn('class="audience-column-label">新锐白领</span>', html)
+        self.assertIn('class="legend-label"><i class="legend-swatch"', html)
+        self.assertIn('class="legend-count">2 条</span>', html)
+        self.assertIn('class="legend-share">100.0%</span>', html)
+        self.assertIn('class="chart-tooltip"', html)
+        self.assertIn('.page{width:min(1180px,calc(100% - 32px));', html)
+        self.assertIn('.audience-pie-layout{display:grid;grid-template-columns:minmax(0,45fr) minmax(0,55fr);', html)
+        self.assertIn('.audience-chart-age,.audience-chart-gender{display:flex;flex-direction:column}', html)
+        self.assertIn('flex:1;min-height:0;gap:14px;align-items:center', html)
+        self.assertIn('@container (max-width:360px){.audience-pie-layout{grid-template-columns:1fr}', html)
+        self.assertIn('.pie-chart{position:relative;width:min(260px,100%);', html)
+        self.assertIn('.audience-chart-gender .pie-chart{width:min(240px,100%)}', html)
+        self.assertIn('.pie-legend .legend-item{position:relative;display:grid;grid-template-columns:minmax(80px,1fr) auto auto;', html)
+        self.assertIn('.audience-column-chart{position:relative;min-height:300px;', html)
+        self.assertNotIn('class="pie-tooltip"', html)
+        self.assertNotIn('class="audience-bar-chart"', html)
+
+    def test_render_report_keeps_unlabeled_dimension_out_of_pie_chart(self):
+        report = load_module()
+        audience_dashboard = {
+            "sample": {"recordCount": 2},
+            "dimensions": {
+                "age": {
+                    "labelMode": "normalized_tag_share",
+                    "recordCount": 2,
+                    "labeledRecordCount": 0,
+                    "unlabeledRecordCount": 2,
+                    "tagOccurrenceCount": 0,
+                    "buckets": [],
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack={"audienceDashboard": audience_dashboard},
+            )
+            html = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn("暂无可视化数据。", html)
+        self.assertIn("未识别到该维度标签：2 条素材。", html)
+        self.assertEqual(html.count(' data-audience-pie '), 0)
+
     def test_render_report_rejects_evidence_less_conclusion(self):
         report = load_module()
         analysis = self.analysis_json()

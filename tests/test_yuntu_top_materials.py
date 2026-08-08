@@ -120,6 +120,51 @@ class YuntuTopMaterialsTests(unittest.TestCase):
         self.assertEqual(len(result["overall"]["tagMetricComparisons"]), 1)
         self.assertEqual(result["overall"]["tagMetricComparisons"][0]["rawTag"], "痛点_低精力")
 
+    def test_audience_dashboard_uses_top_1000_and_normalized_tag_shares(self):
+        subject = load_module()
+        records = [
+            record(str(index), 2000 - index, index, people=["24-30", "女", "新锐白领"])
+            for index in range(1, 1002)
+        ]
+        records[1]["people_tags"] = ["31-35", "男", "精致妈妈"]
+
+        result = subject.build_audience_dashboard(records)
+
+        self.assertEqual(result["sample"], {
+            "scope": "candidate_pool_top_1000",
+            "requestedLimit": 1000,
+            "recordCount": 1000,
+        })
+        self.assertEqual(result["dimensions"]["age"]["labelMode"], "normalized_tag_share")
+        self.assertEqual(result["dimensions"]["age"]["labeledRecordCount"], 1000)
+        self.assertEqual(result["dimensions"]["age"]["unlabeledRecordCount"], 0)
+        self.assertEqual(result["dimensions"]["age"]["tagOccurrenceCount"], 1000)
+        self.assertEqual(result["dimensions"]["age"]["buckets"][0], {
+            "label": "24-30", "materialCount": 999, "materialShare": 0.999, "chartShare": 0.999,
+        })
+        self.assertEqual(result["dimensions"]["gender"]["buckets"][1], {
+            "label": "男", "materialCount": 1, "materialShare": 0.001, "chartShare": 0.001,
+        })
+
+    def test_audience_dashboard_normalizes_multi_label_dimension_for_pie_chart(self):
+        subject = load_module()
+        result = subject.build_audience_dashboard([
+            record("1", 300, 1, people=["24-30", "女", "新锐白领", "精致妈妈"]),
+            record("2", 200, 2, people=["24-30", "女", "新锐白领"]),
+            record("3", 100, 3, people=[]),
+        ])
+
+        crowd = result["dimensions"]["crowd"]
+        self.assertEqual(crowd["labelMode"], "normalized_tag_share")
+        self.assertEqual(crowd["recordCount"], 3)
+        self.assertEqual(crowd["labeledRecordCount"], 2)
+        self.assertEqual(crowd["unlabeledRecordCount"], 1)
+        self.assertEqual(crowd["tagOccurrenceCount"], 3)
+        self.assertEqual(crowd["buckets"], [
+            {"label": "新锐白领", "materialCount": 2, "materialShare": 2 / 3, "chartShare": 2 / 3},
+            {"label": "精致妈妈", "materialCount": 1, "materialShare": 1 / 3, "chartShare": 1 / 3},
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

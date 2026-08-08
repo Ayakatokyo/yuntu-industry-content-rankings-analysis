@@ -134,6 +134,55 @@ def _people_coverage(records, labels):
     return sorted(values, key=lambda item: (-item["exposure"], item["label"]))
 
 
+def _audience_dimension(records, labels):
+    counts = {label: 0 for label in labels}
+    labeled_record_count = 0
+    for record in records:
+        people_tags = record.get("people_tags", [])
+        matched = [label for label in labels if label in people_tags]
+        if matched:
+            labeled_record_count += 1
+        for label in matched:
+            counts[label] += 1
+    record_count = len(records)
+    tag_occurrence_count = sum(counts.values())
+    return {
+        "labelMode": "normalized_tag_share",
+        "recordCount": record_count,
+        "labeledRecordCount": labeled_record_count,
+        "unlabeledRecordCount": record_count - labeled_record_count,
+        "tagOccurrenceCount": tag_occurrence_count,
+        "buckets": [
+            {
+                "label": label,
+                "materialCount": count,
+                "materialShare": count / record_count if record_count else None,
+                "chartShare": count / tag_occurrence_count if tag_occurrence_count else None,
+            }
+            for label, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+            if count
+        ],
+    }
+
+
+def build_audience_dashboard(records, *, limit=1000):
+    """Build TOP candidate-pool material-tag shares for the audience report block."""
+    selected = select_top_materials(records, limit=limit)
+    return {
+        "schemaVersion": 1,
+        "sample": {
+            "scope": "candidate_pool_top_1000",
+            "requestedLimit": limit,
+            "recordCount": len(selected),
+        },
+        "dimensions": {
+            "age": _audience_dimension(selected, AGE_TAGS),
+            "gender": _audience_dimension(selected, GENDER_TAGS),
+            "crowd": _audience_dimension(selected, CROWD_TAGS),
+        },
+    }
+
+
 def _marketing_category(tag):
     if tag.startswith("成分配方原料_"):
         return "成分/原料"

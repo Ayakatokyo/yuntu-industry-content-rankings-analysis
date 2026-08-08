@@ -6,7 +6,7 @@ from statistics import median
 
 from rpa_io import write_json_atomically
 from yuntu_highlights import generate_highlights, normalize_highlight_trends
-from yuntu_top_materials import build_top_material_combination
+from yuntu_top_materials import build_audience_dashboard, build_top_material_combination
 
 
 class YuntuAnalysisError(RuntimeError):
@@ -217,6 +217,7 @@ def prepare_analysis(*, input_dir, output_dir, highlight_trends=None):
         "summaryMetrics": {"selectedCount": len(selected), "rejectedCount": len(rejected), "candidateCount": len(pool_records)},
         "candidatePool": _candidate_pool(pool_records),
         "topMaterialCombination": build_top_material_combination(pool_records),
+        "audienceDashboard": build_audience_dashboard(pool_records),
         "tagInsights": _tag_insights(pool_records, selected_ids),
         "trendSummary": _trend_summary(details),
         "dataAvailabilitySummary": _availability_summary(material_facts),

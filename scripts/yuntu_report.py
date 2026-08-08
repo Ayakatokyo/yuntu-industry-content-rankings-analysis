@@ -2,6 +2,7 @@
 
 import html
 import json
+import re
 from pathlib import Path
 from string import Template
 
@@ -44,6 +45,21 @@ EXPERIMENT_FIELDS = (
     "control",
     "review_action",
 )
+TOP_MATERIAL_DIMENSIONS = ("data", "people", "marketing")
+TOP_MATERIAL_LABELS = {
+    "data": "从数据维度看",
+    "people": "从人群维度看",
+    "marketing": "从营销卖点维度看",
+}
+BRAND_SUMMARY_FIELDS = {
+    "data": "dataSummary",
+    "people": "peopleSummary",
+    "marketing": "marketingSummary",
+}
+PEOPLE_TAG_OVERLAP_NOTICE = (
+    "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。"
+)
+AUDIT_JSON_PATTERN = re.compile(r'(?:\[\s*)?\{\s*"[^"\n]+"\s*:')
 
 
 def _load_analysis(path):
@@ -71,27 +87,66 @@ def _validate_evidence_section(items, field):
     for item in items:
         if not isinstance(item, dict):
             raise YuntuReportError(f"{field} items must be objects")
-        evidence = item.get("evidence")
-        if not isinstance(evidence, list) or not evidence:
-            raise YuntuReportError(f"{field} items must include evidence")
-        material_id = item.get("material_id")
-        material_ids = item.get("material_ids")
-        if isinstance(material_id, str) and material_id.isdigit():
-            continue
-        if isinstance(material_ids, list) and material_ids and all(
-            isinstance(value, str) and value.isdigit() for value in material_ids
-        ):
-            continue
-        raise YuntuReportError(
-            f"{field} items must include material_id or material_ids"
-        )
+        _validate_summary(item.get("summary"), f"{field} items summary")
+        _validate_evidence_and_material_ids(item, f"{field} items")
+
+
+def _validate_summary(value, field):
+    if not isinstance(value, str) or not value.strip():
+        raise YuntuReportError(f"{field} must be a nonempty string")
+    if (
+        "查看数据依据" in value
+        or "证据：" in value
+        or AUDIT_JSON_PATTERN.search(value)
+    ):
+        raise YuntuReportError(f"{field} must not contain audit evidence")
+
+
+def _validate_evidence_and_material_ids(item, field):
+    evidence = item.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        raise YuntuReportError(f"{field} must include evidence")
+    material_id = item.get("material_id")
+    material_ids = item.get("material_ids")
+    if isinstance(material_id, str) and material_id.isdigit():
+        return
+    if isinstance(material_ids, list) and material_ids and all(
+        isinstance(value, str) and value.isdigit() for value in material_ids
+    ):
+        return
+    raise YuntuReportError(f"{field} must include material_id or material_ids")
 
 
 def _validate_top_material_combination(value):
     if not isinstance(value, dict):
         raise YuntuReportError("topMaterialCombination must be an object")
     overall = value.get("overallConclusions")
-    _validate_evidence_section(overall, "topMaterialCombination.overallConclusions")
+    if not isinstance(overall, list) or len(overall) != len(TOP_MATERIAL_DIMENSIONS):
+        raise YuntuReportError(
+            "topMaterialCombination.overallConclusions must contain exactly three dimensions"
+        )
+    dimensions = []
+    for item in overall:
+        if not isinstance(item, dict):
+            raise YuntuReportError(
+                "topMaterialCombination.overallConclusions items must be objects"
+            )
+        dimension = item.get("dimension")
+        if dimension not in TOP_MATERIAL_DIMENSIONS:
+            raise YuntuReportError(
+                "topMaterialCombination.overallConclusions dimension must be data, people, or marketing"
+            )
+        dimensions.append(dimension)
+        _validate_summary(
+            item.get("summary"), "topMaterialCombination.overallConclusions summary"
+        )
+        _validate_evidence_and_material_ids(
+            item, "topMaterialCombination.overallConclusions items"
+        )
+    if set(dimensions) != set(TOP_MATERIAL_DIMENSIONS):
+        raise YuntuReportError(
+            "topMaterialCombination.overallConclusions dimensions must be unique"
+        )
     brands = value.get("brandConclusions")
     if not isinstance(brands, list):
         raise YuntuReportError("topMaterialCombination.brandConclusions must be a list")
@@ -102,7 +157,39 @@ def _validate_top_material_combination(value):
             raise YuntuReportError("topMaterialCombination.brandConclusions items must include brand")
         if item.get("classificationSource") != "title_rule":
             raise YuntuReportError("topMaterialCombination.brandConclusions classificationSource must be title_rule")
-    _validate_evidence_section(brands, "topMaterialCombination.brandConclusions") if brands else None
+        for summary_field in BRAND_SUMMARY_FIELDS.values():
+            _validate_summary(
+                item.get(summary_field),
+                f"topMaterialCombination.brandConclusions {summary_field}",
+            )
+        _validate_evidence_and_material_ids(
+            item, "topMaterialCombination.brandConclusions items"
+        )
+    comparison = value.get("brandComparisonConclusion")
+    if not isinstance(comparison, dict):
+        raise YuntuReportError(
+            "topMaterialCombination.brandComparisonConclusion must be an object"
+        )
+    _validate_summary(
+        comparison.get("summary"),
+        "topMaterialCombination.brandComparisonConclusion summary",
+    )
+    _validate_evidence_and_material_ids(
+        comparison, "topMaterialCombination.brandComparisonConclusion"
+    )
+    compared_brands = {
+        entry.get("brand")
+        for entry in comparison["evidence"]
+        if isinstance(entry, dict)
+        and isinstance(entry.get("brand"), str)
+        and isinstance(entry.get("metric"), str)
+        and entry["metric"].strip()
+    }
+    required_brands = {item["brand"] for item in brands}
+    if not required_brands.issubset(compared_brands):
+        raise YuntuReportError(
+            "topMaterialCombination.brandComparisonConclusion evidence must include each brand and metric"
+        )
 
 
 def _validate_experiments(items):
@@ -133,17 +220,7 @@ def _markdown_value(value):
                         f"复盘：{item['review_action']}"
                     )
                 else:
-                    material_ids = item.get("material_ids") or [item.get("material_id")]
-                    material_text = "、".join(
-                        str(material_id) for material_id in material_ids if material_id
-                    )
-                    evidence = json.dumps(
-                        item.get("evidence", []), ensure_ascii=False, sort_keys=True
-                    )
-                    text = (
-                        f"{item.get('summary') or item.get('body') or ''} "
-                        f"素材：{material_text}；证据：{evidence}"
-                    ).strip()
+                    text = str(item.get("summary") or item.get("body") or "")
             else:
                 text = str(item)
             lines.append(f"- {text}")
@@ -154,15 +231,35 @@ def _markdown_value(value):
 def _render_markdown(analysis):
     lines = ["# 云图行业内容榜单分析报告", ""]
     combination = analysis["topMaterialCombination"]
-    lines.extend(["## 01｜TOP 素材组合结论", "", _markdown_value(combination["overallConclusions"]), ""])
+    overall = {
+        item["dimension"]: item for item in combination["overallConclusions"]
+    }
+    lines.extend(["## 01｜TOP 素材组合结论", "", "### 一、品牌筛选条件下 TOP30 整体分析", ""])
+    for dimension in TOP_MATERIAL_DIMENSIONS:
+        summary = overall[dimension]["summary"]
+        if dimension == "people":
+            summary = f"{summary} {PEOPLE_TAG_OVERLAP_NOTICE}"
+        lines.extend([
+            f"{TOP_MATERIAL_LABELS[dimension]}，{summary}",
+            "",
+        ])
+    lines.extend(["### 二、各品牌 TOP30 对比分析", ""])
     for item in combination["brandConclusions"]:
-        lines.append(
-            f"- [{item['brand']}｜标题匹配归属] {item['summary']} 素材："
-            + "、".join(item["material_ids"])
-            + "；证据："
-            + json.dumps(item["evidence"], ensure_ascii=False, sort_keys=True)
-        )
-    lines.append("")
+        lines.extend([
+            f"#### {item['brand']} TOP30（标题匹配归属）",
+            "",
+        ])
+        for dimension in TOP_MATERIAL_DIMENSIONS:
+            lines.extend([
+                f"{TOP_MATERIAL_LABELS[dimension]}，{item[BRAND_SUMMARY_FIELDS[dimension]]}",
+                "",
+            ])
+    lines.extend([
+        "#### 品牌间差异总结",
+        "",
+        combination["brandComparisonConclusion"]["summary"],
+        "",
+    ])
     for title, field in SECTION_TITLES:
         lines.extend([f"## {title}", "", _markdown_value(analysis[field]), ""])
     return "\n".join(lines)
@@ -175,18 +272,6 @@ def _material_frames(fact_pack):
         if isinstance(material_id, str):
             frames[material_id] = fact.get("highlightFrames", [])
     return frames
-
-
-def _render_evidence(evidence, esc):
-    if not evidence:
-        return ""
-    rows = "".join(
-        f"<li>{esc(json.dumps(item, ensure_ascii=False))}</li>" for item in evidence
-    )
-    return (
-        '<details class="evidence-details"><summary>查看数据依据</summary>'
-        f"<ul>{rows}</ul></details>"
-    )
 
 
 METRIC_LABELS = {
@@ -243,23 +328,48 @@ def _render_html(analysis, material_frames, fact_pack):
     def insight_cards(items):
         return "".join(
             f'<article class="insight-row"><p>{esc(_generic_text(item.get("summary", "")))}</p>'
-            f'{_render_evidence(item.get("evidence", []), esc)}</article>'
+            "</article>"
             for item in items
         )
 
     def top_material_combination_cards(value):
-        overall = insight_cards(value["overallConclusions"])
-        brands = "".join(
-            '<article class="insight-row"><p><strong>'
-            + esc(item["brand"])
-            + "｜标题匹配归属</strong> "
-            + esc(_generic_text(item["summary"]))
+        overall_by_dimension = {
+            item["dimension"]: item for item in value["overallConclusions"]
+        }
+        overall = "".join(
+            '<p><strong>'
+            + TOP_MATERIAL_LABELS[dimension]
+            + "，</strong>"
+            + esc(_generic_text(overall_by_dimension[dimension]["summary"]))
+            + (" " + esc(PEOPLE_TAG_OVERLAP_NOTICE) if dimension == "people" else "")
             + "</p>"
-            + _render_evidence(item["evidence"], esc)
+            for dimension in TOP_MATERIAL_DIMENSIONS
+        )
+        brands = "".join(
+            '<article class="brand-conclusion"><h4>'
+            + esc(item["brand"])
+            + ' TOP30 <span>标题匹配归属</span></h4>'
+            + "".join(
+                '<p><strong>'
+                + TOP_MATERIAL_LABELS[dimension]
+                + "，</strong>"
+                + esc(_generic_text(item[BRAND_SUMMARY_FIELDS[dimension]]))
+                + "</p>"
+                for dimension in TOP_MATERIAL_DIMENSIONS
+            )
             + "</article>"
             for item in value["brandConclusions"]
         )
-        return overall + brands
+        return (
+            '<div class="top-material-overall"><h3>一、品牌筛选条件下 TOP30 整体分析</h3>'
+            + overall
+            + "</div>"
+            + '<div class="top-material-brands"><h3>二、各品牌 TOP30 对比分析</h3>'
+            + brands
+            + '<article class="brand-conclusion brand-difference"><h4>品牌间差异总结</h4><p>'
+            + esc(_generic_text(value["brandComparisonConclusion"]["summary"]))
+            + "</p></article></div>"
+        )
 
     def pie_chart(items, chart_id):
         colors = ("#d79a4b", "#b56e38", "#6d8c72", "#9b6a92", "#59778b", "#bd8a62", "#958268")
@@ -338,7 +448,7 @@ def _render_html(analysis, material_frames, fact_pack):
         for name, data in trend_summary.items()
     )
     diagnosis_items = "".join(
-        f'<details class="diagnosis" id="material-{esc(item.get("material_id"))}"><summary><span class="rank">#{esc(facts.get(str(item.get("material_id")), {}).get("rank", "-"))}</span><strong>{esc(facts.get(str(item.get("material_id")), {}).get("title", item.get("material_id")))}</strong><span>展开秒级诊断</span></summary><p>{esc(_generic_text(item.get("summary", "")))}</p>{_render_evidence(item.get("evidence", []), esc)}</details>'
+        f'<details class="diagnosis" id="material-{esc(item.get("material_id"))}"><summary><span class="rank">#{esc(facts.get(str(item.get("material_id")), {}).get("rank", "-"))}</span><strong>{esc(facts.get(str(item.get("material_id")), {}).get("title", item.get("material_id")))}</strong><span>展开秒级诊断</span></summary><p>{esc(_generic_text(item.get("summary", "")))}</p></details>'
         for item in analysis.get("materialDiagnoses", [])
     )
     frame_buttons = []
@@ -367,7 +477,7 @@ def _render_html(analysis, material_frames, fact_pack):
         item = next((entry for entry in competitor_patterns if brand in str(entry.get("summary", ""))), None)
         if item:
             competitor_cards.append(
-                f'<article class="competitor-card"><h3>{esc(brand)}</h3><p>{esc(_generic_text(item.get("summary", "")))}</p>{_render_evidence(item.get("evidence", []), esc)}</article>'
+                f'<article class="competitor-card"><h3>{esc(brand)}</h3><p>{esc(_generic_text(item.get("summary", "")))}</p></article>'
             )
     if not competitor_cards:
         competitor_cards.append('<p class="data-note">当前数据未识别出可归属到指定竞品的结论。</p>')

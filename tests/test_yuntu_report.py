@@ -26,20 +26,65 @@ class YuntuReportTests(unittest.TestCase):
             "topMaterialCombination": {
                 "overallConclusions": [
                     {
-                        "summary": "TOP30 总曝光占比高。",
+                        "dimension": "data",
+                        "summary": "TOP30 总曝光占比高，头部流量集中但并非单条素材垄断。",
                         "material_ids": ["101"],
-                        "evidence": [{"metric": "show_cnt", "value": 1000}],
+                        "evidence": [{"hidden": "evidence-sentinel-data"}],
+                    },
+                    {
+                        "dimension": "people",
+                        "summary": "女性与新锐白领标签的曝光加权覆盖更高。",
+                        "material_ids": ["101"],
+                        "evidence": [{"hidden": "evidence-sentinel-audience"}],
+                    },
+                    {
+                        "dimension": "marketing",
+                        "summary": "头部素材以功效理性种草和痛点触发为主。",
+                        "material_ids": ["101"],
+                        "evidence": [{"hidden": "evidence-sentinel-marketing"}],
                     }
                 ],
                 "brandConclusions": [
                     {
+                        "brand": "万益蓝/WONDERLAB",
+                        "classificationSource": "title_rule",
+                        "summary": "旧版兼容字段，不应再渲染。",
+                        "dataSummary": "数据表现以曝光获取和前段承接为主。",
+                        "peopleSummary": "人群结构以女性健康关注者为主。",
+                        "marketingSummary": "营销卖点以肠道健康表达为主。",
+                        "material_ids": ["101"],
+                        "evidence": [{"hidden": "evidence-sentinel-brand-1"}],
+                    },
+                    {
                         "brand": "五个女博士",
                         "classificationSource": "title_rule",
-                        "summary": "标题匹配样本以女性标签覆盖为主。",
+                        "summary": "旧版兼容字段，不应再渲染。",
+                        "dataSummary": "数据表现以点击与转化承接为主。",
+                        "peopleSummary": "人群结构以都市女性为主。",
+                        "marketingSummary": "营销卖点以女性营养表达为主。",
                         "material_ids": ["101"],
-                        "evidence": [{"metric": "ctr", "value": 0.2}],
+                        "evidence": [{"hidden": "evidence-sentinel-brand-2"}],
+                    },
+                    {
+                        "brand": "燕之屋",
+                        "classificationSource": "title_rule",
+                        "summary": "旧版兼容字段，不应再渲染。",
+                        "dataSummary": "数据表现以头部曝光集中为主。",
+                        "peopleSummary": "人群结构以中高年龄女性为主。",
+                        "marketingSummary": "营销卖点以燕窝滋补场景为主。",
+                        "material_ids": ["101"],
+                        "evidence": [{"hidden": "evidence-sentinel-brand-3"}],
                     }
                 ],
+                "brandComparisonConclusion": {
+                    "summary": "真实品牌差异结论：三个品牌在头部流量结构和卖点侧重点上存在差异。",
+                    "material_ids": ["101", "102", "103"],
+                    "evidence": [
+                        {"brand": "万益蓝/WONDERLAB", "metric": "ctr", "value": 0.2},
+                        {"brand": "五个女博士", "metric": "ctr", "value": 0.3},
+                        {"brand": "燕之屋", "metric": "ctr", "value": 0.4},
+                    ],
+                },
             },
             "rankingOverview": [{"summary": "竞品出现价格利益点。", "material_ids": ["101"], "evidence": [{"metric": "ctr", "value": 0.7}]}],
             "materialComparison": [{"material_id": "101", "summary": "CTR 位于候选池高位。", "evidence": [{"metric": "ctr", "value": 0.7}]}],
@@ -49,7 +94,7 @@ class YuntuReportTests(unittest.TestCase):
             "experimentMatrix": [{"priority": "P1", "hypothesis": "通勤开场提升 3 秒播放率", "creative_variable": "前 3 秒场景钩子", "target_audience": "新锐白领", "success_metric": "play_3s_rate", "control": "现有商品直展示素材", "review_action": "按人群拆分复盘"}],
         }
 
-    def test_render_report_writes_the_six_revised_chapters(self):
+    def test_render_report_writes_conclusion_only_report_without_evidence(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -64,8 +109,27 @@ class YuntuReportTests(unittest.TestCase):
         self.assertEqual(data["status"], "complete")
         for title in ("榜单竞争格局", "内容表现地图", "内容与人群机会", "竞品内容模式", "秒级创意结构", "机会与实验"):
             self.assertIn(title, markdown)
-        self.assertIn("素材：101", markdown)
-        self.assertIn("证据：", markdown)
+        for rendered in (markdown, html):
+            self.assertIn("一、品牌筛选条件下 TOP30 整体分析", rendered)
+            self.assertIn("从数据维度看", rendered)
+            self.assertIn("从人群维度看", rendered)
+            self.assertIn("从营销卖点维度看", rendered)
+            self.assertIn("人群标签是重叠标签，不是真实人群分布，不能相加为 100%。", rendered)
+            self.assertIn("二、各品牌 TOP30 对比分析", rendered)
+            self.assertIn("万益蓝/WONDERLAB", rendered)
+            self.assertIn("五个女博士", rendered)
+            self.assertIn("燕之屋", rendered)
+            self.assertIn("标题匹配归属", rendered)
+            self.assertIn("品牌间差异总结", rendered)
+            self.assertIn("真实品牌差异结论", rendered)
+            self.assertNotIn("旧版兼容字段", rendered)
+            self.assertNotIn("查看数据依据", rendered)
+            self.assertNotIn('<details class="evidence-details">', rendered)
+            self.assertNotIn("证据：", rendered)
+            self.assertNotIn("evidence-sentinel", rendered)
+            self.assertEqual(rendered.count("从数据维度看"), 4)
+            self.assertEqual(rendered.count("从人群维度看"), 4)
+            self.assertEqual(rendered.count("从营销卖点维度看"), 4)
         self.assertIn("假设：通勤开场提升 3 秒播放率", markdown)
         self.assertIn("成功指标：play_3s_rate", markdown)
         self.assertNotIn("附：秒级趋势洞察", markdown)
@@ -91,6 +155,50 @@ class YuntuReportTests(unittest.TestCase):
             with self.assertRaisesRegex(report.YuntuReportError, "topMaterialCombination.*evidence"):
                 report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
 
+    def test_render_report_rejects_incomplete_top_material_contract(self):
+        report = load_module()
+        for mutation, error in (
+            (
+                lambda analysis: analysis["topMaterialCombination"]["overallConclusions"][0].update({"dimension": "unknown"}),
+                "dimension",
+            ),
+            (
+                lambda analysis: analysis["topMaterialCombination"].pop("brandComparisonConclusion"),
+                "brandComparisonConclusion",
+            ),
+        ):
+            with self.subTest(error=error):
+                analysis = self.analysis_json()
+                mutation(analysis)
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "analysis.json"
+                    path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+                    with self.assertRaisesRegex(report.YuntuReportError, error):
+                        report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
+
+    def test_render_report_rejects_audit_content_in_user_readable_summaries(self):
+        report = load_module()
+        for field, value in (
+            ("summary", "查看数据依据"),
+            ("dataSummary", "证据：{\"metric\": \"ctr\"}"),
+            ("marketingSummary", "指标对象：{\"metric\": \"ctr\"}"),
+        ):
+            with self.subTest(field=field):
+                analysis = self.analysis_json()
+                target = (
+                    analysis["topMaterialCombination"]["overallConclusions"][0]
+                    if field == "summary"
+                    else analysis["topMaterialCombination"]["brandConclusions"][0]
+                )
+                target[field] = value
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "analysis.json"
+                    path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+                    with self.assertRaisesRegex(report.YuntuReportError, "audit"):
+                        report.render_report(
+                            analysis_json=path, output_dir=Path(directory) / "report"
+                        )
+
     def test_render_report_renders_top_material_combination_first(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:
@@ -112,6 +220,16 @@ class YuntuReportTests(unittest.TestCase):
             path = Path(directory) / "analysis.json"
             path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
             with self.assertRaisesRegex(report.YuntuReportError, "control"):
+                report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
+
+    def test_render_report_rejects_brand_comparison_without_each_brand_evidence(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        analysis["topMaterialCombination"]["brandComparisonConclusion"]["evidence"].pop()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "brandComparisonConclusion.*brand"):
                 report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
 
     def test_render_report_renders_styled_cover_and_highlight_gallery(self):
@@ -146,18 +264,41 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("食品饮料行业｜小仙炖、诺特兰德｜2026-07-26 至 2026-08-01", rendered)
         self.assertNotIn("好丽友、香飘飘", rendered)
 
-    def test_render_report_separates_insight_evidence_into_details(self):
+    def test_render_report_keeps_evidence_in_json_without_rendering_it(self):
         report = load_module()
+        analysis = self.analysis_json()
+        evidence_sections = {
+            "rankingOverview": analysis["rankingOverview"],
+            "materialComparison": analysis["materialComparison"],
+            "materialDiagnoses": analysis["materialDiagnoses"],
+            "competitorPatterns": analysis["competitorPatterns"],
+            "xiaoxianDunOpportunityMap": analysis["xiaoxianDunOpportunityMap"],
+        }
+        for name, entries in evidence_sections.items():
+            entries[0]["evidence"] = [{"hidden": f"evidence-sentinel-{name}"}]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             analysis_path = root / "analysis.json"
-            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+            markdown = (root / "final-report" / "final-report.md").read_text(encoding="utf-8")
+            data = json.loads((root / "final-report" / "final-report-data.json").read_text(encoding="utf-8"))
         self.assertIn('class="insight-row"', rendered)
         self.assertNotIn('class="material-reference" href="#material-101"', rendered)
-        self.assertIn('<details class="evidence-details">', rendered)
-        self.assertIn("查看数据依据", rendered)
+        self.assertNotIn('<details class="evidence-details">', rendered)
+        self.assertNotIn("查看数据依据", rendered)
+        for name in evidence_sections:
+            self.assertNotIn(f"evidence-sentinel-{name}", rendered)
+            self.assertNotIn(f"evidence-sentinel-{name}", markdown)
+            self.assertEqual(
+                data["analysis"][name][0]["evidence"],
+                [{"hidden": f"evidence-sentinel-{name}"}],
+            )
+        self.assertEqual(
+            data["analysis"]["topMaterialCombination"]["overallConclusions"][0]["evidence"],
+            [{"hidden": "evidence-sentinel-data"}],
+        )
 
     def test_render_report_uses_accessible_highlight_gallery(self):
         report = load_module()

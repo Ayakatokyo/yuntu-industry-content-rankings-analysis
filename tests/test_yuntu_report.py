@@ -230,7 +230,9 @@ class YuntuReportTests(unittest.TestCase):
             markdown = (root / "report" / "final-report.md").read_text(encoding="utf-8")
             rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
         self.assertEqual(rendered.count('class="section"'), 1)
-        self.assertNotIn('class="report-nav"', rendered)
+        self.assertIn('class="report-nav"', rendered)
+        self.assertIn('href="#top-material-combination"', rendered)
+        self.assertNotIn('href="#landscape"', rendered)
         self.assertIn('</article></section>', rendered)
         self.assertNotIn('</article></div></section>', rendered)
         self.assertNotIn("榜单竞争格局", markdown)
@@ -362,7 +364,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn('class="dashboard"', rendered)
         self.assertNotIn('class="material-nav"', rendered)
         self.assertNotIn("候选素材", rendered)
-        self.assertNotIn('class="report-nav"', rendered)
+        self.assertIn('class="report-nav"', rendered)
 
     def test_render_report_excludes_legacy_second_level_sections(self):
         report = load_module()

@@ -2,6 +2,7 @@
 
 import html
 import json
+import math
 import re
 from pathlib import Path
 from string import Template
@@ -57,6 +58,11 @@ BRAND_SUMMARY_FIELDS = {
     "marketing": "marketingSummary",
 }
 TOP_MATERIAL_BRAND_ORDER = ("万益蓝/WONDERLAB", "五个女博士", "燕之屋")
+AUDIENCE_DIMENSION_LABELS = {
+    "age": "年龄",
+    "gender": "性别",
+    "crowd": "八大人群",
+}
 PEOPLE_TAG_OVERLAP_NOTICE = (
     "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。"
 )
@@ -229,7 +235,7 @@ def _markdown_value(value):
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-def _render_markdown(analysis):
+def _render_markdown(analysis, audience_dashboard=None):
     lines = ["# 云图行业内容榜单分析报告", ""]
     combination = analysis["topMaterialCombination"]
     overall = {
@@ -276,6 +282,31 @@ def _render_markdown(analysis):
         combination["brandComparisonConclusion"]["summary"],
         "",
     ])
+    if isinstance(audience_dashboard, dict):
+        sample = audience_dashboard.get("sample", {})
+        dimensions = audience_dashboard.get("dimensions", {})
+        record_count = sample.get("recordCount", 0)
+        lines.extend([
+            "## 02｜人群洞察",
+            "",
+            f"候选池 TOP1000 素材标签汇总（实际 {record_count} 条）",
+            "",
+        ])
+        for key, label in AUDIENCE_DIMENSION_LABELS.items():
+            dimension = dimensions.get(key, {}) if isinstance(dimensions, dict) else {}
+            notice = "图表按素材标签出现次数归一化展示，用于观察标签结构，不代表真实人群分布。"
+            lines.extend([f"### {label}", "", notice, ""])
+            buckets = dimension.get("buckets", [])
+            if not buckets:
+                lines.extend(["暂无可视化数据。", ""])
+            for bucket in buckets:
+                lines.append(
+                    f"- {bucket['label']}：{bucket['materialCount']} 条素材，覆盖率 {bucket['materialShare'] * 100:.1f}%，归一化占比 {bucket['chartShare'] * 100:.1f}%"
+                )
+            unlabeled_count = dimension.get("unlabeledRecordCount", 0)
+            if unlabeled_count:
+                lines.append(f"- 未识别到该维度标签：{unlabeled_count} 条素材（不计入饼图归一化分母）")
+            lines.append("")
     return "\n".join(lines)
 
 
@@ -416,6 +447,102 @@ def _render_html(analysis, material_frames, fact_pack):
             + "</p></article>"
         )
 
+    def audience_dimension_chart(key, dimension):
+        label = AUDIENCE_DIMENSION_LABELS[key]
+        record_count = dimension.get("recordCount", 0)
+        buckets = dimension.get("buckets", [])
+        unlabeled_count = dimension.get("unlabeledRecordCount", 0)
+        if not buckets:
+            unlabeled_note = (
+                f'<p class="data-note">未识别到该维度标签：{esc(unlabeled_count)} 条素材。</p>'
+                if unlabeled_count else ""
+            )
+            return (
+                f'<article class="chart-card audience-chart"><h3>{esc(label)}分布</h3>'
+                + '<p class="data-note">暂无可视化数据。</p>' + unlabeled_note + '</article>'
+            )
+        if dimension.get("labelMode") == "normalized_tag_share" and key == "crowd":
+            max_share = max(bucket["chartShare"] for bucket in buckets)
+            axis_max = max(10, math.ceil(max_share * 100 / 10) * 10)
+            axis_ticks = (axis_max, axis_max * 0.75, axis_max * 0.5, axis_max * 0.25, 0)
+            colors = ("#9b6a37", "#d79a4b", "#b77d54", "#c7a36a", "#a14f38", "#958268", "#ab8068", "#6d5d4d")
+            columns = []
+            for index, bucket in enumerate(buckets):
+                material_share = bucket["materialShare"] * 100
+                chart_share = bucket["chartShare"] * 100
+                tooltip = (
+                    '<div class="chart-tooltip" role="tooltip"><b>' + esc(bucket["label"]) + '</b>'
+                    + '<span>素材数 ' + esc(bucket["materialCount"]) + ' 条</span>'
+                    + '<span>覆盖率 ' + f"{material_share:.1f}%" + '</span>'
+                    + '<span>归一化占比 ' + f"{chart_share:.1f}%" + '</span></div>'
+                )
+                columns.append(
+                    '<div class="audience-column-item" role="img" tabindex="0" aria-label="'
+                    + esc(bucket["label"]) + '，素材数 ' + esc(bucket["materialCount"])
+                    + ' 条，覆盖率 ' + f"{material_share:.1f}%" + '，归一化占比 ' + f"{chart_share:.1f}%"
+                    + '"><div class="audience-column-bar" style="height:'
+                    + f"{max(2, chart_share / axis_max * 100):.2f}%" + ';background:'
+                    + colors[index % len(colors)] + '"></div><span class="audience-column-label">'
+                    + esc(bucket["label"]) + '</span>' + tooltip + '</div>'
+                )
+            return (
+                '<article class="chart-card audience-chart audience-chart-crowd"><h3>' + esc(label)
+                + '分布</h3><div class="audience-column-chart" data-audience-column role="group" aria-label="'
+                + esc(label) + '标签出现次数归一化柱状图，素材样本共 ' + esc(record_count) + ' 条">'
+                + '<div class="audience-column-y-axis">'
+                + ''.join('<span>' + f"{value:.0f}%" + '</span>' for value in axis_ticks)
+                + '</div><div class="audience-column-plot" style="grid-template-columns:repeat('
+                + esc(len(columns)) + ',minmax(0,1fr))">' + ''.join(columns) + '</div></div></article>'
+            )
+        if dimension.get("labelMode") == "normalized_tag_share":
+            colors = ("#9b6a37", "#d79a4b", "#6f7f5f", "#a14f38", "#6d5d4d", "#c7a36a", "#7d8f9a", "#b77d54", "#958268", "#ab8068", "#8d9a7b")
+            items = [
+                (bucket["label"], bucket["materialCount"], bucket["materialShare"], bucket["chartShare"])
+                for bucket in buckets
+            ]
+            cursor = 0.0
+            stops, slices, legend = [], [], []
+            for index, (item_label, count, material_share, chart_share) in enumerate(items):
+                color = colors[index % len(colors)]
+                next_cursor = cursor + chart_share * 100
+                stops.append(f"{color} {cursor:.4f}% {next_cursor:.4f}%")
+                slices.append({"label": item_label, "count": count, "materialShare": round(material_share * 100, 1), "share": round(chart_share * 100, 1), "start": cursor * 3.6, "end": next_cursor * 3.6})
+                legend.append(
+                    '<li class="legend-item" title="' + esc(item_label) + '：' + esc(count) + ' 条素材，覆盖率 ' + f"{material_share * 100:.1f}%" + '，归一化占比 ' + f"{chart_share * 100:.1f}%" + '">'
+                    + '<span class="legend-label"><i class="legend-swatch" style="background:' + color + '"></i>'
+                    + esc(item_label) + '</span><span class="legend-count">' + esc(count) + ' 条</span><span class="legend-share">' + f"{chart_share * 100:.1f}%" + '</span></li>'
+                )
+                cursor = next_cursor
+            return (
+                f'<article class="chart-card audience-chart audience-chart-{esc(key)}"><h3>{esc(label)}分布</h3><div class="audience-pie-layout">'
+                + f'<div class="pie-chart" data-audience-pie role="img" tabindex="0" aria-label="{esc(label)}标签出现次数归一化饼图，素材样本共 {esc(record_count)} 条" data-pie-slices="{esc(json.dumps(slices, ensure_ascii=False))}" style="background:conic-gradient({", ".join(stops)})">'
+                + '<div class="chart-tooltip" role="tooltip"></div></div>'
+                + '<ul class="pie-legend">' + "".join(legend) + '</ul></div></article>'
+            )
+        return f'<article class="chart-card audience-chart"><h3>{esc(label)}分布</h3><p class="data-note">暂无可视化数据。</p></article>'
+
+    def audience_dashboard_cards(value):
+        if not isinstance(value, dict):
+            return ""
+        sample = value.get("sample", {})
+        dimensions = value.get("dimensions", {})
+        if not isinstance(dimensions, dict):
+            return ""
+        charts = "".join(
+            audience_dimension_chart(key, dimension)
+            for key, dimension in dimensions.items()
+            if key in AUDIENCE_DIMENSION_LABELS and isinstance(dimension, dict)
+        )
+        if not charts:
+            charts = '<p class="data-note">暂无人群汇总数据。</p>'
+        return (
+            '<section class="section" id="audience-insights"><header class="section-header"><div>'
+            '<h2>02｜人群洞察</h2>'
+            f'<p>候选池 TOP1000 素材标签汇总（实际 {esc(sample.get("recordCount", 0))} 条）；图表按素材标签出现次数归一化展示，用于观察标签结构，不代表真实人群分布。</p></div>'
+            + source_label("Top1000 榜单数据")
+            + '<div></div></header><div class="audience-chart-grid">' + charts + '</div></section>'
+        )
+
     def pie_chart(items, chart_id):
         colors = ("#d79a4b", "#b56e38", "#6d8c72", "#9b6a92", "#59778b", "#bd8a62", "#958268")
         total = sum(value for _, value in items) or 1
@@ -514,6 +641,7 @@ def _render_html(analysis, material_frames, fact_pack):
     top_material_combination = top_material_combination_cards(
         analysis["topMaterialCombination"]
     )
+    audience_insights = audience_dashboard_cards(fact_pack.get("audienceDashboard"))
     performance = insight_cards(analysis.get("materialComparison", []))
     opportunities = insight_cards(analysis.get("xiaoxianDunOpportunityMap", []))
     competitor_patterns = analysis.get("competitorPatterns", [])
@@ -541,7 +669,10 @@ def _render_html(analysis, material_frames, fact_pack):
 """
     style = """
 :root{--bg:#170d09;--paper:#fff8ec;--ink:#2a170f;--muted:#705c50;--accent:#d79a4b;--accent-dark:#8e5528;--line:#dfcfbd;--focus:#e8b85f}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;font-size:16px;line-height:1.65}button{font:inherit}.skip-link{position:fixed;left:12px;top:-60px;background:var(--paper);color:var(--ink);padding:10px;z-index:5}.skip-link:focus{top:12px}.page{width:min(1120px,calc(100% - 32px));margin:auto;padding:32px 0 72px}.report-cover{color:#fff;border-bottom:1px solid rgba(249,215,155,.32);padding:8px 0 28px}.report-cover p{max-width:68ch;color:#ead9c9;margin:0}.report-cover h1{font-size:2.5rem;line-height:1.15;margin:10px 0 12px;text-wrap:balance}.report-shell{display:grid;grid-template-columns:168px minmax(0,1fr);gap:28px;align-items:start;margin-top:24px}.report-nav{position:sticky;top:18px;display:grid;gap:5px;padding:10px 0}.report-nav small{color:#ac8970;padding:4px 10px;font-size:.75rem;font-weight:700}.report-nav a{border-left:1px solid rgba(223,199,174,.35);color:#dfc7ae;padding:8px 10px;font-size:.875rem;text-decoration:none}.report-nav a:hover,.report-nav a:focus-visible,.report-nav a[aria-current="location"]{border-left-color:var(--accent);background:#2a170f;color:#fff}.section{scroll-margin-top:18px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:28px}.section-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:24px}.section-header h2{font-size:1.55rem;line-height:1.2;margin:0;text-wrap:balance}.section-header p{color:var(--muted);font-size:.875rem;margin:7px 0 0}.source-label{display:inline-block;color:var(--accent-dark);background:#f7e6cb;padding:4px 7px;border-radius:4px;font-size:.75rem;font-weight:700;white-space:nowrap}.top-material-overall h3,.top-material-brands h3,.brand-difference h3{font-size:1.08rem;margin:0 0 12px}.top-material-overall>p,.brand-panel>p,.brand-difference>p{margin:10px 0;max-width:76ch}.section-divider{height:0;border:0;border-top:1px solid var(--line);margin:32px 0}.brand-tabs{display:flex;gap:0;overflow-x:auto;border-bottom:1px solid var(--line);padding:0 2px}.brand-tab{position:relative;flex:0 0 auto;min-height:42px;border:0;border-radius:0;background:transparent;color:var(--muted);padding:8px 14px;cursor:pointer;white-space:nowrap}.brand-tab:hover{color:var(--accent-dark)}.brand-tab[aria-selected="true"]{color:#5e3820;font-weight:700}.brand-tab[aria-selected="true"]::after{position:absolute;right:12px;bottom:-1px;left:12px;height:2px;background:var(--accent-dark);content:""}.brand-tab:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}.brand-panels{padding:18px 0 0}.brand-panel[hidden]{display:none!important}.brand-panel{border-left:2px solid var(--accent);padding:0 0 0 16px}.brand-difference p{margin-bottom:0}@media(max-width:760px){.report-shell{grid-template-columns:1fr;gap:12px}.report-nav{position:static;display:flex;align-items:center;gap:8px;padding:0}.report-nav small{padding:0}.report-nav a{padding:5px 8px;border-left:0;border-bottom:1px solid rgba(223,199,174,.35)}}@media(max-width:560px){.page{width:min(100% - 20px,1120px);padding-top:18px}.report-cover h1{font-size:2rem}.section{padding:20px}.section-header{display:block}.source-label{margin-top:10px}.brand-tab{padding-inline:10px}.brand-panel{padding-left:12px}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;font-size:16px;line-height:1.65}button{font:inherit}.skip-link{position:fixed;left:12px;top:-60px;background:var(--paper);color:var(--ink);padding:10px;z-index:5}.skip-link:focus{top:12px}.page{width:min(1180px,calc(100% - 32px));margin:auto;padding:32px 0 72px}.report-cover{color:#fff;border-bottom:1px solid rgba(249,215,155,.32);padding:8px 0 28px}.report-cover p{max-width:68ch;color:#ead9c9;margin:0}.report-cover h1{font-size:2.5rem;line-height:1.15;margin:10px 0 12px;text-wrap:balance}.report-shell{display:grid;grid-template-columns:168px minmax(0,1fr);gap:28px;align-items:start;margin-top:24px}.report-nav{position:sticky;top:18px;display:grid;gap:5px;padding:10px 0}.report-nav small{color:#ac8970;padding:4px 10px;font-size:.75rem;font-weight:700}.report-nav a{border-left:1px solid rgba(223,199,174,.35);color:#dfc7ae;padding:8px 10px;font-size:.875rem;text-decoration:none}.report-nav a:hover,.report-nav a:focus-visible,.report-nav a[aria-current="location"]{border-left-color:var(--accent);background:#2a170f;color:#fff}.section{scroll-margin-top:18px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:28px}.section-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:24px}.section-header h2{font-size:1.55rem;line-height:1.2;margin:0;text-wrap:balance}.section-header p{color:var(--muted);font-size:.875rem;margin:7px 0 0}.source-label{display:inline-block;color:var(--accent-dark);background:#f7e6cb;padding:4px 7px;border-radius:4px;font-size:.75rem;font-weight:700;white-space:nowrap}.top-material-overall h3,.top-material-brands h3,.brand-difference h3{font-size:1.08rem;margin:0 0 12px}.top-material-overall>p,.brand-panel>p,.brand-difference>p{margin:10px 0;max-width:76ch}.section-divider{height:0;border:0;border-top:1px solid var(--line);margin:32px 0}.brand-tabs{display:flex;gap:0;overflow-x:auto;border-bottom:1px solid var(--line);padding:0 2px}.brand-tab{position:relative;flex:0 0 auto;min-height:42px;border:0;border-radius:0;background:transparent;color:var(--muted);padding:8px 14px;cursor:pointer;white-space:nowrap}.brand-tab:hover{color:var(--accent-dark)}.brand-tab[aria-selected="true"]{color:#5e3820;font-weight:700}.brand-tab[aria-selected="true"]::after{position:absolute;right:12px;bottom:-1px;left:12px;height:2px;background:var(--accent-dark);content:""}.brand-tab:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}.brand-panels{padding:18px 0 0}.brand-panel[hidden]{display:none!important}.brand-panel{border-left:2px solid var(--accent);padding:0 0 0 16px}.brand-difference p{margin-bottom:0}@media(max-width:760px){.report-shell{grid-template-columns:1fr;gap:12px}.report-nav{position:static;display:flex;align-items:center;gap:8px;padding:0}.report-nav small{padding:0}.report-nav a{padding:5px 8px;border-left:0;border-bottom:1px solid rgba(223,199,174,.35)}}@media(max-width:560px){.page{width:min(100% - 20px,1180px);padding-top:18px}.report-cover h1{font-size:2rem}.section{padding:20px}.section-header{display:block}.source-label{margin-top:10px}.brand-tab{padding-inline:10px}.brand-panel{padding-left:12px}}
+"""
+    style += """
+.audience-chart-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.chart-card{container-type:inline-size;border:1px solid var(--line);border-radius:8px;background:#fff;padding:16px}.chart-card h3{font-size:18px;margin:0 0 12px}.audience-chart{min-width:0}.audience-chart-age,.audience-chart-gender{display:flex;flex-direction:column}.audience-chart-crowd{grid-column:1/-1}.audience-pie-layout{display:grid;grid-template-columns:minmax(0,45fr) minmax(0,55fr);flex:1;min-height:0;gap:14px;align-items:center}.pie-chart{position:relative;width:min(260px,100%);aspect-ratio:1;border-radius:50%;display:block;justify-self:center;background:conic-gradient(var(--accent) 0deg,var(--accent) 360deg);box-shadow:0 0 0 1px rgba(82,45,24,.1);cursor:default}.audience-chart-gender .pie-chart{width:min(240px,100%)}.chart-tooltip{position:absolute;z-index:2;left:50%;bottom:calc(100% + 10px);min-width:150px;transform:translateX(-50%);opacity:0;pointer-events:none;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,.96);box-shadow:0 14px 34px rgba(43,23,12,.16);color:var(--ink);font-size:13px;line-height:1.5;transition:opacity .15s ease}.chart-tooltip b{display:block;margin-bottom:4px}.chart-tooltip span{display:block}.chart-tooltip.is-visible,.audience-column-item:hover .chart-tooltip,.audience-column-item:focus .chart-tooltip{opacity:1}.pie-legend{display:grid;gap:8px;margin:0;padding:0;list-style:none}.pie-legend .legend-item{position:relative;display:grid;grid-template-columns:minmax(80px,1fr) auto auto;gap:8px;align-items:center;color:var(--muted);font-size:14px;padding:0;border:0;font-variant-numeric:tabular-nums}.pie-legend .legend-label{display:flex;align-items:center;gap:8px;min-width:0;overflow:visible;white-space:normal;overflow-wrap:anywhere}.legend-swatch{display:block;flex:0 0 12px;width:12px;height:12px;border-radius:3px}.legend-count,.legend-share{white-space:nowrap;text-align:right}.audience-column-chart{position:relative;min-height:300px;display:grid;grid-template-columns:48px minmax(0,1fr);gap:12px;padding-top:8px}.audience-column-y-axis{display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;padding-bottom:42px;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}.audience-column-plot{position:relative;display:grid;align-items:end;gap:12px;min-width:0;padding:0 8px 42px;border-bottom:1px solid rgba(82,45,24,.22);background:repeating-linear-gradient(to top,transparent 0,transparent 72px,rgba(82,45,24,.11) 73px)}.audience-column-item{position:relative;min-width:0;height:230px;display:flex;align-items:end;justify-content:center;outline:0}.audience-column-item:focus-visible{outline:3px solid var(--focus);outline-offset:2px}.audience-column-bar{width:min(64px,72%);min-height:4px;border-radius:8px 8px 0 0;cursor:default}.audience-column-label{position:absolute;left:50%;bottom:-34px;width:76px;transform:translateX(-50%);color:var(--muted);font-size:13px;line-height:1.25;text-align:center;word-break:break-word}.audience-column-item .chart-tooltip{bottom:calc(100% + 10px)}@container (max-width:360px){.audience-pie-layout{grid-template-columns:1fr}.audience-chart .pie-chart,.audience-chart-gender .pie-chart{width:min(240px,100%)!important;height:auto!important;flex-basis:auto!important}.pie-legend{width:100%}}@media(max-width:760px){.audience-chart-grid{grid-template-columns:1fr}.audience-chart-crowd{grid-column:auto}}@media(max-width:560px){.audience-pie-layout{grid-template-columns:1fr}.audience-chart .pie-chart,.audience-chart-gender .pie-chart{width:min(240px,100%)!important;height:auto!important;flex-basis:auto!important}.audience-column-chart{grid-template-columns:38px minmax(0,1fr);gap:8px}.audience-column-y-axis{font-size:11px}.audience-column-plot{gap:4px;padding-inline:2px}.audience-column-label{width:44px;font-size:11px}.audience-column-bar{width:78%}}
 """
     filters = fact_pack.get("filters", {}) if isinstance(fact_pack, dict) else {}
     industry = str(filters.get("industry") or "食品饮料")
@@ -565,6 +696,7 @@ def _render_html(analysis, material_frames, fact_pack):
         source_detail=source_label("单素材秒级详情"),
         source_derived=source_label("榜单 + 秒级详情派生"),
         top_material_combination=top_material_combination,
+        audience_insights=audience_insights,
         landscape=landscape,
         baseline=baseline,
         performance=performance,
@@ -586,7 +718,8 @@ def render_report(*, analysis_json, output_dir, fact_pack=None):
     output.mkdir(parents=True, exist_ok=True)
     data = {"status": "complete", "analysis": analysis}
     write_json_atomically(data, output / "final-report-data.json")
-    markdown = _render_markdown(analysis)
+    audience_dashboard = fact_pack.get("audienceDashboard") if isinstance(fact_pack, dict) else None
+    markdown = _render_markdown(analysis, audience_dashboard)
     (output / "final-report.md").write_text(markdown, encoding="utf-8")
     rendered_html = _render_html(
         analysis, _material_frames(fact_pack or {}), fact_pack or {}

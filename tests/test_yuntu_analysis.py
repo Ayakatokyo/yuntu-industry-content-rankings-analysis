@@ -102,6 +102,11 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(data["schemaVersion"], 3)
         self.assertEqual(data["candidatePool"]["count"], 4)
         self.assertEqual(data["candidatePool"]["metrics"]["ctr"]["median"], 0.25)
+        self.assertEqual(data["audienceDashboard"]["sample"]["recordCount"], 4)
+        self.assertEqual(
+            {item["label"]: item["materialCount"] for item in data["audienceDashboard"]["dimensions"]["crowd"]["buckets"]},
+            {"新锐白领": 2, "都市银发": 2},
+        )
         self.assertEqual(data["materialFacts"][1]["metricComparison"]["ctr"]["tier"], "high")
         self.assertTrue(data["tagInsights"]["eligibleForAssociation"])
         self.assertEqual(data["trendSummary"]["byTrendName"]["点击指数"]["highPointCount"], 2)

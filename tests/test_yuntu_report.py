@@ -114,7 +114,7 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
         self.assertIn('class="insight-row"', rendered)
-        self.assertIn('class="material-reference"', rendered)
+        self.assertNotIn('class="material-reference" href="#material-101"', rendered)
         self.assertIn('<details class="evidence-details">', rendered)
         self.assertIn("查看数据依据", rendered)
 
@@ -185,11 +185,14 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn(".frame-button img{display:block;width:100%", rendered)
         self.assertIn("minmax(88px,1fr)", rendered)
 
-    def test_render_report_has_dashboard_controls_and_source_traceability(self):
+    def test_render_report_uses_top1000_charts_and_source_traceability(self):
         report = load_module()
         fact_pack = {
             "candidatePool": {"metrics": {"ctr": {"median": 0.1}}},
-            "tagInsights": {"materialTags": {"人群_白领": {"count": 3, "selectedMaterialCount": 1}}},
+            "tagInsights": {
+                "materialTags": {"成分_维C": {"count": 3, "selectedMaterialCount": 1}},
+                "peopleTags": {"女性": {"count": 4, "selectedMaterialCount": 1}},
+            },
             "trendSummary": {"byTrendName": {"点击指数": {"highPointCount": 2, "lossPointCount": 1}}},
         }
         with tempfile.TemporaryDirectory() as directory:
@@ -198,9 +201,19 @@ class YuntuReportTests(unittest.TestCase):
             analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
-        self.assertIn('id="metric-sort"', rendered)
-        self.assertIn('id="material-search"', rendered)
-        self.assertIn('id="tag-category"', rendered)
+        self.assertNotIn('id="metric-sort"', rendered)
+        self.assertNotIn('id="tag-category"', rendered)
+        self.assertNotIn('id="performance-table"', rendered)
+        self.assertIn('id="material-tag-chart"', rendered)
+        self.assertIn('id="people-tag-chart"', rendered)
+        self.assertEqual(rendered.count('class="pie-layout"'), 2)
+        self.assertIn('class="pie-legend"', rendered)
+        self.assertGreaterEqual(rendered.count('border-radius:50%'), 2)
+        self.assertIn('grid-template-columns:300px minmax(0,400px)', rendered)
+        self.assertIn('data-pie-slices=', rendered)
+        self.assertIn('class="pie-tooltip"', rendered)
+        self.assertIn('class="performance-insights"', rendered)
+        self.assertIn("CTR 位于候选池高位。", rendered)
         self.assertIn('id="frame-material"', rendered)
         self.assertIn("来源：Top1000 榜单数据", rendered)
         self.assertIn("来源：单素材秒级详情", rendered)

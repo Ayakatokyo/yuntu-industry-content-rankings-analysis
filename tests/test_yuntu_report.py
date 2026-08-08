@@ -23,6 +23,24 @@ def load_module():
 class YuntuReportTests(unittest.TestCase):
     def analysis_json(self):
         return {
+            "topMaterialCombination": {
+                "overallConclusions": [
+                    {
+                        "summary": "TOP30 总曝光占比高。",
+                        "material_ids": ["101"],
+                        "evidence": [{"metric": "show_cnt", "value": 1000}],
+                    }
+                ],
+                "brandConclusions": [
+                    {
+                        "brand": "五个女博士",
+                        "classificationSource": "title_rule",
+                        "summary": "标题匹配样本以女性标签覆盖为主。",
+                        "material_ids": ["101"],
+                        "evidence": [{"metric": "ctr", "value": 0.2}],
+                    }
+                ],
+            },
             "rankingOverview": [{"summary": "竞品出现价格利益点。", "material_ids": ["101"], "evidence": [{"metric": "ctr", "value": 0.7}]}],
             "materialComparison": [{"material_id": "101", "summary": "CTR 位于候选池高位。", "evidence": [{"metric": "ctr", "value": 0.7}]}],
             "materialDiagnoses": [{"material_id": "101", "summary": "第 1-2 秒出现点击高点。", "evidence": [{"trend_name": "点击指数", "start_sec": 1, "end_sec": 2}]}],
@@ -62,6 +80,29 @@ class YuntuReportTests(unittest.TestCase):
             path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
             with self.assertRaisesRegex(report.YuntuReportError, "evidence"):
                 report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
+
+    def test_render_report_rejects_top_material_conclusion_without_evidence(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        del analysis["topMaterialCombination"]["overallConclusions"][0]["evidence"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "topMaterialCombination.*evidence"):
+                report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
+
+    def test_render_report_renders_top_material_combination_first(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "report")
+            markdown = (root / "report" / "final-report.md").read_text(encoding="utf-8")
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertLess(markdown.index("01｜TOP 素材组合结论"), markdown.index("榜单竞争格局"))
+        self.assertLess(rendered.index("01｜TOP 素材组合结论"), rendered.index("榜单竞争格局"))
+        self.assertIn("标题匹配归属", rendered)
 
     def test_render_report_rejects_incomplete_experiment(self):
         report = load_module()

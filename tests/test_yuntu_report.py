@@ -107,8 +107,6 @@ class YuntuReportTests(unittest.TestCase):
 
         self.assertEqual(status, 0)
         self.assertEqual(data["status"], "complete")
-        for title in ("榜单竞争格局", "内容表现地图", "内容与人群机会", "竞品内容模式", "秒级创意结构", "机会与实验"):
-            self.assertIn(title, markdown)
         for rendered in (markdown, html):
             self.assertIn("品牌筛选条件下 TOP30 整体分析", rendered)
             self.assertIn("从数据维度看", rendered)
@@ -129,9 +127,10 @@ class YuntuReportTests(unittest.TestCase):
             self.assertEqual(rendered.count("从数据维度看"), 4)
             self.assertEqual(rendered.count("从人群维度看"), 4)
             self.assertEqual(rendered.count("从营销卖点维度看"), 4)
+            for title in ("榜单竞争格局", "内容表现地图", "内容与人群机会", "竞品内容模式", "秒级创意结构", "机会与实验"):
+                self.assertNotIn(title, rendered)
         self.assertNotIn("一、品牌筛选条件下", markdown)
         self.assertNotIn("二、各品牌 TOP30", markdown)
-        self.assertIn("标题匹配归属", html)
         self.assertIn("---\n\n### 各品牌 TOP30 对比分析", markdown)
         self.assertIn("---\n\n### 五个女博士", markdown)
         self.assertIn("---\n\n### 品牌间差异总结", markdown)
@@ -146,13 +145,14 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('id="brand-panel-0" aria-labelledby="brand-tab-0" hidden ', html)
         self.assertIn('id="brand-panel-1" aria-labelledby="brand-tab-1" ', html)
         self.assertIn('id="brand-panel-2" aria-labelledby="brand-tab-2" hidden ', html)
-        self.assertIn('当前品牌：五个女博士', html)
+        self.assertIn('aria-label="五个女博士，标题匹配归属"', html)
+        self.assertNotIn('当前品牌：', html)
         self.assertIn('.brand-panel[hidden]{display:none!important}', html)
         self.assertIn('<noscript><style>.brand-panel[hidden]{display:block!important}</style></noscript>', html)
         self.assertIn('class="section-divider"', html)
         self.assertIn("ArrowRight", html)
-        self.assertIn("假设：通勤开场提升 3 秒播放率", markdown)
-        self.assertIn("成功指标：play_3s_rate", markdown)
+        self.assertNotIn("假设：通勤开场提升 3 秒播放率", markdown)
+        self.assertNotIn("成功指标：play_3s_rate", markdown)
         self.assertNotIn("附：秒级趋势洞察", markdown)
         self.assertIn("<html", html)
 
@@ -220,7 +220,7 @@ class YuntuReportTests(unittest.TestCase):
                             analysis_json=path, output_dir=Path(directory) / "report"
                         )
 
-    def test_render_report_renders_top_material_combination_first(self):
+    def test_render_report_renders_only_top_material_combination(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -229,9 +229,11 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=analysis_path, output_dir=root / "report")
             markdown = (root / "report" / "final-report.md").read_text(encoding="utf-8")
             rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
-        self.assertLess(markdown.index("01｜TOP 素材组合结论"), markdown.index("榜单竞争格局"))
-        self.assertLess(rendered.index("01｜TOP 素材组合结论"), rendered.index("榜单竞争格局"))
-        self.assertIn("标题匹配归属", rendered)
+        self.assertEqual(rendered.count('class="section"'), 1)
+        self.assertNotIn('class="report-nav"', rendered)
+        self.assertIn('</article></section>', rendered)
+        self.assertNotIn('</article></div></section>', rendered)
+        self.assertNotIn("榜单竞争格局", markdown)
 
     def test_render_report_rejects_incomplete_experiment(self):
         report = load_module()
@@ -253,7 +255,7 @@ class YuntuReportTests(unittest.TestCase):
             with self.assertRaisesRegex(report.YuntuReportError, "brandComparisonConclusion.*brand"):
                 report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
 
-    def test_render_report_renders_styled_cover_and_highlight_gallery(self):
+    def test_render_report_renders_styled_cover_without_legacy_gallery(self):
         report = load_module()
         fact_pack = {"materialFacts": [{"material_id": "101", "highlightFrames": [{"second": 0, "available": True, "relative_path": "../highlights/101/01-000s.jpg", "is_cover": True, "reasons": [{"type": "cover"}]}]}]}
         with tempfile.TemporaryDirectory() as directory:
@@ -263,8 +265,8 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
         self.assertIn('class="report-cover"', rendered)
-        self.assertIn('class="highlight-gallery"', rendered)
-        self.assertIn('src="../highlights/101/01-000s.jpg"', rendered)
+        self.assertNotIn('class="highlight-gallery"', rendered)
+        self.assertNotIn('src="../highlights/101/01-000s.jpg"', rendered)
 
     def test_render_report_uses_fact_pack_filters_in_cover_subtitle(self):
         report = load_module()
@@ -305,7 +307,7 @@ class YuntuReportTests(unittest.TestCase):
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
             markdown = (root / "final-report" / "final-report.md").read_text(encoding="utf-8")
             data = json.loads((root / "final-report" / "final-report-data.json").read_text(encoding="utf-8"))
-        self.assertIn('class="insight-row"', rendered)
+        self.assertNotIn('class="insight-row"', rendered)
         self.assertNotIn('class="material-reference" href="#material-101"', rendered)
         self.assertNotIn('<details class="evidence-details">', rendered)
         self.assertNotIn("查看数据依据", rendered)
@@ -321,7 +323,7 @@ class YuntuReportTests(unittest.TestCase):
             [{"hidden": "evidence-sentinel-data"}],
         )
 
-    def test_render_report_uses_accessible_highlight_gallery(self):
+    def test_render_report_uses_accessible_brand_tabs_without_legacy_dialog(self):
         report = load_module()
         fact_pack = {"materialFacts": [{"material_id": "101", "highlightFrames": [{
             "second": 0, "available": True, "relative_path": "../highlights/101/01-000s.jpg",
@@ -334,8 +336,9 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
         self.assertIn("--paper:#fff8ec", rendered)
-        self.assertIn('aria-label="查看 101 封面 高光帧"', rendered)
-        self.assertIn('aria-label="关闭高光帧预览"', rendered)
+        self.assertIn('aria-label="各品牌 TOP30 分析"', rendered)
+        self.assertNotIn('aria-label="查看 101 封面 高光帧"', rendered)
+        self.assertNotIn('aria-label="关闭高光帧预览"', rendered)
 
     def test_render_report_uses_the_shared_background_tokens(self):
         report = load_module()
@@ -359,9 +362,9 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn('class="dashboard"', rendered)
         self.assertNotIn('class="material-nav"', rendered)
         self.assertNotIn("候选素材", rendered)
-        self.assertIn('class="report-nav"', rendered)
+        self.assertNotIn('class="report-nav"', rendered)
 
-    def test_render_report_places_second_level_structure_after_competitor_section(self):
+    def test_render_report_excludes_legacy_second_level_sections(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -369,10 +372,10 @@ class YuntuReportTests(unittest.TestCase):
             analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
-        self.assertLess(rendered.index('id="competitor"'), rendered.index('id="second-by-second"'))
-        self.assertEqual(rendered.count('id="second-by-second"'), 1)
+        self.assertNotIn('id="competitor"', rendered)
+        self.assertNotIn('id="second-by-second"', rendered)
 
-    def test_render_report_constrains_all_highlight_images(self):
+    def test_render_report_excludes_legacy_highlight_images(self):
         report = load_module()
         fact_pack = {"materialFacts": [{"material_id": "101", "highlightFrames": [
             {"second": 0, "available": True, "relative_path": "../highlights/101/01-000s.jpg", "is_cover": True},
@@ -384,11 +387,11 @@ class YuntuReportTests(unittest.TestCase):
             analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
-        self.assertIn(".highlight-gallery{display:grid", rendered)
-        self.assertIn(".frame-button img{display:block;width:100%", rendered)
-        self.assertIn("minmax(88px,1fr)", rendered)
+        self.assertNotIn(".highlight-gallery{display:grid", rendered)
+        self.assertNotIn(".frame-button img{display:block;width:100%", rendered)
+        self.assertNotIn("minmax(88px,1fr)", rendered)
 
-    def test_render_report_uses_top1000_charts_and_source_traceability(self):
+    def test_render_report_excludes_legacy_charts_and_source_labels(self):
         report = load_module()
         fact_pack = {
             "candidatePool": {"metrics": {"ctr": {"median": 0.1}}},
@@ -407,22 +410,20 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn('id="metric-sort"', rendered)
         self.assertNotIn('id="tag-category"', rendered)
         self.assertNotIn('id="performance-table"', rendered)
-        self.assertIn('id="material-tag-chart"', rendered)
-        self.assertIn('id="people-tag-chart"', rendered)
-        self.assertEqual(rendered.count('class="pie-layout"'), 2)
-        self.assertIn('class="pie-legend"', rendered)
-        self.assertGreaterEqual(rendered.count('border-radius:50%'), 2)
-        self.assertIn('grid-template-columns:300px minmax(0,400px)', rendered)
-        self.assertIn('data-pie-slices=', rendered)
-        self.assertIn('class="pie-tooltip"', rendered)
-        self.assertIn('class="performance-insights"', rendered)
-        self.assertIn("CTR 位于候选池高位。", rendered)
-        self.assertIn('id="frame-material"', rendered)
+        self.assertNotIn('id="material-tag-chart"', rendered)
+        self.assertNotIn('id="people-tag-chart"', rendered)
+        self.assertNotIn('class="pie-layout"', rendered)
+        self.assertNotIn('class="pie-legend"', rendered)
+        self.assertNotIn('data-pie-slices=', rendered)
+        self.assertNotIn('class="pie-tooltip"', rendered)
+        self.assertNotIn('class="performance-insights"', rendered)
+        self.assertNotIn("CTR 位于候选池高位。", rendered)
+        self.assertNotIn('id="frame-material"', rendered)
         self.assertIn("来源：Top1000 榜单数据", rendered)
-        self.assertIn("来源：单素材秒级详情", rendered)
-        self.assertIn("来源：榜单 + 秒级详情派生", rendered)
-        self.assertIn("高光帧汇总", rendered)
-        self.assertIn('<dialog id="lightbox">', rendered)
+        self.assertNotIn("来源：单素材秒级详情", rendered)
+        self.assertNotIn("来源：榜单 + 秒级详情派生", rendered)
+        self.assertNotIn("高光帧汇总", rendered)
+        self.assertNotIn('<dialog id="lightbox">', rendered)
 
 
 if __name__ == "__main__":

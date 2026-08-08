@@ -189,8 +189,14 @@ class AnalysisSkillContractTests(unittest.TestCase):
             "未知品牌",
             "CPM",
             "不可相加为 100%",
+            "brandComparisonConclusion",
+            "dataSummary",
+            "peopleSummary",
+            "marketingSummary",
+            "不进入用户可读报告正文",
         ):
             self.assertIn(phrase, skill)
+        self.assertNotIn("数据证据以可展开区域保留", skill)
 
     def test_openai_metadata_has_required_interface_fields(self):
         metadata = OPENAI_YAML_PATH.read_text(encoding="utf-8")

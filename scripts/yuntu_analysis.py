@@ -154,7 +154,7 @@ def _prompt_text():
 
 输出必须是 JSON 对象，包含：topMaterialCombination、rankingOverview、materialComparison、materialDiagnoses、competitorPatterns、xiaoxianDunOpportunityMap、experimentMatrix。
 
-`topMaterialCombination` 必须是对象，包含 `overallConclusions` 与 `brandConclusions` 两个数组。每个整体结论必须含 summary、evidence、material_ids。每个品牌结论必须含 brand、classificationSource、summary、evidence、material_ids，且 classificationSource 必须为 `title_rule`。标题匹配归属是业务分类，不得称作 RPA 原生品牌字段；人群标签曝光覆盖可重叠，不得解释为可加总至 100% 的真实受众占比。CPM 缺失或标签比较样本不足时写“数据不足以判断”。标签与指标只能描述共现关系，不得声称因果。
+`topMaterialCombination` 必须是对象，包含 `overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。`overallConclusions` 必须恰好有三项，每项含 dimension、summary、evidence、material_ids，dimension 分别且只能为 `data`、`people`、`marketing`：data 总结曝光集中度与内容表现，people 总结年龄、性别和八大人群的曝光加权覆盖，marketing 总结成分/功效/痛点/场景/内容形式/促销利益。人群结论必须明确写出“人群标签是重叠标签，不是真实人群分布，不能相加为 100%。”每个品牌结论必须含 brand、classificationSource、dataSummary、peopleSummary、marketingSummary、evidence、material_ids，且 classificationSource 必须为 `title_rule`；三个 Summary 分别只写该品牌的数据、人群、营销卖点结论。`brandComparisonConclusion` 必须含 summary、evidence、material_ids，summary 直接总结品牌间的曝光集中度、内容表现、人群覆盖与卖点结构差异。标题匹配归属是业务分类，不得称作 RPA 原生品牌字段。CPM 缺失或标签比较样本不足时写“数据不足以判断”。标签与指标只能描述共现关系，不得声称因果。
 
 前五个章节的每一项必须含 summary、evidence，以及 material_id 或 material_ids。experimentMatrix 的每一项必须含 priority、hypothesis、creative_variable、target_audience、success_metric、control、review_action。
 

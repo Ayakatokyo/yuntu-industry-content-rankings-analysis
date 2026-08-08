@@ -223,6 +223,15 @@ class YuntuAnalysisTests(unittest.TestCase):
         )
         self.assertIn("topMaterialCombination", prompt)
         self.assertIn("标题匹配归属", prompt)
+        self.assertIn("brandComparisonConclusion", prompt)
+        self.assertIn("dimension", prompt)
+        self.assertIn("dataSummary", prompt)
+        self.assertIn("peopleSummary", prompt)
+        self.assertIn("marketingSummary", prompt)
+        self.assertIn(
+            "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。",
+            prompt,
+        )
 
 
 if __name__ == "__main__":

@@ -27,6 +27,39 @@
     </div>
   </main>
   <dialog id="lightbox"><div class="lightbox"><button type="button" id="close-lightbox" aria-label="关闭高光帧预览">关闭</button><img id="lightbox-image" alt="高光帧大图"><p id="lightbox-caption"></p></div></dialog>
+  <noscript><style>.brand-panel[hidden]{display:block!important}</style></noscript>
+  <script>
+    (function () {
+      var tabs = document.querySelectorAll('[data-brand-tab]');
+      if (!tabs.length) return;
+
+      function activate(tab, focus) {
+        for (var index = 0; index < tabs.length; index += 1) {
+          var candidate = tabs[index];
+          var selected = candidate === tab;
+          var panel = document.getElementById(candidate.getAttribute('data-brand-target'));
+          candidate.setAttribute('aria-selected', selected ? 'true' : 'false');
+          candidate.tabIndex = selected ? 0 : -1;
+          if (panel) panel.hidden = !selected;
+        }
+        if (focus) tab.focus();
+      }
+
+      for (var index = 0; index < tabs.length; index += 1) {
+        (function (tab, tabIndex) {
+          tab.addEventListener('click', function () { activate(tab, false); });
+          tab.addEventListener('keydown', function (event) {
+            var direction = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+            if (event.key === 'Home' || event.key === 'End' || direction[event.key]) {
+              event.preventDefault();
+              var next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (tabIndex + direction[event.key] + tabs.length) % tabs.length;
+              activate(tabs[next], true);
+            }
+          });
+        }(tabs[index], index));
+      }
+    }());
+  </script>
   <script>
     if (document.documentElement.innerHTML.includes('$' + 'subtitle')) {
       document.documentElement.classList.add('template-preview');

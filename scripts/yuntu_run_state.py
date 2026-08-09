@@ -12,18 +12,96 @@ class YuntuRunStateError(RuntimeError):
     """Raised when run state or a registered artifact is invalid."""
 
 
+RUN_SUMMARY_NAME = "run-summary.json"
+
+
+def _snapshot(value):
+    return json.loads(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+
+
 def parameter_fingerprint(filters):
     """Return the stable SHA-256 identity for a filter mapping."""
     encoded = json.dumps(filters, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def collection_contract(
+    *, shop_id, list_params, detail_date_params, target_top_n, candidate_top_n
+):
+    """Return the complete immutable identity of a resumable collection run."""
+    if not isinstance(shop_id, str) or not shop_id.strip():
+        raise YuntuRunStateError("shop_id must be a nonempty string")
+    if not isinstance(list_params, dict) or not isinstance(detail_date_params, dict):
+        raise YuntuRunStateError("collection parameters must be objects")
+    if (
+        isinstance(target_top_n, bool)
+        or not isinstance(target_top_n, int)
+        or target_top_n <= 0
+        or isinstance(candidate_top_n, bool)
+        or not isinstance(candidate_top_n, int)
+        or candidate_top_n <= 0
+    ):
+        raise YuntuRunStateError("collection top-N values must be positive integers")
+    return _snapshot(
+        {
+            "shopId": shop_id.strip(),
+            "listParams": list_params,
+            "detailDateRange": detail_date_params,
+            "targetTopN": target_top_n,
+            "candidateTopN": candidate_top_n,
+        }
+    )
+
+
+def new_collection_summary(contract):
+    """Create a collection lifecycle summary with non-overlapping stage counts."""
+    contract_snapshot = _snapshot(contract)
+    return {
+        "schemaVersion": 2,
+        "runId": uuid.uuid4().hex,
+        "parameterFingerprint": parameter_fingerprint(contract_snapshot),
+        "collectionContract": contract_snapshot,
+        "status": "collecting",
+        "stages": {
+            "list": {
+                "requestStatus": "pending",
+                "normalized": False,
+                "contextVerified": False,
+            },
+            "details": {"requestStatus": "pending"},
+        },
+        "stageCounts": {
+            "candidateCount": 0,
+            "detailSubmittedCount": 0,
+            "detailRecordsPersistedCount": 0,
+            "selectedCount": 0,
+            "rejectedCount": 0,
+            "cancelledCount": 0,
+        },
+        "artifacts": {},
+    }
+
+
+def collection_contract_matches(summary, contract):
+    """Require an exact stored contract and matching stable fingerprint."""
+    if not isinstance(summary, dict):
+        return False
+    stored = summary.get("collectionContract")
+    if not isinstance(stored, dict):
+        return False
+    expected = _snapshot(contract)
+    return (
+        stored == expected
+        and summary.get("parameterFingerprint") == parameter_fingerprint(expected)
+    )
+
+
 def new_run_summary(root, filters):
     """Create the initial state for a single collection run."""
     del root
-    filters_snapshot = json.loads(
-        json.dumps(filters, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    )
+    filters_snapshot = _snapshot(filters)
     return {
         "schemaVersion": 1,
         "runId": uuid.uuid4().hex,

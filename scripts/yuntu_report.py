@@ -10,11 +10,31 @@ from string import Template
 from rpa_io import write_json_atomically
 
 
+SKILL_ROOT = Path(__file__).resolve().parents[1]
 HTML_TEMPLATE_PATH = Path(__file__).with_name("templates") / "final-report-template.html"
+REPORT_STYLE_PATH = SKILL_ROOT / "assets" / "report" / "unified-report.css"
+REPORT_SCRIPT_PATH = SKILL_ROOT / "assets" / "report" / "unified-report.js"
 
 
 class YuntuReportError(RuntimeError):
     """Raised when report inputs are invalid."""
+
+
+def _read_report_source(path, label):
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise YuntuReportError(f"unable to read {label}: {path}") from exc
+
+
+def _load_html_template():
+    source = _read_report_source(HTML_TEMPLATE_PATH, "report template")
+    for placeholder in ("$style", "$unified_style", "$unified_script"):
+        if source.count(placeholder) != 1:
+            raise YuntuReportError(
+                f"report template must contain exactly one {placeholder}"
+            )
+    return Template(source)
 
 
 REQUIRED_FIELDS = (
@@ -431,18 +451,16 @@ def _render_html(analysis, material_frames, fact_pack):
             for index, item in enumerate(ordered_brands)
         )
         return (
-            '<div class="top-material-overall"><h3>品牌筛选条件下 TOP30 整体分析</h3>'
+            '<div class="top-material-overall yuntu-content-card"><h3>品牌筛选条件下 TOP30 整体分析</h3>'
             + overall
             + "</div>"
-            + '<hr class="section-divider">'
-            + '<div class="top-material-brands"><h3>各品牌 TOP30 对比分析</h3>'
+            + '<div class="top-material-brands yuntu-content-card"><h3>各品牌 TOP30 对比分析</h3>'
             + '<div class="brand-tabs" role="tablist" aria-label="各品牌 TOP30 分析">'
             + tabs
             + "</div><div class=\"brand-panels\">"
             + panels
             + "</div></div>"
-            + '<hr class="section-divider">'
-            + '<article class="brand-difference"><h3>品牌间差异总结</h3><p>'
+            + '<article class="brand-difference yuntu-content-card"><h3>品牌间差异总结</h3><p>'
             + esc(_generic_text(value["brandComparisonConclusion"]["summary"]))
             + "</p></article>"
         )
@@ -536,11 +554,9 @@ def _render_html(analysis, material_frames, fact_pack):
         if not charts:
             charts = '<p class="data-note">暂无人群汇总数据。</p>'
         return (
-            '<section class="section" id="audience-insights"><header class="section-header"><div>'
-            '<h2>02｜人群洞察</h2>'
-            f'<p>候选池 TOP1000 素材标签汇总（实际 {esc(sample.get("recordCount", 0))} 条）；图表按素材标签出现次数归一化展示，用于观察标签结构，不代表真实人群分布。</p></div>'
-            + source_label("Top1000 榜单数据")
-            + '<div></div></header><div class="audience-chart-grid">' + charts + '</div></section>'
+            '<section class="section" id="audience-insights"><header class="section-header">'
+            '<h2>02｜人群洞察</h2></header><div class="audience-chart-grid">'
+            + charts + '</div></section>'
         )
 
     def pie_chart(items, chart_id):
@@ -681,15 +697,19 @@ def _render_html(analysis, material_frames, fact_pack):
     date_text = ""
     if filters.get("custom_start_date") and filters.get("custom_end_date"):
         date_text = f"｜{filters['custom_start_date']} 至 {filters['custom_end_date']}"
-    subtitle = f"{industry}行业｜{brand_text}{date_text}｜TOP30 素材组合结论"
+    subtitle = f"{industry}行业｜{brand_text}{date_text}"
 
-    template = Template(HTML_TEMPLATE_PATH.read_text(encoding="utf-8"))
+    template = _load_html_template()
+    unified_style = _read_report_source(REPORT_STYLE_PATH, "report style")
+    unified_script = _read_report_source(REPORT_SCRIPT_PATH, "report script")
     available_frames = sum(
         len([frame for frame in material_frames.get(str(item.get("material_id")), []) if frame.get("available")])
         for item in selected
     )
     return template.safe_substitute(
         style=style,
+        unified_style=unified_style,
+        unified_script=unified_script,
         subtitle=esc(subtitle),
         frame_count=available_frames,
         source_list=source_label("Top1000 榜单数据"),
@@ -714,15 +734,15 @@ def _render_html(analysis, material_frames, fact_pack):
 
 def render_report(*, analysis_json, output_dir, fact_pack=None):
     analysis = _load_analysis(analysis_json)
-    output = Path(output_dir)
-    output.mkdir(parents=True, exist_ok=True)
     data = {"status": "complete", "analysis": analysis}
-    write_json_atomically(data, output / "final-report-data.json")
     audience_dashboard = fact_pack.get("audienceDashboard") if isinstance(fact_pack, dict) else None
     markdown = _render_markdown(analysis, audience_dashboard)
-    (output / "final-report.md").write_text(markdown, encoding="utf-8")
     rendered_html = _render_html(
         analysis, _material_frames(fact_pack or {}), fact_pack or {}
     )
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    write_json_atomically(data, output / "final-report-data.json")
+    (output / "final-report.md").write_text(markdown, encoding="utf-8")
     (output / "final-report.html").write_text(rendered_html, encoding="utf-8")
     return 0

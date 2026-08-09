@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,15 @@ def load_module():
 
 
 class YuntuReportTests(unittest.TestCase):
+    def test_skill_documents_unified_report_delivery_contract(self):
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("assets/report/", skill)
+        self.assertIn("内联", skill)
+        self.assertIn("不得手工修改", skill)
+        self.assertIn("1440x1000", skill)
+        self.assertNotIn("390x844", skill)
+
     def analysis_json(self):
         return {
             "topMaterialCombination": {
@@ -149,13 +159,74 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn('当前品牌：', html)
         self.assertIn('.brand-panel[hidden]{display:none!important}', html)
         self.assertIn('<noscript><style>.brand-panel[hidden]{display:block!important}</style></noscript>', html)
-        self.assertIn('class="section-divider"', html)
+        self.assertNotIn('class="section-divider"', html)
         self.assertIn("ArrowRight", html)
         self.assertNotIn("假设：通勤开场提升 3 秒播放率", markdown)
         self.assertNotIn("成功指标：play_3s_rate", markdown)
         self.assertNotIn("附：秒级趋势洞察", markdown)
         self.assertIn("<html", html)
 
+    def test_render_report_inlines_unified_assets_and_emits_unified_structure(self):
+        report = load_module()
+        fact_pack = {
+            "filters": {
+                "industry": "食品饮料",
+                "brands": ["万益蓝/WONDERLAB", "五个女博士", "燕之屋"],
+                "custom_start_date": "2026-07-26",
+                "custom_end_date": "2026-08-01",
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8"
+            )
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack=fact_pack,
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertIn(
+            '<body class="unified-report unified-yuntu" data-unified-report-version="2026-08-09">',
+            rendered,
+        )
+        self.assertIn("云图 TOP 素材池商业诊断报告", rendered)
+        self.assertNotIn("云图行业内容策略", rendered)
+        self.assertNotIn("TOP30 素材组合结论", rendered)
+        self.assertNotIn("来源：Top1000 榜单数据", rendered)
+        self.assertNotIn("基于筛选品牌集合与标题匹配品牌", rendered)
+        self.assertEqual(rendered.count(' yuntu-content-card"'), 3)
+        self.assertIn(".unified-report .report-shell", rendered)
+        self.assertIn("data-unified-report-ready", rendered)
+        self.assertNotIn('rel="stylesheet"', rendered)
+        self.assertNotIn('script src=', rendered)
+
+    def test_render_report_rejects_missing_unified_asset(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8"
+            )
+            with patch.object(
+                report,
+                "REPORT_STYLE_PATH",
+                ROOT / "assets" / "report" / "missing.css",
+            ):
+                with self.assertRaisesRegex(report.YuntuReportError, "report style"):
+                    report.render_report(
+                        analysis_json=analysis_path,
+                        output_dir=root / "final-report",
+                    )
+            self.assertFalse((root / "final-report" / "final-report-data.json").exists())
+            self.assertFalse((root / "final-report" / "final-report.md").exists())
+            self.assertFalse((root / "final-report" / "final-report.html").exists())
     def test_render_report_writes_audience_dashboard_from_fact_pack(self):
         report = load_module()
         audience_dashboard = {
@@ -212,13 +283,14 @@ class YuntuReportTests(unittest.TestCase):
 
         for rendered in (markdown, html):
             self.assertIn("02｜人群洞察", rendered)
-            self.assertIn("候选池 TOP1000", rendered)
-            self.assertIn("实际 3 条", rendered)
             self.assertIn("年龄", rendered)
             self.assertIn("性别", rendered)
             self.assertIn("八大人群", rendered)
-            self.assertIn("图表按素材标签出现次数归一化展示", rendered)
-            self.assertIn("用于观察标签结构，不代表真实人群分布", rendered)
+        self.assertIn("候选池 TOP1000", markdown)
+        self.assertIn("实际 3 条", markdown)
+        self.assertNotIn("候选池 TOP1000", html)
+        self.assertNotIn("图表按素材标签出现次数归一化展示", html)
+        self.assertNotIn("用于观察标签结构，不代表真实人群分布", html)
         self.assertIn('href="#audience-insights"', html)
         self.assertIn("conic-gradient(", html)
         self.assertEqual(html.count(' data-audience-pie '), 2)
@@ -241,6 +313,11 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('.audience-chart-gender .pie-chart{width:min(240px,100%)}', html)
         self.assertIn('.pie-legend .legend-item{position:relative;display:grid;grid-template-columns:minmax(80px,1fr) auto auto;', html)
         self.assertIn('.audience-column-chart{position:relative;min-height:300px;', html)
+        self.assertIn('.unified-report :is(.pie-layout, .audience-pie-layout)', html)
+        self.assertIn('flex-direction: column;', html)
+        self.assertIn('width: min(320px, 100%) !important;', html)
+        self.assertIn('.unified-report .pie-legend {', html)
+        self.assertIn('overflow-x: auto;', html)
         self.assertNotIn('class="pie-tooltip"', html)
         self.assertNotIn('class="audience-bar-chart"', html)
 
@@ -539,7 +616,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn('class="performance-insights"', rendered)
         self.assertNotIn("CTR 位于候选池高位。", rendered)
         self.assertNotIn('id="frame-material"', rendered)
-        self.assertIn("来源：Top1000 榜单数据", rendered)
+        self.assertNotIn("来源：Top1000 榜单数据", rendered)
         self.assertNotIn("来源：单素材秒级详情", rendered)
         self.assertNotIn("来源：榜单 + 秒级详情派生", rendered)
         self.assertNotIn("高光帧汇总", rendered)

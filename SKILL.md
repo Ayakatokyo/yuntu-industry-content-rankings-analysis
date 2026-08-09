@@ -123,7 +123,20 @@ python <skill-root>/scripts/rpa_connector.py prepare-analysis \
 
 每条素材固定截取 `0s` 封面帧；每个选中指标另取最多 3 个局部波峰，跨指标同秒只保留一张并合并指标说明。帧写入 `highlights/<material_id>/`，清单为 `highlights-manifest.json`。视频下载或截图失败只记录失败原因，不阻断事实包或最终报告；HTML 会展示成功帧，不输出失败图片。
 
-模型读取 `diagnostic-analysis/yuntu-analysis-data.json` 和 `diagnostic-analysis/yuntu-analysis-prompt.md` 后，生成 `diagnostic-analysis/yuntu-ai-analysis.json`。渲染最终报告：
+模型读取 `diagnostic-analysis/yuntu-analysis-data.json` 和 `diagnostic-analysis/yuntu-analysis-prompt.md` 后，生成 `diagnostic-analysis/yuntu-ai-analysis.json`。模型或人工模型步骤完成后，必须登记来源回执；未经回执核验不得渲染最终报告：
+
+```bash
+python <skill-root>/scripts/rpa_connector.py attest-analysis \
+  --analysis-json "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis/yuntu-ai-analysis.json" \
+  --fact-pack-json "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis/yuntu-analysis-data.json" \
+  --prompt "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis/yuntu-analysis-prompt.md" \
+  --source model_generated \
+  --generator "<模型或人工执行者>"
+```
+
+`--source` 只能是 `model_generated` 或 `manual_model_generated`。最终报告禁止使用程序化兜底分析；即使传入 `programmatic_fallback` 或 `--allow-programmatic-fallback`，CLI 也必须拒绝。固定规则只允许用于事实包统计、品牌标题归类、指标聚合和图表数据，不得生成最终业务结论文字。
+
+渲染最终报告：
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py render-report \
@@ -147,6 +160,8 @@ python <skill-root>/scripts/rpa_connector.py retry-failed \
 
 列表规范化后，脚本会校验首条 `list_context` 的行业、自定义日期、品牌范围、指定品牌和榜单限制是否与本次请求相符。校验失败立即停止，状态为 `list_context_mismatch`，不得调用详情、生成事实包或报告。报告前必须确认 `status == success`、`selectedCount == targetTopN`、`rejectedCount == 0`；否则按部分完成交付并说明缺口。
 
+当 RPA 返回 `selectionGroupId`、品牌和触点字段时，批次会把每个 `品牌 × 触点` 作为隔离组：`candidateTopN` 和 `targetTopN` 按组计算，详情失败只能从同组候选补位；同组耗尽则该组保持部分完成，禁止跨组借用素材。详情回传必须与列表中的组一致。详情规范化产物会保留 `script_text`、`content_formula`、带 `start_ms/end_ms/text` 的 `script_segments`，并用 `data_availability` 标记字段缺失或无效；不得从标题、趋势或其他字段推造脚本、公式或时间戳。
+
 ## CSV 主路径与规范化
 
 RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_type`、`status`、`failedInstances` 和 `files[0].fileUrl`，然后下载 CSV。`fileUrl` 只作为临时下载入口，不写入后续分析产物。直接 JSON 或 payload records 仅作为兼容路径。
@@ -168,7 +183,7 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 
 ## 商业分析与报告
 
-`prepare-analysis` 会以完整榜单作为候选池、以成功详情素材作为秒级诊断范围，计算指标均值、中位数、分位与分层，汇总人群和内容标签覆盖，并归纳高点与流失区间。候选池少于四条时不输出高表现分层或标签关联；缺少指标、标签或趋势时必须写“数据不足以判断”，不得补造结论。
+`prepare-analysis` 会以完整榜单作为候选池、以成功详情素材作为秒级诊断范围，计算指标均值、中位数、分位与分层，汇总人群和内容标签覆盖，并归纳高点与流失区间。该阶段只生成可审计事实和图表数据，不生成最终业务结论文字。候选池少于四条时不输出高表现分层或标签关联；缺少指标、标签或趋势时在事实包中标记数据不足，不得补造结论。
 
 模型读取事实包后，必须写入包含以下七个键的 `yuntu-ai-analysis.json`：
 
@@ -186,7 +201,7 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 
 前五章中每项必须带有 `summary`、`evidence` 及 `material_id` 或 `material_ids`。实验矩阵每项必须包含 `priority`、`hypothesis`、`creative_variable`、`target_audience`、`success_metric`、`control` 和 `review_action`。涉及滋补、孕期、功效或健康人群的方向只能作为需业务和合规确认的测试假设。
 
-`render-report` 会拒绝缺少章节、证据、素材引用或实验字段的 JSON；它只将已验证的洞察渲染为 Markdown/HTML，不新增业务判断。当前用户可见报告只交付两个板块：`01｜TOP 素材组合结论` 与 `02｜人群洞察`。渲染器会校验两者的模板占位符、目录锚点和最终 HTML；其余分析键保留为后续板块扩展的内部事实，不得宣称已在当前报告中交付。
+`render-report` 会拒绝缺少章节、证据、素材引用或实验字段的 JSON；CLI 会先拒绝缺少、不匹配或非模型来源的分析回执。它只将已验证的模型洞察渲染为 Markdown/HTML，不新增业务判断。当前用户可见报告只交付两个板块：`01｜TOP 素材组合结论` 与 `02｜人群洞察`。在外部 RPA 的脚本、内容公式、带时间戳脚本段字段尚未可用且经数据可用性核验前，不启动报告第 `03` 部分。渲染器会校验两者的模板占位符、目录锚点和最终 HTML；其余分析键保留为后续板块扩展的内部事实，不得宣称已在当前报告中交付。
 
 HTML 报告使用深棕、暖金、米白的离线视觉系统。报告正文只展示结论与必要关键数字，结构化 `evidence` 保留在 `final-report-data.json`，不进入用户可读报告正文，也不展示为可展开区域。高光帧预览必须支持点击、键盘焦点和 Escape 关闭；失败帧不输出损坏图片，素材诊断继续保留。
 

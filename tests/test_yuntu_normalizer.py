@@ -191,6 +191,45 @@ class YuntuNormalizerTests(unittest.TestCase):
             "unparsed_source_value",
         )
 
+    def test_normalize_detail_records_keeps_rpa_script_contract_and_group_echo(self):
+        normalizer = load_module()
+        expected_group = {
+            "id": "brand-a:feed",
+            "brand_id": "brand-a",
+            "brand_name": "品牌 A",
+            "touchpoint_code": "feed",
+            "touchpoint_name": "信息流",
+        }
+
+        record = normalizer.normalize_detail_records(
+            {
+                "materialId": "101",
+                "selectionGroupId": "brand-a:feed",
+                "brandId": "brand-a",
+                "brandName": "品牌 A",
+                "touchpointCode": "feed",
+                "touchpointName": "信息流",
+                "scriptText": "前 3 秒提出肠胃痛点。",
+                "contentFormula": {"hook": "痛点", "proof": "成分"},
+                "scriptSegments": [
+                    {"startMs": 0, "endMs": 3000, "text": "肠胃总不舒服？"}
+                ],
+                "trends": [],
+            },
+            material_id="101",
+            source_path="raw-json/details/101.json",
+            expected_selection_group=expected_group,
+        )
+
+        self.assertEqual(record["selection_group"], expected_group)
+        self.assertEqual(record["script_text"], "前 3 秒提出肠胃痛点。")
+        self.assertEqual(record["content_formula"]["hook"], "痛点")
+        self.assertEqual(
+            record["script_segments"],
+            [{"start_ms": 0, "end_ms": 3000, "text": "肠胃总不舒服？"}],
+        )
+        self.assertTrue(record["data_availability"]["script_segments"]["available"])
+
 
 if __name__ == "__main__":
     unittest.main()

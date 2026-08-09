@@ -78,6 +78,51 @@ def _detail_availability(trends, trend_series, high_points, loss_points):
     }
 
 
+def _selection_group(raw):
+    brand_id = _text(raw.get("brandId") or raw.get("brand_id"))
+    brand_name = _text(raw.get("brandName") or raw.get("brand_name"))
+    touchpoint_code = _text(raw.get("touchpointCode") or raw.get("touchpoint_code"))
+    touchpoint_name = _text(raw.get("touchpointName") or raw.get("touchpoint_name"))
+    group_id = _text(raw.get("selectionGroupId") or raw.get("selection_group_id"))
+    if not group_id and (brand_id or brand_name or touchpoint_code or touchpoint_name):
+        group_id = f"{brand_id or brand_name}:{touchpoint_code or touchpoint_name}"
+    return {
+        "id": group_id or "default",
+        "brand_id": brand_id,
+        "brand_name": brand_name,
+        "touchpoint_code": touchpoint_code,
+        "touchpoint_name": touchpoint_name,
+    }
+
+
+def _script_segments(value):
+    if not isinstance(value, list):
+        return [], _availability(value, has_values=False)
+    segments = []
+    previous_end = -1
+    for item in value:
+        if not isinstance(item, dict):
+            return [], {"available": False, "missing_reason": "invalid_timestamped_segments"}
+        start_ms = _number(
+            item["startMs"] if "startMs" in item else item.get("start_ms")
+        )
+        end_ms = _number(item["endMs"] if "endMs" in item else item.get("end_ms"))
+        text = _text(item.get("text") or item.get("scriptText") or item.get("script_text"))
+        if (
+            start_ms is None
+            or end_ms is None
+            or start_ms < 0
+            or end_ms <= start_ms
+            or start_ms < previous_end
+            or not text
+        ):
+            return [], {"available": False, "missing_reason": "invalid_timestamped_segments"}
+        normalized = {"start_ms": int(start_ms), "end_ms": int(end_ms), "text": text}
+        segments.append(normalized)
+        previous_end = normalized["end_ms"]
+    return segments, _availability(value, has_values=bool(segments))
+
+
 def normalize_list_records(raw_records, *, source_path):
     if not isinstance(raw_records, list):
         raise YuntuNormalizeError("list records must be a list")
@@ -113,6 +158,7 @@ def normalize_list_records(raw_records, *, source_path):
                     "brands": raw.get("page_brands") if isinstance(raw.get("page_brands"), list) else [],
                     "ranking_limit": _text(raw.get("page_ranking_limit")),
                 },
+                "selection_group": _selection_group(raw),
                 "title": _text(raw.get("title")),
                 "rank": rank,
                 "video_duration": _number(
@@ -174,7 +220,9 @@ def _normalize_trend(raw_trend):
     }
 
 
-def normalize_detail_records(raw_records, *, material_id, source_path):
+def normalize_detail_records(
+    raw_records, *, material_id, source_path, expected_selection_group=None
+):
     if isinstance(raw_records, list) and raw_records:
         raw = raw_records[0]
     elif isinstance(raw_records, dict):
@@ -190,6 +238,19 @@ def normalize_detail_records(raw_records, *, material_id, source_path):
     )
     if actual_material_id != expected_material_id:
         raise YuntuNormalizeError("detail material_id does not match selected material")
+
+    selection_group = _selection_group(raw)
+    if expected_selection_group is not None:
+        expected_id = _text(expected_selection_group.get("id"))
+        if expected_id and expected_id != "default":
+            if selection_group["id"] == "default":
+                raise YuntuNormalizeError("detail response is missing selection group echo")
+            if selection_group["id"] != expected_id:
+                raise YuntuNormalizeError("detail selection group does not match selected material")
+            selection_group = {
+                key: _text(expected_selection_group.get(key)) or selection_group[key]
+                for key in selection_group
+            }
 
     trend_series = []
     high_points = []
@@ -222,6 +283,13 @@ def normalize_detail_records(raw_records, *, material_id, source_path):
                     "loss_percent": _number(loss.get("loss_percent")),
                 }
             )
+    script_text_value = raw.get("scriptText") or raw.get("script_text")
+    content_formula = raw.get("contentFormula") or raw.get("content_formula")
+    if not isinstance(content_formula, (str, dict, list)):
+        content_formula = None
+    script_segments, script_segments_availability = _script_segments(
+        raw.get("scriptSegments") or raw.get("script_segments")
+    )
     return {
         "material_id": expected_material_id,
         "date_range": {
@@ -230,14 +298,27 @@ def normalize_detail_records(raw_records, *, material_id, source_path):
             "end_date": _text(raw.get("endDate") or raw.get("end_date")),
         },
         "video_url": _text(raw.get("videoUrl") or raw.get("video_url")),
+        "selection_group": selection_group,
+        "script_text": _text(script_text_value),
+        "content_formula": content_formula,
+        "script_segments": script_segments,
         "trend_series": trend_series,
         "high_points": high_points,
         "loss_points": loss_points,
-        "data_availability": _detail_availability(
-            trends_value,
-            trend_series,
-            high_points,
-            loss_points,
-        ),
+        "data_availability": {
+            **_detail_availability(
+                trends_value,
+                trend_series,
+                high_points,
+                loss_points,
+            ),
+            "selection_group": {
+                "available": selection_group["id"] != "default",
+                "missing_reason": "" if selection_group["id"] != "default" else "source_empty",
+            },
+            "script_text": _availability(script_text_value, has_values=bool(_text(script_text_value))),
+            "content_formula": _availability(content_formula, has_values=content_formula is not None),
+            "script_segments": script_segments_availability,
+        },
         "source_paths": {"detail": source_path},
     }

@@ -620,6 +620,152 @@ class RpaConnectorTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(json.loads(stdout.getvalue())["status"], "not_started")
 
+    def test_render_command_requires_a_model_analysis_provenance_receipt(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "sys.stderr", new_callable=io.StringIO
+        ):
+            analysis_path = Path(directory) / "yuntu-ai-analysis.json"
+            analysis_path.write_text("{}", encoding="utf-8")
+            with self.assertRaises(SystemExit) as context:
+                connector.main(
+                    [
+                        "render-report",
+                        "--analysis-json",
+                        str(analysis_path),
+                        "--output-dir",
+                        str(Path(directory) / "report"),
+                    ]
+                )
+        self.assertEqual(context.exception.code, 2)
+
+    def test_attest_analysis_writes_a_model_generated_receipt(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            root = Path(directory)
+            analysis_path = root / "yuntu-ai-analysis.json"
+            fact_pack_path = root / "yuntu-analysis-data.json"
+            prompt_path = root / "yuntu-analysis-prompt.md"
+            analysis_path.write_text("{}", encoding="utf-8")
+            fact_pack_path.write_text("{}", encoding="utf-8")
+            prompt_path.write_text("prompt", encoding="utf-8")
+
+            status = connector.main(
+                [
+                    "attest-analysis",
+                    "--analysis-json", str(analysis_path),
+                    "--fact-pack-json", str(fact_pack_path),
+                    "--prompt", str(prompt_path),
+                    "--source", "model_generated",
+                    "--generator", "codex",
+                ]
+            )
+            receipt = json.loads(
+                (root / "yuntu-ai-analysis.provenance.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 0)
+        self.assertIn("yuntu-ai-analysis.provenance.json", stdout.getvalue())
+        self.assertEqual(receipt["analysisSource"], "model_generated")
+        self.assertEqual(receipt["generator"], "codex")
+
+    def test_attest_analysis_can_write_a_receipt_outside_the_analysis_directory(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ):
+            root = Path(directory)
+            analysis_path = root / "analysis" / "yuntu-ai-analysis.json"
+            fact_pack_path = root / "analysis" / "yuntu-analysis-data.json"
+            prompt_path = root / "analysis" / "yuntu-analysis-prompt.md"
+            receipt_path = root / "receipts" / "analysis-provenance.json"
+            analysis_path.parent.mkdir()
+            analysis_path.write_text("{}", encoding="utf-8")
+            fact_pack_path.write_text("{}", encoding="utf-8")
+            prompt_path.write_text("prompt", encoding="utf-8")
+            connector.main(
+                [
+                    "attest-analysis",
+                    "--analysis-json", str(analysis_path),
+                    "--fact-pack-json", str(fact_pack_path),
+                    "--prompt", str(prompt_path),
+                    "--source", "model_generated",
+                    "--generator", "codex",
+                    "--output", str(receipt_path),
+                ]
+            )
+            receipt = connector.load_verified_provenance(
+                analysis_json=analysis_path, provenance_path=receipt_path
+            )
+
+        self.assertEqual(receipt["analysisSource"], "model_generated")
+
+    def test_render_command_passes_verified_model_source_to_renderer(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ):
+            root = Path(directory)
+            analysis_path = root / "yuntu-ai-analysis.json"
+            fact_pack_path = root / "yuntu-analysis-data.json"
+            prompt_path = root / "yuntu-analysis-prompt.md"
+            analysis_path.write_text("{}", encoding="utf-8")
+            fact_pack_path.write_text("{}", encoding="utf-8")
+            prompt_path.write_text("prompt", encoding="utf-8")
+            connector.main(
+                [
+                    "attest-analysis",
+                    "--analysis-json", str(analysis_path),
+                    "--fact-pack-json", str(fact_pack_path),
+                    "--prompt", str(prompt_path),
+                    "--source", "manual_model_generated",
+                    "--generator", "reviewer",
+                ]
+            )
+            with mock.patch.object(connector, "render_report", return_value=0) as render:
+                status = connector.main(
+                    [
+                        "render-report",
+                        "--analysis-json", str(analysis_path),
+                        "--fact-pack-json", str(fact_pack_path),
+                        "--output-dir", str(root / "report"),
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            render.call_args.kwargs["analysis_provenance"]["analysisSource"],
+            "manual_model_generated",
+        )
+
+    def test_programmatic_fallback_analysis_is_disabled(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "yuntu-ai-analysis.json"
+            fact_pack_path = root / "yuntu-analysis-data.json"
+            prompt_path = root / "yuntu-analysis-prompt.md"
+            analysis_path.write_text("{}", encoding="utf-8")
+            fact_pack_path.write_text("{}", encoding="utf-8")
+            prompt_path.write_text("prompt", encoding="utf-8")
+
+            with self.assertRaises(SystemExit) as context:
+                connector.main(
+                    [
+                        "attest-analysis",
+                        "--analysis-json", str(analysis_path),
+                        "--fact-pack-json", str(fact_pack_path),
+                        "--prompt", str(prompt_path),
+                        "--source", "programmatic_fallback",
+                        "--generator", "rules",
+                        "--allow-programmatic-fallback",
+                    ]
+                )
+
+        self.assertEqual(context.exception.code, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

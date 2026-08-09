@@ -440,6 +440,49 @@ class YuntuBatchTests(unittest.TestCase):
         )
         self.assertEqual(len(invoker.detail_calls), 3)
 
+    def test_fetch_batch_replaces_only_within_the_same_brand_touchpoint_group(self):
+        batch = load_batch()
+        invoker = FakeInvoker(
+            {
+                "success": True,
+                "data": [
+                    {"material_id": "101", "selectionGroupId": "brand-a:feed", "brandId": "brand-a", "touchpointCode": "feed"},
+                    {"material_id": "201", "selectionGroupId": "brand-b:feed", "brandId": "brand-b", "touchpointCode": "feed"},
+                    {"material_id": "102", "selectionGroupId": "brand-a:feed", "brandId": "brand-a", "touchpointCode": "feed"},
+                    {"material_id": "202", "selectionGroupId": "brand-b:feed", "brandId": "brand-b", "touchpointCode": "feed"},
+                ],
+            },
+            [
+                {"success": False},
+                {"success": True, "data": [{"materialId": "201", "selectionGroupId": "brand-b:feed", "brandId": "brand-b", "touchpointCode": "feed", "trends": []}]},
+                {"success": True, "data": [{"materialId": "102", "selectionGroupId": "brand-a:feed", "brandId": "brand-a", "touchpointCode": "feed", "trends": []}]},
+            ],
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            status = batch.fetch_batch(
+                shop_id="shop-42",
+                list_params={},
+                detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                target_top_n=1,
+                candidate_top_n=2,
+                output_dir=root,
+                invoker=invoker,
+            )
+            manifest = json.loads((root / "batch-manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 1)
+        self.assertEqual(
+            [call[1]["material_id"] for call in invoker.detail_calls], ["101", "201", "102"]
+        )
+        self.assertEqual(
+            {item["selectionGroupId"] for item in manifest["selectedMaterials"]},
+            {"brand-a:feed", "brand-b:feed"},
+        )
+        self.assertEqual(
+            [item["material_id"] for item in manifest["cancelledMaterials"]], ["202"]
+        )
+
     def test_retry_failed_batch_retries_only_rejected_materials(self):
         batch = load_batch()
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -37,6 +37,21 @@ except ImportError:
     prepare_analysis = None
 
 try:
+    from yuntu_analysis_provenance import (
+        ALL_SOURCES,
+        YuntuAnalysisProvenanceError,
+        attest_analysis,
+        default_provenance_path,
+        load_verified_provenance,
+    )
+except ImportError:
+    ALL_SOURCES = ()
+    YuntuAnalysisProvenanceError = RuntimeError
+    attest_analysis = None
+    default_provenance_path = None
+    load_verified_provenance = None
+
+try:
     from yuntu_highlights import ALLOWED_HIGHLIGHT_TRENDS
 except ImportError:
     ALLOWED_HIGHLIGHT_TRENDS = ()
@@ -724,10 +739,22 @@ def _parser():
     prepare_parser.add_argument(
         "--highlight-trends", nargs="+", choices=ALLOWED_HIGHLIGHT_TRENDS
     )
+    attest_parser = commands.add_parser(
+        "attest-analysis", help="Record the source of a model-authored analysis JSON"
+    )
+    attest_parser.add_argument("--analysis-json", required=True)
+    attest_parser.add_argument("--fact-pack-json", required=True)
+    attest_parser.add_argument("--prompt", required=True)
+    attest_parser.add_argument("--source", required=True, choices=sorted(ALL_SOURCES))
+    attest_parser.add_argument("--generator", required=True)
+    attest_parser.add_argument("--output")
+    attest_parser.add_argument("--allow-programmatic-fallback", action="store_true")
     report_parser = commands.add_parser("render-report", help="Render Yuntu final report")
     report_parser.add_argument("--analysis-json", required=True)
     report_parser.add_argument("--output-dir", required=True)
     report_parser.add_argument("--fact-pack-json")
+    report_parser.add_argument("--analysis-provenance")
+    report_parser.add_argument("--allow-programmatic-fallback", action="store_true")
     retry_parser = commands.add_parser(
         "retry-failed", help="Retry rejected detail fetches from an existing batch"
     )
@@ -816,14 +843,51 @@ def main(argv=None):
                 output_dir=args.output_dir,
                 highlight_trends=args.highlight_trends,
             )
+        if args.command == "attest-analysis":
+            if attest_analysis is None:
+                raise RpaConnectorError("analysis provenance support is unavailable")
+            try:
+                receipt = attest_analysis(
+                    analysis_json=args.analysis_json,
+                    fact_pack_json=args.fact_pack_json,
+                    prompt_path=args.prompt,
+                    source=args.source,
+                    generator=args.generator,
+                    output_path=args.output,
+                    allow_programmatic_fallback=args.allow_programmatic_fallback,
+                )
+            except YuntuAnalysisProvenanceError as exc:
+                raise RpaConnectorError(str(exc)) from exc
+            print(receipt)
+            return 0
         if args.command == "render-report":
             if render_report is None:
                 raise RpaConnectorError("report rendering support is unavailable")
+            if load_verified_provenance is None or default_provenance_path is None:
+                raise RpaConnectorError("analysis provenance support is unavailable")
+            provenance_path = (
+                Path(args.analysis_provenance)
+                if args.analysis_provenance
+                else default_provenance_path(args.analysis_json)
+            )
+            try:
+                provenance = load_verified_provenance(
+                    analysis_json=args.analysis_json,
+                    provenance_path=provenance_path,
+                    allow_programmatic_fallback=args.allow_programmatic_fallback,
+                )
+            except YuntuAnalysisProvenanceError as exc:
+                raise RpaConnectorError(str(exc)) from exc
             fact_pack_path = Path(args.fact_pack_json) if args.fact_pack_json else Path(args.analysis_json).with_name("yuntu-analysis-data.json")
             fact_pack = {}
             if fact_pack_path.exists():
                 fact_pack = json.loads(fact_pack_path.read_text(encoding="utf-8"))
-            return render_report(analysis_json=args.analysis_json, output_dir=args.output_dir, fact_pack=fact_pack)
+            return render_report(
+                analysis_json=args.analysis_json,
+                output_dir=args.output_dir,
+                fact_pack=fact_pack,
+                analysis_provenance=provenance,
+            )
         if args.command == "retry-failed":
             status = retry_failed_batch_analysis(
                 args.shop_id,

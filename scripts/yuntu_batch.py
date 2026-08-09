@@ -45,17 +45,97 @@ def _validate_positive_int(value, name):
     return value
 
 
-def _material_ids_from_list(records, candidate_top_n):
+def _selection_group(record):
+    group = record.get("selection_group")
+    if not isinstance(group, dict):
+        group = {}
+    return {
+        "id": group.get("id") or "default",
+        "brand_id": group.get("brand_id") or "",
+        "brand_name": group.get("brand_name") or "",
+        "touchpoint_code": group.get("touchpoint_code") or "",
+        "touchpoint_name": group.get("touchpoint_name") or "",
+    }
+
+
+def _candidate_materials_from_list(records, candidate_top_n):
     selected = []
     seen = set()
     for record in records:
         material_id = record["material_id"]
-        if material_id not in seen:
-            seen.add(material_id)
-            selected.append(material_id)
-        if len(selected) >= candidate_top_n:
-            break
+        if material_id in seen:
+            continue
+        group = _selection_group(record)
+        group_count = sum(
+            item["selectionGroupId"] == group["id"] for item in selected
+        )
+        if group_count >= candidate_top_n:
+            continue
+        seen.add(material_id)
+        selected.append(
+            {
+                "rank": record["rank"],
+                "material_id": material_id,
+                "selectionGroupId": group["id"],
+                "selectionGroup": group,
+            }
+        )
     return selected
+
+
+def _manifest_material(item):
+    result = {"rank": item["rank"], "material_id": item["material_id"]}
+    if item["selectionGroupId"] != "default":
+        result["selectionGroupId"] = item["selectionGroupId"]
+        result["brandId"] = item["selectionGroup"]["brand_id"]
+        result["brandName"] = item["selectionGroup"]["brand_name"]
+        result["touchpointCode"] = item["selectionGroup"]["touchpoint_code"]
+        result["touchpointName"] = item["selectionGroup"]["touchpoint_name"]
+    return result
+
+
+def _detail_request(item, detail_date_params):
+    request = {"material_id": item["material_id"], **detail_date_params}
+    if item["selectionGroupId"] != "default":
+        request.update(
+            {
+                "selectionGroupId": item["selectionGroupId"],
+                "brandId": item["selectionGroup"]["brand_id"],
+                "brandName": item["selectionGroup"]["brand_name"],
+                "touchpointCode": item["selectionGroup"]["touchpoint_code"],
+                "touchpointName": item["selectionGroup"]["touchpoint_name"],
+            }
+        )
+    return request
+
+
+def _retry_detail_request(item, detail_date_params):
+    request = {"material_id": item["material_id"], **detail_date_params}
+    for key in (
+        "selectionGroupId",
+        "brandId",
+        "brandName",
+        "touchpointCode",
+        "touchpointName",
+    ):
+        if key in item:
+            request[key] = item[key]
+    return request
+
+
+def _target_satisfied(manifest):
+    groups = manifest.get("selectionGroups")
+    if not isinstance(groups, list) or not groups:
+        return len(manifest.get("selectedMaterials", [])) >= manifest.get("targetTopN", 0)
+    selected_by_group = {}
+    for item in manifest.get("selectedMaterials", []):
+        group_id = item.get("selectionGroupId", "default")
+        selected_by_group[group_id] = selected_by_group.get(group_id, 0) + 1
+    return all(
+        selected_by_group.get(group.get("selectionGroupId"), 0)
+        >= group.get("targetTopN", 0)
+        for group in groups
+    )
 
 
 def _materialize_records(result, *, csv_path, json_path, downloader):
@@ -86,6 +166,7 @@ def _new_manifest(
         "targetTopN": target_top_n,
         "candidateTopN": candidate_top_n,
         "candidateMaterials": [],
+        "selectionGroups": [],
         "submittedMaterials": [],
         "selectedMaterials": [],
         "rejectedMaterials": [],
@@ -336,14 +417,27 @@ def fetch_batch(
         _save_summary(root, summary)
         return 1
 
-    candidate_ids = _material_ids_from_list(list_records, candidate_top_n)
-    manifest["candidateMaterials"] = [
-        {"rank": index, "material_id": material_id}
-        for index, material_id in enumerate(candidate_ids, start=1)
-    ]
+    candidates = _candidate_materials_from_list(list_records, candidate_top_n)
+    manifest["candidateMaterials"] = [_manifest_material(item) for item in candidates]
+    groups = {}
+    for item in candidates:
+        group = groups.setdefault(
+            item["selectionGroupId"],
+            {
+                "selectionGroupId": item["selectionGroupId"],
+                "brandId": item["selectionGroup"]["brand_id"],
+                "brandName": item["selectionGroup"]["brand_name"],
+                "touchpointCode": item["selectionGroup"]["touchpoint_code"],
+                "touchpointName": item["selectionGroup"]["touchpoint_name"],
+                "targetTopN": target_top_n,
+                "candidateCount": 0,
+            },
+        )
+        group["candidateCount"] += 1
+    manifest["selectionGroups"] = list(groups.values())
     detail_requests = [
-        {"material_id": material_id, **detail_date_params}
-        for material_id in candidate_ids
+        _detail_request(item, detail_date_params)
+        for item in candidates
     ]
     detail_request_path = root / "normalized" / "detail-request-params.json"
     write_json_atomically(detail_requests, detail_request_path)
@@ -355,21 +449,25 @@ def fetch_batch(
     list_by_id = {record["material_id"]: record for record in list_records}
 
     had_rejection = False
-    for rank, material_id in enumerate(candidate_ids, start=1):
-        if len(manifest["selectedMaterials"]) >= target_top_n:
+    selected_by_group = {}
+    for item in candidates:
+        rank = item["rank"]
+        material_id = item["material_id"]
+        group_id = item["selectionGroupId"]
+        if selected_by_group.get(group_id, 0) >= target_top_n:
             manifest["cancelledMaterials"].append(
-                {"rank": rank, "material_id": material_id, "reason": "target_satisfied"}
+                {**_manifest_material(item), "reason": "target_satisfied"}
             )
             continue
         detail_started = time.monotonic()
-        manifest["submittedMaterials"].append({"rank": rank, "material_id": material_id})
+        manifest["submittedMaterials"].append(_manifest_material(item))
         _sync_stage_counts(summary, manifest, root)
         write_json_atomically(manifest, manifest_path)
         _save_summary(root, summary)
         try:
             raw_detail, detail_source = _materialize_records(
                 invoker.invoke_detail(
-                    shop_id, {**detail_date_params, "material_id": material_id}
+                    shop_id, _detail_request(item, detail_date_params)
                 ),
                 csv_path=root / "raw-csv" / "details" / f"{material_id}.csv",
                 json_path=root / "raw-json" / "details" / f"{material_id}.json",
@@ -379,6 +477,9 @@ def fetch_batch(
                 raw_detail,
                 material_id=material_id,
                 source_path=_relative(root, detail_source),
+                expected_selection_group=(
+                    item["selectionGroup"] if group_id != "default" else None
+                ),
             )
             detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
             write_json_atomically(detail_record, detail_output)
@@ -391,21 +492,20 @@ def fetch_batch(
             )
             manifest["selectedMaterials"].append(
                 {
-                    "rank": rank,
-                    "material_id": material_id,
+                    **_manifest_material(item),
                     "listRecordPath": "normalized/list-records.json",
                     "detailRecordPath": _relative(root, detail_output),
                     "rawDetailPath": _relative(root, detail_source),
                     "timingsSec": {"detailFetchSec": _elapsed(detail_started)},
                 }
             )
+            selected_by_group[group_id] = selected_by_group.get(group_id, 0) + 1
 
         except Exception as exc:
             had_rejection = True
             manifest["rejectedMaterials"].append(
                 {
-                    "rank": rank,
-                    "material_id": material_id,
+                    **_manifest_material(item),
                     "reason": exc.__class__.__name__,
                     "error": str(exc),
                     "timingsSec": {"detailFetchSec": _elapsed(detail_started)},
@@ -422,7 +522,7 @@ def fetch_batch(
         {"materials": ready_materials},
         root / "normalized" / "top-materials-rpa-ready.json",
     )
-    if len(manifest["selectedMaterials"]) >= target_top_n and not had_rejection:
+    if _target_satisfied(manifest) and not had_rejection:
         manifest["status"] = "success"
     else:
         manifest["status"] = "partial"
@@ -538,7 +638,7 @@ def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
         _refresh_ready_materials(root, manifest)
         manifest["status"] = (
             "success"
-            if len(manifest.get("selectedMaterials", [])) >= manifest.get("targetTopN", 0)
+            if _target_satisfied(manifest)
             else manifest.get("status", "partial")
         )
         summary["status"] = manifest["status"]
@@ -560,7 +660,7 @@ def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
         try:
             raw_detail, detail_source = _materialize_records(
                 invoker.invoke_detail(
-                    shop_id, {**detail_date_params, "material_id": material_id}
+                    shop_id, _retry_detail_request(item, detail_date_params)
                 ),
                 csv_path=root / "raw-csv" / "details" / f"{material_id}.csv",
                 json_path=root / "raw-json" / "details" / f"{material_id}.json",
@@ -570,6 +670,17 @@ def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
                 raw_detail,
                 material_id=material_id,
                 source_path=_relative(root, detail_source),
+                expected_selection_group=(
+                    {
+                        "id": item.get("selectionGroupId"),
+                        "brand_id": item.get("brandId"),
+                        "brand_name": item.get("brandName"),
+                        "touchpoint_code": item.get("touchpointCode"),
+                        "touchpoint_name": item.get("touchpointName"),
+                    }
+                    if item.get("selectionGroupId")
+                    else None
+                ),
             )
             detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
             write_json_atomically(detail_record, detail_output)
@@ -585,6 +696,9 @@ def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
                     {
                         "rank": rank,
                         "material_id": material_id,
+                        **(
+                            {key: item[key] for key in ("selectionGroupId", "brandId", "brandName", "touchpointCode", "touchpointName") if key in item}
+                        ),
                         "listRecordPath": "normalized/list-records.json",
                         "detailRecordPath": _relative(root, detail_output),
                         "rawDetailPath": _relative(root, detail_source),
@@ -606,10 +720,9 @@ def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
     )
     manifest["rejectedMaterials"] = still_rejected
     _refresh_ready_materials(root, manifest)
-    target = manifest.get("targetTopN", 0)
     manifest["status"] = (
         "success"
-        if not still_rejected and len(manifest.get("selectedMaterials", [])) >= target
+        if not still_rejected and _target_satisfied(manifest)
         else "partial"
     )
     summary["status"] = manifest["status"]

@@ -758,9 +758,11 @@ def _render_html(analysis, material_frames, fact_pack):
     return rendered
 
 
-def render_report(*, analysis_json, output_dir, fact_pack=None):
+def render_report(*, analysis_json, output_dir, fact_pack=None, analysis_provenance=None):
     analysis = _load_analysis(analysis_json)
     data = {"status": "complete", "analysis": analysis}
+    if analysis_provenance is not None:
+        data["analysisProvenance"] = analysis_provenance
     audience_dashboard = fact_pack.get("audienceDashboard") if isinstance(fact_pack, dict) else None
     markdown = _render_markdown(analysis, audience_dashboard)
     rendered_html = _render_html(

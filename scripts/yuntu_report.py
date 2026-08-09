@@ -14,6 +14,10 @@ SKILL_ROOT = Path(__file__).resolve().parents[1]
 HTML_TEMPLATE_PATH = Path(__file__).with_name("templates") / "final-report-template.html"
 REPORT_STYLE_PATH = SKILL_ROOT / "assets" / "report" / "unified-report.css"
 REPORT_SCRIPT_PATH = SKILL_ROOT / "assets" / "report" / "unified-report.js"
+CURRENT_REPORT_SECTIONS = (
+    ("top_material_combination", "top-material-combination", "01｜TOP 素材组合结论"),
+    ("audience_insights", "audience-insights", "02｜人群洞察"),
+)
 
 
 class YuntuReportError(RuntimeError):
@@ -29,12 +33,29 @@ def _read_report_source(path, label):
 
 def _load_html_template():
     source = _read_report_source(HTML_TEMPLATE_PATH, "report template")
-    for placeholder in ("$style", "$unified_style", "$unified_script"):
+    for placeholder in (
+        "$style",
+        "$unified_style",
+        "$unified_script",
+        *(f"${name}" for name, _section_id, _title in CURRENT_REPORT_SECTIONS),
+    ):
         if source.count(placeholder) != 1:
             raise YuntuReportError(
                 f"report template must contain exactly one {placeholder}"
             )
     return Template(source)
+
+
+def _validate_rendered_sections(rendered_html):
+    for _placeholder, section_id, title in CURRENT_REPORT_SECTIONS:
+        if rendered_html.count(f'id="{section_id}"') != 1:
+            raise YuntuReportError(
+                f"rendered report must contain exactly one section {section_id}"
+            )
+        if rendered_html.count(title) < 1:
+            raise YuntuReportError(
+                f"rendered report is missing current section title: {title}"
+            )
 
 
 REQUIRED_FIELDS = (
@@ -541,7 +562,10 @@ def _render_html(analysis, material_frames, fact_pack):
 
     def audience_dashboard_cards(value):
         if not isinstance(value, dict):
-            return ""
+            return (
+                '<section class="section" id="audience-insights"><header class="section-header">'
+                '<h2>02｜人群洞察</h2></header><p class="data-note">暂无人群汇总数据。</p></section>'
+            )
         sample = value.get("sample", {})
         dimensions = value.get("dimensions", {})
         if not isinstance(dimensions, dict):
@@ -706,7 +730,7 @@ def _render_html(analysis, material_frames, fact_pack):
         len([frame for frame in material_frames.get(str(item.get("material_id")), []) if frame.get("available")])
         for item in selected
     )
-    return template.safe_substitute(
+    rendered = template.safe_substitute(
         style=style,
         unified_style=unified_style,
         unified_script=unified_script,
@@ -730,6 +754,8 @@ def _render_html(analysis, material_frames, fact_pack):
         opportunities=opportunities,
         experiments=experiments,
     )
+    _validate_rendered_sections(rendered)
+    return rendered
 
 
 def render_report(*, analysis_json, output_dir, fact_pack=None):

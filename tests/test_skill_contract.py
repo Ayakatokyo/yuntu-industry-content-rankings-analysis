@@ -163,6 +163,21 @@ class AnalysisSkillContractTests(unittest.TestCase):
             skill,
         )
 
+    def test_documents_rpa_run_state_and_two_section_report_scope(self):
+        skill = self.read_skill()
+
+        for phrase in (
+            "run-summary.json",
+            "status --output-dir",
+            "参数指纹",
+            "不一致",
+            "list_context",
+            "01｜TOP 素材组合结论",
+            "02｜人群洞察",
+        ):
+            self.assertIn(phrase, skill)
+        self.assertIn("python <skill-root>/scripts/rpa_connector.py status", skill)
+
     def test_documents_xiaoxian_dun_closed_loop_report(self):
         skill = self.read_skill()
         for chapter in (

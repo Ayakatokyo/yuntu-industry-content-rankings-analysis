@@ -19,9 +19,15 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 try:
-    from yuntu_batch import ConnectorInvoker, fetch_batch, retry_failed_batch
+    from yuntu_batch import (
+        ConnectorInvoker,
+        collection_status,
+        fetch_batch,
+        retry_failed_batch,
+    )
 except ImportError:
     ConnectorInvoker = None
+    collection_status = None
     fetch_batch = None
     retry_failed_batch = None
 
@@ -708,6 +714,8 @@ def _parser():
     commands.add_parser("list-accounts", help="List available RPA accounts")
     commands.add_parser("schema", help="Print analysis parameter metadata")
     commands.add_parser("self-test", help="Run offline connector checks")
+    status_parser = commands.add_parser("status", help="Read collection lifecycle state")
+    status_parser.add_argument("--output-dir", required=True)
     prepare_parser = commands.add_parser(
         "prepare-analysis", help="Prepare Yuntu analysis facts"
     )
@@ -794,6 +802,11 @@ def main(argv=None):
             return 0
         if args.command == "self-test":
             _cmd_self_test()
+            return 0
+        if args.command == "status":
+            if collection_status is None:
+                raise RpaConnectorError("batch status support is unavailable")
+            print(json.dumps(collection_status(output_dir=args.output_dir), ensure_ascii=False, indent=2))
             return 0
         if args.command == "prepare-analysis":
             if prepare_analysis is None:

@@ -1,5 +1,6 @@
 """Batch fetch orchestration for Yuntu rankings analysis."""
 
+import json
 from pathlib import Path
 import time
 
@@ -10,6 +11,7 @@ from rpa_io import (
     write_json_atomically,
 )
 from yuntu_normalizer import normalize_detail_records, normalize_list_records
+import yuntu_run_state as run_state
 
 
 class YuntuBatchError(RuntimeError):
@@ -65,9 +67,19 @@ def _materialize_records(result, *, csv_path, json_path, downloader):
     return unpacked.records, str(json_path)
 
 
-def _new_manifest(*, list_params, detail_date_params, target_top_n, candidate_top_n):
+def _new_manifest(
+    *,
+    list_params,
+    detail_date_params,
+    target_top_n,
+    candidate_top_n,
+    summary,
+):
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
+        "runId": summary["runId"],
+        "parameterFingerprint": summary["parameterFingerprint"],
+        "collectionContract": summary["collectionContract"],
         "status": "running",
         "filters": list_params,
         "detailDateRange": detail_date_params,
@@ -83,9 +95,116 @@ def _new_manifest(*, list_params, detail_date_params, target_top_n, candidate_to
 
 
 def _load_json(path):
-    import json
-
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _has_existing_collection_artifacts(root):
+    return any(
+        path.exists()
+        for path in (
+            root / run_state.RUN_SUMMARY_NAME,
+            root / "batch-manifest.json",
+            root / "raw-csv" / "list.csv",
+            root / "raw-json" / "list-response.json",
+            root / "normalized" / "list-records.json",
+        )
+    )
+
+
+def _open_collection_summary(root, contract):
+    summary_path = root / run_state.RUN_SUMMARY_NAME
+    if _has_existing_collection_artifacts(root):
+        if not summary_path.is_file():
+            raise YuntuBatchError(
+                "output directory contains an unverifiable existing batch; choose a new output directory"
+            )
+        try:
+            summary = run_state.load_run_state(summary_path)
+        except run_state.YuntuRunStateError as exc:
+            raise YuntuBatchError(
+                "output directory contains an unverifiable existing batch; choose a new output directory"
+            ) from exc
+        if not run_state.collection_contract_matches(summary, contract):
+            raise YuntuBatchError(
+                "output directory belongs to a different collection contract; choose a new output directory"
+            )
+        return summary
+    summary = run_state.new_collection_summary(contract)
+    run_state.save_run_state(summary, summary_path)
+    return summary
+
+
+def _save_summary(root, summary):
+    run_state.save_run_state(summary, root / run_state.RUN_SUMMARY_NAME)
+
+
+def _record_artifact(summary, root, key, path, source):
+    try:
+        run_state.register_artifact(summary, root, key, path, source)
+    except run_state.YuntuRunStateError:
+        # State remains useful even when an optional raw artifact is not available.
+        pass
+
+
+def _sync_stage_counts(summary, manifest, root):
+    details_dir = root / "normalized" / "detail-records"
+    persisted_count = len(list(details_dir.glob("*.json"))) if details_dir.is_dir() else 0
+    counts = summary["stageCounts"]
+    counts.update(
+        {
+            "candidateCount": len(manifest.get("candidateMaterials", [])),
+            "detailSubmittedCount": len(manifest.get("submittedMaterials", [])),
+            "detailRecordsPersistedCount": persisted_count,
+            "selectedCount": len(manifest.get("selectedMaterials", [])),
+            "rejectedCount": len(manifest.get("rejectedMaterials", [])),
+            "cancelledCount": len(manifest.get("cancelledMaterials", [])),
+        }
+    )
+
+
+def _brand_tokens(value):
+    return {
+        part.strip().casefold()
+        for part in str(value or "").split("/")
+        if part.strip()
+    }
+
+
+def _validate_list_context(list_records, list_params):
+    if not list_records:
+        return {"valid": False, "issues": ["list records are empty"], "observed": {}}
+    context = list_records[0].get("list_context")
+    context = context if isinstance(context, dict) else {}
+    issues = []
+    if "industry" in list_params and context.get("industry") != list_params["industry"]:
+        issues.append("industry")
+    if list_params.get("time_range_type") == "CUSTOM":
+        expected = (
+            f"{list_params['custom_start_date']} ~ {list_params['custom_end_date']}"
+        )
+        if context.get("custom_date_range") != expected:
+            issues.append("custom_date_range")
+    if list_params.get("brand_scope_type") == "SPECIFIED_BRANDS":
+        if context.get("brand_scope") not in {"指定品牌", "SPECIFIED_BRANDS"}:
+            issues.append("brand_scope")
+        actual_brands = context.get("brands")
+        if not isinstance(actual_brands, list):
+            actual_brands = []
+        actual_tokens = [_brand_tokens(brand) for brand in actual_brands]
+        for brand in list_params.get("brands", []):
+            if not any(_brand_tokens(brand) & tokens for tokens in actual_tokens):
+                issues.append("brands")
+                break
+    if "ranking_limit_type" in list_params:
+        expected_labels = {
+            "EXPOSURE_TOP1000": {"曝光量TOP1000", "EXPOSURE_TOP1000"},
+            "CTR_TOP1000": {"点击率TOP1000", "CTR_TOP1000"},
+            "INTERACTION_RATE_TOP1000": {"互动率TOP1000", "INTERACTION_RATE_TOP1000"},
+            "COMPLETION_RATE_TOP1000": {"完播率TOP1000", "COMPLETION_RATE_TOP1000"},
+        }
+        if context.get("ranking_limit") not in expected_labels[list_params["ranking_limit_type"]]:
+            issues.append("ranking_limit")
+    return {"valid": not issues, "issues": issues, "observed": context}
 
 
 def _reusable_list_artifact(root, list_params, detail_date_params):
@@ -151,11 +270,23 @@ def fetch_batch(
     downloader = FileDownloader() if downloader is None else downloader
     root = Path(output_dir)
     manifest_path = root / "batch-manifest.json"
+    contract = run_state.collection_contract(
+        shop_id=shop_id,
+        list_params=list_params,
+        detail_date_params=detail_date_params,
+        target_top_n=target_top_n,
+        candidate_top_n=candidate_top_n,
+    )
+    try:
+        summary = _open_collection_summary(root, contract)
+    except run_state.YuntuRunStateError as exc:
+        raise YuntuBatchError(str(exc)) from exc
     manifest = _new_manifest(
         list_params=list_params,
         detail_date_params=detail_date_params,
         target_top_n=target_top_n,
         candidate_top_n=candidate_top_n,
+        summary=summary,
     )
     write_json_atomically(manifest, manifest_path)
 
@@ -164,7 +295,10 @@ def fetch_batch(
         reusable_list = _reusable_list_artifact(root, list_params, detail_date_params)
         if reusable_list is not None:
             raw_list, list_source = parse_csv_records(reusable_list), str(reusable_list)
+            summary["stages"]["list"]["requestStatus"] = "reused"
         else:
+            summary["stages"]["list"]["requestStatus"] = "requested"
+            _save_summary(root, summary)
             raw_list, list_source = _materialize_records(
                 invoker.invoke_list(shop_id, list_params),
                 csv_path=root / "raw-csv" / "list.csv",
@@ -172,12 +306,34 @@ def fetch_batch(
                 downloader=downloader,
             )
         list_records = normalize_list_records(raw_list, source_path=_relative(root, list_source))
-        write_json_atomically(list_records, root / "normalized" / "list-records.json")
+        list_record_path = root / "normalized" / "list-records.json"
+        write_json_atomically(list_records, list_record_path)
+        _record_artifact(summary, root, "listRecords", list_record_path, "normalized_list")
+        summary["stages"]["list"]["normalized"] = True
+        context_verification = _validate_list_context(list_records, list_params)
+        summary["stages"]["list"]["contextVerified"] = context_verification["valid"]
+        summary["stages"]["list"]["contextIssues"] = context_verification["issues"]
+        summary["stages"]["list"]["observedContext"] = context_verification["observed"]
+        if not context_verification["valid"]:
+            manifest["status"] = "list_context_mismatch"
+            manifest["error"] = "list context does not match requested filters: " + ", ".join(
+                context_verification["issues"]
+            )
+            manifest["timingsSec"]["totalSec"] = _elapsed(started)
+            summary["status"] = "list_context_mismatch"
+            _sync_stage_counts(summary, manifest, root)
+            write_json_atomically(manifest, manifest_path)
+            _save_summary(root, summary)
+            return 1
     except Exception as exc:
         manifest["status"] = "list_failed"
         manifest["error"] = str(exc)
         manifest["timingsSec"]["totalSec"] = _elapsed(started)
+        summary["status"] = "list_failed"
+        summary["stages"]["list"]["requestStatus"] = "failed"
+        _sync_stage_counts(summary, manifest, root)
         write_json_atomically(manifest, manifest_path)
+        _save_summary(root, summary)
         return 1
 
     candidate_ids = _material_ids_from_list(list_records, candidate_top_n)
@@ -192,6 +348,10 @@ def fetch_batch(
     detail_request_path = root / "normalized" / "detail-request-params.json"
     write_json_atomically(detail_requests, detail_request_path)
     manifest["detailRequestPath"] = _relative(root, detail_request_path)
+    _record_artifact(summary, root, "detailRequests", detail_request_path, "detail_request_params")
+    summary["stages"]["details"]["requestStatus"] = "running"
+    _sync_stage_counts(summary, manifest, root)
+    _save_summary(root, summary)
     list_by_id = {record["material_id"]: record for record in list_records}
 
     had_rejection = False
@@ -203,6 +363,9 @@ def fetch_batch(
             continue
         detail_started = time.monotonic()
         manifest["submittedMaterials"].append({"rank": rank, "material_id": material_id})
+        _sync_stage_counts(summary, manifest, root)
+        write_json_atomically(manifest, manifest_path)
+        _save_summary(root, summary)
         try:
             raw_detail, detail_source = _materialize_records(
                 invoker.invoke_detail(
@@ -219,6 +382,13 @@ def fetch_batch(
             )
             detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
             write_json_atomically(detail_record, detail_output)
+            _record_artifact(
+                summary,
+                root,
+                f"detailRecord:{material_id}",
+                detail_output,
+                "normalized_detail",
+            )
             manifest["selectedMaterials"].append(
                 {
                     "rank": rank,
@@ -229,6 +399,7 @@ def fetch_batch(
                     "timingsSec": {"detailFetchSec": _elapsed(detail_started)},
                 }
             )
+
         except Exception as exc:
             had_rejection = True
             manifest["rejectedMaterials"].append(
@@ -240,6 +411,9 @@ def fetch_batch(
                     "timingsSec": {"detailFetchSec": _elapsed(detail_started)},
                 }
             )
+        _sync_stage_counts(summary, manifest, root)
+        write_json_atomically(manifest, manifest_path)
+        _save_summary(root, summary)
 
     ready_materials = [
         list_by_id[item["material_id"]] for item in manifest["selectedMaterials"]
@@ -253,8 +427,78 @@ def fetch_batch(
     else:
         manifest["status"] = "partial"
     manifest["timingsSec"]["totalSec"] = _elapsed(started)
+    summary["status"] = manifest["status"]
+    summary["stages"]["details"]["requestStatus"] = (
+        "completed" if manifest["status"] == "success" else "partial"
+    )
+    _sync_stage_counts(summary, manifest, root)
     write_json_atomically(manifest, manifest_path)
+    _save_summary(root, summary)
     return 0 if manifest["status"] == "success" else 1
+
+
+def collection_status(*, output_dir):
+    """Read collection progress from state and landed artifacts without mutating them."""
+    root = Path(output_dir)
+    summary_path = root / run_state.RUN_SUMMARY_NAME
+    manifest_path = root / "batch-manifest.json"
+    try:
+        summary = run_state.load_run_state(summary_path) if summary_path.is_file() else {}
+    except run_state.YuntuRunStateError:
+        summary = {"status": "state_unreadable"}
+    try:
+        manifest = _load_json(manifest_path) if manifest_path.is_file() else {}
+    except (OSError, ValueError):
+        manifest = {"status": "manifest_unreadable"}
+
+    def _records(path):
+        try:
+            records = _load_json(path)
+        except (OSError, ValueError):
+            return []
+        return records if isinstance(records, list) else []
+
+    list_records = _records(root / "normalized" / "list-records.json")
+    detail_requests = _records(root / "normalized" / "detail-request-params.json")
+    detail_dir = root / "normalized" / "detail-records"
+    persisted_details = len(list(detail_dir.glob("*.json"))) if detail_dir.is_dir() else 0
+    stages = summary.get("stages") if isinstance(summary.get("stages"), dict) else {}
+    list_stage = stages.get("list") if isinstance(stages.get("list"), dict) else {}
+    detail_stage = stages.get("details") if isinstance(stages.get("details"), dict) else {}
+    return {
+        "status": summary.get("status") or manifest.get("status") or "not_started",
+        "runId": summary.get("runId") or manifest.get("runId"),
+        "parameterFingerprint": summary.get("parameterFingerprint"),
+        "collectionContract": summary.get("collectionContract"),
+        "stages": {
+            "list": {
+                "requestStatus": list_stage.get("requestStatus", "unknown"),
+                "normalizedRecordCount": len(list_records),
+                "contextVerified": list_stage.get("contextVerified"),
+                "contextIssues": list_stage.get("contextIssues", []),
+            },
+            "details": {
+                "requestStatus": detail_stage.get("requestStatus", "unknown"),
+                "requestParamCount": len(detail_requests),
+                "submittedCount": len(manifest.get("submittedMaterials", [])),
+                "persistedRecordCount": persisted_details,
+                "selectedCount": len(manifest.get("selectedMaterials", [])),
+                "rejectedCount": len(manifest.get("rejectedMaterials", [])),
+                "cancelledCount": len(manifest.get("cancelledMaterials", [])),
+            },
+        },
+        "evidencePaths": {
+            "runSummary": str(summary_path) if summary_path.is_file() else None,
+            "batchManifest": str(manifest_path) if manifest_path.is_file() else None,
+            "listRecords": str(root / "normalized" / "list-records.json")
+            if list_records
+            else None,
+            "detailRequests": str(root / "normalized" / "detail-request-params.json")
+            if detail_requests
+            else None,
+            "detailRecordsDir": str(detail_dir) if detail_dir.is_dir() else None,
+        },
+    }
 
 
 def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
@@ -263,10 +507,32 @@ def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
     downloader = FileDownloader() if downloader is None else downloader
     root = Path(output_dir)
     manifest_path = root / "batch-manifest.json"
+    summary_path = root / run_state.RUN_SUMMARY_NAME
+    if not summary_path.is_file():
+        raise YuntuBatchError(
+            "output directory contains an unverifiable existing batch; choose a new output directory"
+        )
+    try:
+        summary = run_state.load_run_state(summary_path)
+    except run_state.YuntuRunStateError as exc:
+        raise YuntuBatchError(
+            "output directory contains an unverifiable existing batch; choose a new output directory"
+        ) from exc
+    contract = summary.get("collectionContract")
+    if not isinstance(contract, dict) or not run_state.collection_contract_matches(
+        summary, contract
+    ):
+        raise YuntuBatchError(
+            "output directory contains an unverifiable existing batch; choose a new output directory"
+        )
+    if contract.get("shopId") != shop_id.strip():
+        raise YuntuBatchError(
+            "output directory belongs to a different collection contract; choose a new output directory"
+        )
     manifest = _load_json(manifest_path)
-    detail_date_params = manifest.get("detailDateRange")
-    if not isinstance(detail_date_params, dict):
-        raise YuntuBatchError("batch manifest is missing detailDateRange")
+    detail_date_params = contract["detailDateRange"]
+    if manifest.get("detailDateRange") != detail_date_params:
+        raise YuntuBatchError("batch manifest detailDateRange does not match collection contract")
     rejected = list(manifest.get("rejectedMaterials", []))
     if not rejected:
         _refresh_ready_materials(root, manifest)
@@ -275,7 +541,11 @@ def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
             if len(manifest.get("selectedMaterials", [])) >= manifest.get("targetTopN", 0)
             else manifest.get("status", "partial")
         )
+        summary["status"] = manifest["status"]
+        summary["stages"]["details"]["requestStatus"] = "completed"
+        _sync_stage_counts(summary, manifest, root)
         write_json_atomically(manifest, manifest_path)
+        _save_summary(root, summary)
         return 0 if manifest["status"] == "success" else 1
 
     selected_ids = _selected_ids(manifest)
@@ -303,6 +573,13 @@ def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
             )
             detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
             write_json_atomically(detail_record, detail_output)
+            _record_artifact(
+                summary,
+                root,
+                f"detailRecord:{material_id}",
+                detail_output,
+                "normalized_detail",
+            )
             if material_id not in selected_ids:
                 manifest.setdefault("selectedMaterials", []).append(
                     {
@@ -335,7 +612,13 @@ def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
         if not still_rejected and len(manifest.get("selectedMaterials", [])) >= target
         else "partial"
     )
+    summary["status"] = manifest["status"]
+    summary["stages"]["details"]["requestStatus"] = (
+        "completed" if manifest["status"] == "success" else "partial"
+    )
+    _sync_stage_counts(summary, manifest, root)
     write_json_atomically(manifest, manifest_path)
+    _save_summary(root, summary)
     return 0 if manifest["status"] == "success" else 1
 
 

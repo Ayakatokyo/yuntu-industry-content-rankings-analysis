@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
@@ -610,6 +611,14 @@ class RpaConnectorTest(unittest.TestCase):
             prepare.call_args.kwargs,
             {"input_dir": "in", "output_dir": "out", "highlight_trends": ["点赞指数", "点击指数"]},
         )
+
+    def test_main_status_reads_local_collection_state_without_runtime_credentials(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory, mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            status = connector.main(["status", "--output-dir", directory])
+
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(stdout.getvalue())["status"], "not_started")
 
 
 if __name__ == "__main__":

@@ -38,7 +38,7 @@ metadata:
 `rpa.conn.juliang.yt.industry.content.rankings.list`，再从列表响应中按顺序选取
 `material_id`，逐个调用 `rpa.conn.juliang.yt.industry.content.rankings.detail`。
 列表连接器完成后必须先完成结构化落盘：`normalized/list-records.json` 保存素材本身的标题、身份、发布时间、指标、标签和列表筛选上下文；`normalized/detail-request-params.json` 保存下一步详情连接器所需的 `material_id` 与详情日期参数。详情连接器只消费后者，分析事实包消费前者和成功详情记录。
-详情阶段中断后，用相同筛选参数重新执行时，若 `raw-csv/list.csv` 已完整落盘，脚本会复用该列表文件并只补调详情，不重复调用列表连接器；变更筛选参数才会重新取列表。
+详情阶段中断后，只能以完全相同的运行契约续跑。契约包含 `shop_id`、全部列表筛选、详情日期、`targetTopN` 与 `candidateTopN`；参数不一致时，脚本会在调用 RPA 前拒绝该目录，必须新建输出目录。旧目录缺少可验证的 `run-summary.json` 时同样拒绝，不得把历史 CSV 当作本次列表。
 
 ## 运行环境要求
 
@@ -80,6 +80,13 @@ python <skill-root>/scripts/rpa_connector.py schema
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py self-test
+```
+
+只读检查已有批次的真实阶段和落盘证据：
+
+```bash
+python <skill-root>/scripts/rpa_connector.py status \
+  --output-dir "RPA数据汇总/yuntu-rankings-analysis-20260730-20260805-top5"
 ```
 
 获取列表以及最多十个入选素材的秒级详情：
@@ -132,6 +139,14 @@ python <skill-root>/scripts/rpa_connector.py retry-failed \
   --output-dir "RPA数据汇总/yuntu-rankings-analysis"
 ```
 
+## RPA 批次门禁与状态
+
+真实 RPA 运行前，先执行 `list-accounts` 并确认目标账号与 `shop_id` 对应。每次业务条件变化必须使用新的输出目录，目录名至少带日期和 TopN，例如 `yuntu-rankings-analysis-20260730-20260805-top5`。指定品牌时，必须成对传入 `--brand-scope-type SPECIFIED_BRANDS` 与单个逗号分隔的 `--brands '品牌1,品牌2,品牌3'`；不得把多个品牌拆成多个 shell 参数。
+
+`run-summary.json` 保存运行 ID、参数指纹、不可变契约、列表/详情阶段和互不混用的计数。`batch-manifest.json` 保存候选、提交、入选、拒绝和取消素材。命令运行中，`status --output-dir` 必须同时反读 `run-summary.json`、`batch-manifest.json`、`normalized/list-records.json`、`normalized/detail-request-params.json` 与 `normalized/detail-records/`；manifest 仍为 `running` 但详情文件已落盘时，应报告“详情已持久化、状态待回写”，不得重跑或覆盖目录。
+
+列表规范化后，脚本会校验首条 `list_context` 的行业、自定义日期、品牌范围、指定品牌和榜单限制是否与本次请求相符。校验失败立即停止，状态为 `list_context_mismatch`，不得调用详情、生成事实包或报告。报告前必须确认 `status == success`、`selectedCount == targetTopN`、`rejectedCount == 0`；否则按部分完成交付并说明缺口。
+
 ## CSV 主路径与规范化
 
 RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_type`、`status`、`failedInstances` 和 `files[0].fileUrl`，然后下载 CSV。`fileUrl` 只作为临时下载入口，不写入后续分析产物。直接 JSON 或 payload records 仅作为兼容路径。
@@ -147,6 +162,7 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 - `normalized/detail-records/<material_id>.json`：规范化详情 records。
 - `normalized/top-materials-rpa-ready.json`：最终可分析素材列表。
 - `batch-manifest.json`：候选、提交、入选、失败、取消素材及路径和耗时。
+- `run-summary.json`：不可变运行契约、参数指纹、状态阶段、计数和已核实产物。
 
 分析阶段只读取 `normalized/` 和 `diagnostic-analysis/`，不直接读取原始 CSV、RPA response 或临时 `fileUrl`。CSV 单元格同时兼容标准 JSON 和安全的 Python 字面量；RPA 导出的字段边缘控制字符与控制字符空行会被清理，不会被误识别为素材。无法安全解析的嵌套字段保留原文本，并在规范化产物中标记缺失原因。
 
@@ -170,7 +186,7 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 
 前五章中每项必须带有 `summary`、`evidence` 及 `material_id` 或 `material_ids`。实验矩阵每项必须包含 `priority`、`hypothesis`、`creative_variable`、`target_audience`、`success_metric`、`control` 和 `review_action`。涉及滋补、孕期、功效或健康人群的方向只能作为需业务和合规确认的测试假设。
 
-`render-report` 会拒绝缺少章节、证据、素材引用或实验字段的 JSON；它只将已验证的洞察渲染为 Markdown/HTML，不新增业务判断。
+`render-report` 会拒绝缺少章节、证据、素材引用或实验字段的 JSON；它只将已验证的洞察渲染为 Markdown/HTML，不新增业务判断。当前用户可见报告只交付两个板块：`01｜TOP 素材组合结论` 与 `02｜人群洞察`。渲染器会校验两者的模板占位符、目录锚点和最终 HTML；其余分析键保留为后续板块扩展的内部事实，不得宣称已在当前报告中交付。
 
 HTML 报告使用深棕、暖金、米白的离线视觉系统。报告正文只展示结论与必要关键数字，结构化 `evidence` 保留在 `final-report-data.json`，不进入用户可读报告正文，也不展示为可展开区域。高光帧预览必须支持点击、键盘焦点和 Escape 关闭；失败帧不输出损坏图片，素材诊断继续保留。
 
@@ -189,9 +205,9 @@ HTML 报告使用深棕、暖金、米白的离线视觉系统。报告正文只
 - `diagnostic-analysis/yuntu-analysis-data.json`：分析事实包。
 - `diagnostic-analysis/yuntu-analysis-prompt.md`：模型分析提示。
 - `diagnostic-analysis/yuntu-ai-analysis.json`：模型生成的结构化分析结论。
-- `final-report/final-report-data.json`、`final-report/final-report.md` 和 `final-report/final-report.html`：最终报告产物。
+- `final-report/final-report-data.json`、`final-report/final-report.md` 和 `final-report/final-report.html`：当前两板块报告产物。
 
-先运行 `list-accounts` 确认注入网关可用，再运行 `fetch`。若返回 404，检查注入网关是否缺少或多出平台基路径；若返回 504，保留 `batch-manifest.json` 并按网关超时排查，不要将其解释为无素材。
+先运行 `list-accounts` 确认注入网关可用，再运行 `fetch`。若返回 404，检查注入网关是否缺少或多出平台基路径；若返回 504 网关超时，保留 `run-summary.json` 和 `batch-manifest.json`，通过 `status` 交叉检查后再排查，不要将其解释为无素材。
 
 若列表请求失败或没有有效素材 ID，命令会写入清单并以非零状态退出，且不会开始详情请求。详情请求失败会被记录，后续选中素材仍会继续；只要任一详情失败，命令就以非零状态退出，同时成功的详情 JSON 文件仍可使用。
 

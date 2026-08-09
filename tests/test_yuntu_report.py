@@ -166,6 +166,20 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("附：秒级趋势洞察", markdown)
         self.assertIn("<html", html)
 
+    def test_report_template_requires_each_current_section_placeholder(self):
+        report = load_module()
+        original = (ROOT / "scripts" / "templates" / "final-report-template.html").read_text(
+            encoding="utf-8"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            template_path = Path(directory) / "template.html"
+            template_path.write_text(
+                original.replace("$audience_insights", ""), encoding="utf-8"
+            )
+            with patch.object(report, "HTML_TEMPLATE_PATH", template_path):
+                with self.assertRaisesRegex(report.YuntuReportError, "audience_insights"):
+                    report._load_html_template()
+
     def test_render_report_inlines_unified_assets_and_emits_unified_structure(self):
         report = load_module()
         fact_pack = {
@@ -415,7 +429,7 @@ class YuntuReportTests(unittest.TestCase):
                             analysis_json=path, output_dir=Path(directory) / "report"
                         )
 
-    def test_render_report_renders_only_top_material_combination(self):
+    def test_render_report_renders_the_two_current_delivery_sections(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -424,9 +438,10 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=analysis_path, output_dir=root / "report")
             markdown = (root / "report" / "final-report.md").read_text(encoding="utf-8")
             rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
-        self.assertEqual(rendered.count('class="section"'), 1)
+        self.assertEqual(rendered.count('class="section"'), 2)
         self.assertIn('class="report-nav"', rendered)
         self.assertIn('href="#top-material-combination"', rendered)
+        self.assertIn('href="#audience-insights"', rendered)
         self.assertNotIn('href="#landscape"', rendered)
         self.assertIn('</article></section>', rendered)
         self.assertNotIn('</article></div></section>', rendered)

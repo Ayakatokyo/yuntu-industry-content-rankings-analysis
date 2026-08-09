@@ -594,7 +594,7 @@ class RpaConnectorTest(unittest.TestCase):
                         )
             self.assertEqual(session.posts, [])
 
-    def test_main_prepare_analysis_passes_selected_highlight_trends(self):
+    def test_main_prepare_analysis_uses_fixed_standard_highlight_selection(self):
         connector = self.connector()
         with mock.patch.object(connector, "prepare_analysis", return_value=0) as prepare:
             status = connector.main(
@@ -602,14 +602,13 @@ class RpaConnectorTest(unittest.TestCase):
                     "prepare-analysis",
                     "--input-dir", "in",
                     "--output-dir", "out",
-                    "--highlight-trends", "点赞指数", "点击指数",
                 ]
             )
 
         self.assertEqual(status, 0)
         self.assertEqual(
             prepare.call_args.kwargs,
-            {"input_dir": "in", "output_dir": "out", "highlight_trends": ["点赞指数", "点击指数"]},
+            {"input_dir": "in", "output_dir": "out"},
         )
 
     def test_main_status_reads_local_collection_state_without_runtime_credentials(self):

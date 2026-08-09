@@ -52,11 +52,6 @@ except ImportError:
     load_verified_provenance = None
 
 try:
-    from yuntu_highlights import ALLOWED_HIGHLIGHT_TRENDS
-except ImportError:
-    ALLOWED_HIGHLIGHT_TRENDS = ()
-
-try:
     from yuntu_report import render_report
 except ImportError:
     render_report = None
@@ -736,9 +731,6 @@ def _parser():
     )
     prepare_parser.add_argument("--input-dir", required=True)
     prepare_parser.add_argument("--output-dir", required=True)
-    prepare_parser.add_argument(
-        "--highlight-trends", nargs="+", choices=ALLOWED_HIGHLIGHT_TRENDS
-    )
     attest_parser = commands.add_parser(
         "attest-analysis", help="Record the source of a model-authored analysis JSON"
     )
@@ -841,7 +833,6 @@ def main(argv=None):
             return prepare_analysis(
                 input_dir=args.input_dir,
                 output_dir=args.output_dir,
-                highlight_trends=args.highlight_trends,
             )
         if args.command == "attest-analysis":
             if attest_analysis is None:

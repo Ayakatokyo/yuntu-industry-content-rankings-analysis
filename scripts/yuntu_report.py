@@ -17,6 +17,9 @@ REPORT_SCRIPT_PATH = SKILL_ROOT / "assets" / "report" / "unified-report.js"
 CURRENT_REPORT_SECTIONS = (
     ("top_material_combination", "top-material-combination", "01｜TOP 素材组合结论"),
     ("audience_insights", "audience-insights", "02｜人群洞察"),
+    ("script_insights", "script-insights", "03｜脚本洞察"),
+    ("highlight_insights", "highlight-insights", "04｜高光画面洞察"),
+    ("material_deep_dive", "material-deep-dive", "05｜单素材深度分析"),
 )
 
 
@@ -107,7 +110,17 @@ AUDIENCE_DIMENSION_LABELS = {
 PEOPLE_TAG_OVERLAP_NOTICE = (
     "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。"
 )
+HIGHLIGHT_CATEGORY_LABELS = {
+    "portrait": "人像画面",
+    "product": "产品画面",
+    "other": "其他画面",
+}
+HIGHLIGHT_CATEGORY_ORDER = tuple(HIGHLIGHT_CATEGORY_LABELS)
+SECOND_LEVEL_TRENDS = ("点赞指数", "流失指数", "点击指数", "互动指数", "评论指数")
 AUDIT_JSON_PATTERN = re.compile(r'(?:\[\s*)?\{\s*"[^"\n]+"\s*:')
+DEEP_DIVE_FORBIDDEN_CLAIM = re.compile(
+    r"脚本|话术|内容公式|真实(?:点击|互动|点赞|评论)(?:量|次数)?|转化|因果|导致"
+)
 
 
 def _load_analysis(path):
@@ -148,6 +161,12 @@ def _validate_summary(value, field):
         or AUDIT_JSON_PATTERN.search(value)
     ):
         raise YuntuReportError(f"{field} must not contain audit evidence")
+
+
+def _validate_deep_dive_text(value, field):
+    _validate_summary(value, field)
+    if DEEP_DIVE_FORBIDDEN_CLAIM.search(value):
+        raise YuntuReportError(f"{field} must not contain scripts, counts, conversion, or causal claims")
 
 
 def _validate_evidence_and_material_ids(item, field):
@@ -276,7 +295,7 @@ def _markdown_value(value):
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-def _render_markdown(analysis, audience_dashboard=None):
+def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
     lines = ["# 云图行业内容榜单分析报告", ""]
     combination = analysis["topMaterialCombination"]
     overall = {
@@ -348,6 +367,69 @@ def _render_markdown(analysis, audience_dashboard=None):
             if unlabeled_count:
                 lines.append(f"- 未识别到该维度标签：{unlabeled_count} 条素材（不计入饼图归一化分母）")
             lines.append("")
+    lines.extend([
+        "## 03｜脚本洞察",
+        "",
+        "**脚本数据：未接入**",
+        "",
+        "本次云图 RPA 未提供可用于汇总的脚本正文与时间戳段落；本部分暂不输出话术、内容公式或帧-话术对应关系。",
+        "",
+        "## 04｜高光画面洞察",
+        "",
+        "每条素材保留第 0 秒封面帧，并从点击指数局部峰值中按点击值降序、秒数升序取最多 5 帧。",
+        "",
+    ])
+    successful_frames = _available_highlight_frames(fact_pack or {})
+    dashboard = analysis.get("highlightDashboard")
+    if not successful_frames:
+        reason = _highlight_failure_reasons(fact_pack or {})
+        lines.extend(["暂无可用高光帧。" + (f" 原因：{reason}。" if reason else ""), ""])
+    elif not isinstance(dashboard, dict):
+        lines.extend(["高光帧已生成，尚未完成视觉分类，因此不输出视觉洞察。", ""])
+    else:
+        frames_by_ref = {frame["frame_ref"]: frame for frame in successful_frames}
+        for group in dashboard["groups"]:
+            lines.extend([f"### {HIGHLIGHT_CATEGORY_LABELS[group['category']]}", ""])
+            for pattern in group["common_patterns"]:
+                lines.extend([f"- {pattern}", ""])
+            for frame_ref in group["frame_refs"]:
+                frame = frames_by_ref[frame_ref]
+                frame_label = "封面帧" if frame["frame_type"] == "cover" else f"点击 Top{frame.get('peak_rank')} 峰值帧"
+                value = "-" if frame.get("click_value") is None else str(frame["click_value"])
+                lines.append(
+                    f"- #{frame.get('rank', '-')}｜{frame.get('title', frame['material_id'])}｜{frame_label}｜{frame.get('second')}s｜点击指数 {value}"
+                )
+            lines.append("")
+            for direction in group["derivative_directions"]:
+                lines.extend([f"- {direction['title']}：{direction['body']}", ""])
+    lines.extend(["## 05｜单素材深度分析", ""])
+    deep_dives = analysis.get("materialDeepDives", [])
+    facts = {
+        str(fact.get("material_id")): fact
+        for fact in (fact_pack or {}).get("materialFacts", [])
+        if isinstance(fact, dict) and fact.get("material_id")
+    }
+    if not isinstance(deep_dives, list) or not deep_dives:
+        lines.extend(["暂无单素材深度分析数据。", ""])
+    else:
+        for dive in deep_dives:
+            fact = facts.get(str(dive.get("material_id")), {})
+            title = fact.get("title") or dive.get("material_id")
+            lines.extend([f"### #{fact.get('rank', '-')}｜{title}", "", "#### 高光帧观察", ""])
+            for observation in dive.get("frame_observations", []):
+                lines.extend([f"- {observation.get('frame_ref')}：{observation.get('observation')}", ""])
+            lines.extend(["#### 画面总结", "", str(dive.get("visual_summary", "")), "", "#### 秒级拆解", ""])
+            observations = {item.get("trend_name"): item for item in dive.get("second_level_observations", []) if isinstance(item, dict)}
+            breakdown = fact.get("secondLevelBreakdown", {}) if isinstance(fact, dict) else {}
+            metrics = {item.get("trend_name"): item for item in breakdown.get("metrics", []) if isinstance(item, dict)}
+            for trend_name in SECOND_LEVEL_TRENDS:
+                metric = metrics.get(trend_name, {})
+                if not metric.get("available"):
+                    lines.extend([f"- {trend_name}：不可用（{metric.get('missing_reason') or '数据不足'}）", ""])
+                elif trend_name in observations:
+                    lines.extend([f"- {trend_name}：{observations[trend_name].get('summary')}", ""])
+                else:
+                    lines.extend([f"- {trend_name}：未输出观察。", ""])
     return "\n".join(lines)
 
 
@@ -358,6 +440,213 @@ def _material_frames(fact_pack):
         if isinstance(material_id, str):
             frames[material_id] = fact.get("highlightFrames", [])
     return frames
+
+
+def _available_highlight_frames(fact_pack):
+    frames = []
+    material_facts = fact_pack.get("materialFacts", []) if isinstance(fact_pack, dict) else []
+    for fact in material_facts:
+        if not isinstance(fact, dict):
+            continue
+        material_id = str(fact.get("material_id") or "")
+        for frame in fact.get("highlightFrames", []):
+            if not isinstance(frame, dict) or not frame.get("available"):
+                continue
+            second = frame.get("second")
+            frame_type = frame.get("frame_type") or (
+                "cover" if frame.get("is_cover") else "click_peak"
+            )
+            frame_ref = frame.get("frame_ref") or f"highlight:{material_id}:{frame_type}:{second}"
+            frames.append(
+                {
+                    **frame,
+                    "material_id": material_id,
+                    "rank": fact.get("rank"),
+                    "title": fact.get("title", material_id),
+                    "frame_type": frame_type,
+                    "frame_ref": frame_ref,
+                }
+            )
+    return frames
+
+
+def _has_standard_highlight_contract(fact_pack):
+    material_facts = fact_pack.get("materialFacts", []) if isinstance(fact_pack, dict) else []
+    successful_frames = [
+        frame
+        for fact in material_facts
+        if isinstance(fact, dict)
+        for frame in fact.get("highlightFrames", [])
+        if isinstance(frame, dict) and frame.get("available")
+    ]
+    return bool(successful_frames) and all(
+        isinstance(frame.get("frame_ref"), str)
+        and frame.get("frame_type") in {"cover", "click_peak"}
+        for frame in successful_frames
+    )
+
+
+def _highlight_failure_reasons(fact_pack):
+    material_facts = fact_pack.get("materialFacts", []) if isinstance(fact_pack, dict) else []
+    reasons = {
+        str(frame.get("failure_reason"))
+        for fact in material_facts
+        if isinstance(fact, dict)
+        for frame in fact.get("highlightFrames", [])
+        if isinstance(frame, dict) and frame.get("failure_reason")
+    }
+    return "、".join(sorted(reasons))
+
+
+def _validate_highlight_dashboard(analysis, fact_pack):
+    successful_frames = _available_highlight_frames(fact_pack)
+    dashboard = analysis.get("highlightDashboard")
+    if not successful_frames:
+        return
+    if not isinstance(dashboard, dict):
+        if _has_standard_highlight_contract(fact_pack):
+            raise YuntuReportError(
+                "highlightDashboard is required when standard highlight frames are available"
+            )
+        # Historical reports may be re-rendered before visual analysis exists.
+        return
+    groups = dashboard.get("groups")
+    if not isinstance(groups, list):
+        raise YuntuReportError("highlightDashboard.groups must be a list")
+    known_refs = {frame["frame_ref"] for frame in successful_frames}
+    actual_refs = []
+    categories = []
+    for group in groups:
+        if not isinstance(group, dict):
+            raise YuntuReportError("highlightDashboard.groups items must be objects")
+        category = group.get("category")
+        if category not in HIGHLIGHT_CATEGORY_ORDER:
+            raise YuntuReportError("highlightDashboard category is invalid")
+        categories.append(category)
+        frame_refs = group.get("frame_refs")
+        if not isinstance(frame_refs, list) or not frame_refs or not all(
+            isinstance(frame_ref, str) for frame_ref in frame_refs
+        ):
+            raise YuntuReportError("highlightDashboard groups require frame_refs")
+        patterns = group.get("common_patterns")
+        if not isinstance(patterns, list) or not patterns or not all(
+            isinstance(pattern, str) and pattern.strip() for pattern in patterns
+        ):
+            raise YuntuReportError("highlightDashboard groups require common_patterns")
+        directions = group.get("derivative_directions")
+        if not isinstance(directions, list):
+            raise YuntuReportError("highlightDashboard groups require derivative_directions")
+        for direction in directions:
+            if not isinstance(direction, dict):
+                raise YuntuReportError("highlightDashboard derivative directions must be objects")
+            if not all(
+                isinstance(direction.get(key), str) and direction[key].strip()
+                for key in ("title", "body")
+            ):
+                raise YuntuReportError("highlightDashboard derivative directions require title and body")
+            direction_refs = direction.get("frame_refs")
+            if not isinstance(direction_refs, list) or not direction_refs or not set(direction_refs).issubset(set(frame_refs)):
+                raise YuntuReportError("highlightDashboard derivative directions must reference their group")
+        actual_refs.extend(frame_refs)
+    expected_categories = [
+        category for category in HIGHLIGHT_CATEGORY_ORDER if category in categories
+    ]
+    if categories != expected_categories:
+        raise YuntuReportError("highlightDashboard groups must use portrait, product, other order")
+    if len(actual_refs) != len(set(actual_refs)) or set(actual_refs) != known_refs:
+        raise YuntuReportError("highlightDashboard must classify each successful frame exactly once")
+
+
+def _has_second_level_breakdown_contract(fact_pack):
+    material_facts = fact_pack.get("materialFacts", []) if isinstance(fact_pack, dict) else []
+    return any(
+        isinstance(fact, dict) and "secondLevelBreakdown" in fact
+        for fact in material_facts
+    )
+
+
+def _selected_material_ids(fact_pack):
+    selected = fact_pack.get("selectedMaterials", []) if isinstance(fact_pack, dict) else []
+    ids = [str(item.get("material_id")) for item in selected if isinstance(item, dict) and item.get("material_id")]
+    if ids:
+        return ids
+    return [
+        str(fact.get("material_id"))
+        for fact in fact_pack.get("materialFacts", [])
+        if isinstance(fact, dict) and fact.get("material_id")
+    ]
+
+
+def _validate_material_deep_dives(analysis, fact_pack):
+    """Validate new 05 evidence without making historical packs non-renderable."""
+    if not _has_second_level_breakdown_contract(fact_pack):
+        return
+    facts = {
+        str(fact.get("material_id")): fact
+        for fact in fact_pack.get("materialFacts", [])
+        if isinstance(fact, dict) and fact.get("material_id")
+    }
+    selected_ids = _selected_material_ids(fact_pack)
+    if any("secondLevelBreakdown" not in facts.get(material_id, {}) for material_id in selected_ids):
+        raise YuntuReportError("secondLevelBreakdown is required for each selected material")
+    deep_dives = analysis.get("materialDeepDives")
+    if not isinstance(deep_dives, list) or len(deep_dives) != len(selected_ids):
+        raise YuntuReportError("materialDeepDives must contain exactly one item per selected material")
+    dives_by_id = {}
+    for dive in deep_dives:
+        if not isinstance(dive, dict) or not isinstance(dive.get("material_id"), str):
+            raise YuntuReportError("materialDeepDives items must include material_id")
+        material_id = dive["material_id"]
+        if material_id not in selected_ids or material_id in dives_by_id:
+            raise YuntuReportError("materialDeepDives material_id must be selected and unique")
+        dives_by_id[material_id] = dive
+        _validate_deep_dive_text(dive.get("visual_summary"), "materialDeepDives visual_summary")
+
+        frames = [
+            frame for frame in facts[material_id].get("highlightFrames", [])
+            if isinstance(frame, dict) and frame.get("available")
+        ]
+        known_refs = {frame.get("frame_ref") for frame in frames if isinstance(frame.get("frame_ref"), str)}
+        observations = dive.get("frame_observations")
+        if not isinstance(observations, list):
+            raise YuntuReportError("materialDeepDives frame_observations must be a list")
+        observation_refs = []
+        for observation in observations:
+            if not isinstance(observation, dict) or not isinstance(observation.get("frame_ref"), str):
+                raise YuntuReportError("materialDeepDives frame_observations must include frame_ref")
+            _validate_deep_dive_text(observation.get("observation"), "materialDeepDives frame observation")
+            observation_refs.append(observation["frame_ref"])
+        if len(observation_refs) != len(set(observation_refs)) or set(observation_refs) != known_refs:
+            raise YuntuReportError("materialDeepDives must observe each successful frame exactly once")
+
+        breakdown = facts[material_id].get("secondLevelBreakdown", {})
+        metrics = breakdown.get("metrics", []) if isinstance(breakdown, dict) else []
+        points_by_trend = {
+            metric.get("trend_name"): {
+                point.get("second") for point in metric.get("points", [])
+                if isinstance(point, dict) and isinstance(point.get("second"), int)
+            }
+            for metric in metrics if isinstance(metric, dict)
+        }
+        observations = dive.get("second_level_observations")
+        if not isinstance(observations, list):
+            raise YuntuReportError("materialDeepDives second_level_observations must be a list")
+        seen_trends = set()
+        for observation in observations:
+            if not isinstance(observation, dict):
+                raise YuntuReportError("materialDeepDives second_level_observations items must be objects")
+            trend_name = observation.get("trend_name")
+            if trend_name not in SECOND_LEVEL_TRENDS or trend_name in seen_trends:
+                raise YuntuReportError("materialDeepDives second_level_observations trend_name is invalid")
+            seen_trends.add(trend_name)
+            _validate_deep_dive_text(observation.get("summary"), "materialDeepDives second-level summary")
+            seconds = observation.get("evidence_seconds")
+            if not isinstance(seconds, list) or not all(isinstance(second, int) for second in seconds):
+                raise YuntuReportError("materialDeepDives evidence_seconds must be integer seconds")
+            if not set(seconds).issubset(points_by_trend.get(trend_name, set())):
+                raise YuntuReportError("materialDeepDives evidence_seconds must exist in the material trend")
+    if set(dives_by_id) != set(selected_ids):
+        raise YuntuReportError("materialDeepDives must cover every selected material")
 
 
 METRIC_LABELS = {
@@ -381,6 +670,12 @@ def _format_metric(value, key):
     if key == "play_duration_avg":
         return f"{value:.1f}s"
     return f"{value * 100:.2f}%"
+
+
+def _format_index_value(value):
+    if not isinstance(value, (int, float)):
+        return "-"
+    return f"{value:.2f}"
 
 
 def _generic_text(value):
@@ -677,6 +972,183 @@ def _render_html(analysis, material_frames, fact_pack):
             )
     frame_options = "".join(f'<option value="{esc(str(item.get("material_id")))}">#{esc(item.get("rank", "-"))} {esc(facts.get(str(item.get("material_id")), {}).get("title", item.get("material_id"))[:18])}</option>' for item in selected)
 
+    def highlight_frame_label(frame):
+        if frame.get("frame_type") == "cover":
+            return "封面帧"
+        return f"点击 Top{frame.get('peak_rank')} 峰值帧"
+
+    def highlight_insights_cards():
+        successful_frames = _available_highlight_frames(fact_pack)
+        if not successful_frames:
+            reason = _highlight_failure_reasons(fact_pack)
+            detail = f"（{esc(reason)}）" if reason else ""
+            return '<p class="data-note">暂无可用高光帧' + detail + "。</p>"
+        dashboard = analysis.get("highlightDashboard")
+        if not isinstance(dashboard, dict):
+            return '<p class="data-note">高光帧已生成，尚未完成视觉分类，因此不输出视觉洞察。</p>'
+        frames_by_ref = {frame["frame_ref"]: frame for frame in successful_frames}
+        groups = []
+        for group in dashboard["groups"]:
+            frame_cards = []
+            for frame_ref in group["frame_refs"]:
+                frame = frames_by_ref[frame_ref]
+                click_value = frame.get("click_value")
+                click_text = f"点击指数 {_format_index_value(click_value)}"
+                caption = (
+                    f"#{esc(frame.get('rank', '-'))} · {esc(frame.get('title', frame['material_id']))} · "
+                    f"{highlight_frame_label(frame)} · {esc(frame.get('second'))}s · {click_text}"
+                )
+                frame_cards.append(
+                    '<article class="highlight-frame-card"><button class="highlight-frame-button" type="button" '
+                    + f'data-highlight-src="{html.escape(image_src(frame), quote=True)}" '
+                    + f'data-highlight-caption="{html.escape(caption, quote=True)}" '
+                    + 'aria-label="查看高光帧大图">'
+                    + f'<img loading="lazy" src="{html.escape(image_src(frame), quote=True)}" alt="{esc(caption)}"></button>'
+                    + f'<p>{esc(caption)}</p></article>'
+                )
+            patterns = "".join(f"<li>{esc(pattern)}</li>" for pattern in group["common_patterns"])
+            directions = "".join(
+                f'<article class="highlight-direction"><h4>{esc(direction["title"])}</h4><p>{esc(direction["body"])}</p></article>'
+                for direction in group["derivative_directions"]
+            )
+            groups.append(
+                '<article class="highlight-category"><h3>'
+                + HIGHLIGHT_CATEGORY_LABELS[group["category"]]
+                + '</h3><div class="highlight-summary"><h4>共性洞察</h4><ul>'
+                + patterns
+                + '</ul></div><div class="highlight-directions">'
+                + directions
+                + '</div><div class="highlight-frame-grid">'
+                + "".join(frame_cards)
+                + "</div></article>"
+            )
+        return '<p class="data-note">每条素材保留第 0 秒封面帧，并从点击指数局部峰值中按点击值降序、秒数升序取最多 5 帧。</p>' + "".join(groups)
+
+    def deep_frame_label(frame):
+        labels = ["封面帧" if frame.get("frame_type") == "cover" else f"点击 Top{frame.get('peak_rank')} 峰值帧"]
+        if frame.get("frame_type") == "cover" and frame.get("peak_rank"):
+            labels.append(f"点击 Top{frame['peak_rank']} 峰值")
+        return "｜".join(labels)
+
+    def second_level_timeline(metrics):
+        ordered_metrics = []
+        metrics_by_name = {metric.get("trend_name"): metric for metric in metrics if isinstance(metric, dict)}
+        for trend_name in SECOND_LEVEL_TRENDS:
+            metric = metrics_by_name.get(trend_name, {"trend_name": trend_name, "available": False, "missing_reason": "趋势未返回"})
+            ordered_metrics.append({
+                "trend_name": trend_name,
+                "available": bool(metric.get("available")),
+                "missing_reason": str(metric.get("missing_reason") or "该指标暂无可用秒级数据"),
+                "points": [
+                    {"second": point.get("second"), "value": point.get("value")}
+                    for point in metric.get("points", [])
+                    if isinstance(point, dict) and isinstance(point.get("second"), int) and isinstance(point.get("value"), (int, float))
+                ],
+                "high_points": [item for item in metric.get("high_points", []) if isinstance(item, dict)],
+                "loss_points": [item for item in metric.get("loss_points", []) if isinstance(item, dict)],
+            })
+        buttons = "".join(
+            '<button type="button" data-second-level-metric="' + esc(metric["trend_name"])
+            + '" aria-pressed="false">' + esc(metric["trend_name"]) + "</button>"
+            for metric in ordered_metrics
+        )
+        payload = html.escape(json.dumps(ordered_metrics, ensure_ascii=False), quote=True)
+        return (
+            '<div class="second-level-timeline" data-second-level-timeline data-second-level-metrics="' + payload + '">'
+            + '<div class="second-level-switcher" role="group" aria-label="秒级拆解指标">' + buttons + "</div>"
+            + '<div class="second-level-chart-mount" aria-live="polite"></div>'
+            + '<label class="second-level-range-control">查看时长 <input type="range" min="20" max="100" value="100" step="10" data-second-level-range></label>'
+            + '<p class="second-level-peak-note" data-second-level-peak></p></div>'
+        )
+
+    def material_deep_dive_cards():
+        deep_dives = analysis.get("materialDeepDives")
+        if not isinstance(deep_dives, list) or not deep_dives:
+            return '<p class="data-note">暂无单素材深度分析数据。</p>'
+        dives_by_id = {str(dive.get("material_id")): dive for dive in deep_dives}
+        ordered_ids = [material_id for material_id in _selected_material_ids(fact_pack) if material_id in dives_by_id]
+        default_id = ordered_ids[0] if ordered_ids else str(deep_dives[0].get("material_id"))
+        tabs, panels = [], []
+        for index, material_id in enumerate(ordered_ids):
+            fact = facts.get(material_id, {})
+            dive = dives_by_id[material_id]
+            title = fact.get("title") or material_id
+            selected_tab = material_id == default_id
+            tabs.append(
+                '<button class="material-deep-tab" type="button" role="tab" id="material-deep-tab-'
+                + str(index) + '" aria-controls="material-deep-panel-' + str(index) + '" aria-selected="'
+                + str(selected_tab).lower() + '" tabindex="' + ("0" if selected_tab else "-1")
+                + '" data-material-tab data-material-target="material-deep-panel-' + str(index) + '">#'
+                + esc(fact.get("rank", "-")) + " " + esc(title) + "</button>"
+            )
+            observations = {item.get("frame_ref"): item.get("observation") for item in dive.get("frame_observations", []) if isinstance(item, dict)}
+            frame_cards = []
+            all_frames = [frame for frame in material_frames.get(material_id, []) if isinstance(frame, dict)]
+            frames = sorted(
+                [frame for frame in all_frames if frame.get("available") and str(frame.get("relative_path", "")).endswith(".jpg")],
+                key=lambda frame: (frame.get("second", 0), 0 if frame.get("frame_type") == "cover" else 1),
+            )
+            for frame in frames:
+                caption = f"{deep_frame_label(frame)}｜{frame.get('second')}s"
+                if frame.get("click_value") is not None:
+                    caption += f"｜点击指数 {_format_index_value(frame['click_value'])}"
+                frame_cards.append(
+                    '<figure class="deep-frame-card"><button class="highlight-frame-button" type="button" data-highlight-src="'
+                    + html.escape(image_src(frame), quote=True) + '" data-highlight-caption="'
+                    + html.escape(caption, quote=True) + '" aria-label="查看 ' + esc(caption) + '"><img loading="lazy" src="'
+                    + html.escape(image_src(frame), quote=True) + '" alt="' + esc(title + " " + caption) + '"></button><figcaption>'
+                    + esc(caption) + "</figcaption></figure>"
+                )
+            breakdown = fact.get("secondLevelBreakdown", {})
+            metrics = breakdown.get("metrics", []) if isinstance(breakdown, dict) else []
+            metric_by_name = {metric.get("trend_name"): metric for metric in metrics if isinstance(metric, dict)}
+            second_observations = {item.get("trend_name"): item.get("summary") for item in dive.get("second_level_observations", []) if isinstance(item, dict)}
+            failed_reasons = []
+            for frame in all_frames:
+                if frame.get("available"):
+                    continue
+                reason = frame.get("failure_reason") or frame.get("missing_reason") or frame.get("reason")
+                if reason and str(reason) not in failed_reasons:
+                    failed_reasons.append(str(reason))
+            frame_coverage = "高光帧可用：" + str(len(frames)) + "/" + str(len(all_frames))
+            if failed_reasons:
+                frame_coverage += "；" + "；".join(failed_reasons)
+            frame_observations = "".join(
+                '<li><strong>' + esc(deep_frame_label(frame)) + "｜" + esc(frame.get("second")) + "s：</strong>"
+                + esc(observations.get(frame.get("frame_ref"), "未输出观察。")) + "</li>"
+                for frame in frames
+            ) or "<li>暂无可用于观察的高光帧。</li>"
+            summaries = "".join(
+                '<p><strong>' + esc(trend_name) + '：</strong>' + esc(second_observations.get(trend_name, "未输出观察。")) + "</p>"
+                for trend_name in SECOND_LEVEL_TRENDS
+                if metric_by_name.get(trend_name, {}).get("available")
+            )
+            metric_summary = "".join(
+                '<li><span>' + esc(METRIC_LABELS[key]) + '</span><b>' + esc(_format_metric(fact.get("metrics", {}).get(key), key)) + '</b></li>'
+                for key in ("show_cnt", "ctr", "cvr", "play_3s_rate", "interact_rate")
+                if key in fact.get("metrics", {})
+            )
+            panels.append(
+                '<article class="material-deep-panel material-card" role="tabpanel" id="material-deep-panel-' + str(index)
+                + '" aria-labelledby="material-deep-tab-' + str(index) + '"' + ("" if selected_tab else " hidden") + '><header class="material-deep-header material-head"><span>#'
+                + esc(fact.get("rank", "-")) + '</span><h3>' + esc(title) + '</h3><p class="material-deep-id">素材 ID：' + esc(material_id) + '</p></header><ul class="material-deep-metrics">'
+                + metric_summary + '</ul><div class="deep-visual-strip"><div class="deep-frame-grid fixed-six">'
+                + "".join(frame_cards) + '</div><p class="deep-frame-coverage">' + esc(frame_coverage)
+                + '</p></div><div class="deep-frame-observations"><h4>高光帧观察</h4><ul>' + frame_observations
+                + '</ul></div><div class="deep-visual-summary"><h4>画面总结</h4><p>' + esc(dive.get("visual_summary", ""))
+                + '</p></div><div class="second-level-section"><h4>秒级拆解</h4>' + second_level_timeline(metrics)
+                + '<div class="second-level-observations">' + summaries + '</div></div></article>'
+            )
+        return '<div class="material-deep-layout side-tabs"><div class="material-deep-tab-list" role="tablist" aria-label="单素材深度分析">' + "".join(tabs) + '</div><div class="material-deep-panels">' + "".join(panels) + "</div></div>"
+
+    script_insights = (
+        '<div class="data-state"><span>脚本数据：未接入</span><p>'
+        '本次云图 RPA 未提供可用于汇总的脚本正文与时间戳段落；本部分暂不输出话术、内容公式或帧-话术对应关系。'
+        "</p></div>"
+    )
+    highlight_insights = highlight_insights_cards()
+    material_deep_dive = material_deep_dive_cards()
+
     landscape = insight_cards(analysis.get("rankingOverview", []))
     top_material_combination = top_material_combination_cards(
         analysis["topMaterialCombination"]
@@ -714,6 +1186,18 @@ def _render_html(analysis, material_frames, fact_pack):
     style += """
 .audience-chart-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.chart-card{container-type:inline-size;border:1px solid var(--line);border-radius:8px;background:#fff;padding:16px}.chart-card h3{font-size:18px;margin:0 0 12px}.audience-chart{min-width:0}.audience-chart-age,.audience-chart-gender{display:flex;flex-direction:column}.audience-chart-crowd{grid-column:1/-1}.audience-pie-layout{display:grid;grid-template-columns:minmax(0,45fr) minmax(0,55fr);flex:1;min-height:0;gap:14px;align-items:center}.pie-chart{position:relative;width:min(260px,100%);aspect-ratio:1;border-radius:50%;display:block;justify-self:center;background:conic-gradient(var(--accent) 0deg,var(--accent) 360deg);box-shadow:0 0 0 1px rgba(82,45,24,.1);cursor:default}.audience-chart-gender .pie-chart{width:min(240px,100%)}.chart-tooltip{position:absolute;z-index:2;left:50%;bottom:calc(100% + 10px);min-width:150px;transform:translateX(-50%);opacity:0;pointer-events:none;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,.96);box-shadow:0 14px 34px rgba(43,23,12,.16);color:var(--ink);font-size:13px;line-height:1.5;transition:opacity .15s ease}.chart-tooltip b{display:block;margin-bottom:4px}.chart-tooltip span{display:block}.chart-tooltip.is-visible,.audience-column-item:hover .chart-tooltip,.audience-column-item:focus .chart-tooltip{opacity:1}.pie-legend{display:grid;gap:8px;margin:0;padding:0;list-style:none}.pie-legend .legend-item{position:relative;display:grid;grid-template-columns:minmax(80px,1fr) auto auto;gap:8px;align-items:center;color:var(--muted);font-size:14px;padding:0;border:0;font-variant-numeric:tabular-nums}.pie-legend .legend-label{display:flex;align-items:center;gap:8px;min-width:0;overflow:visible;white-space:normal;overflow-wrap:anywhere}.legend-swatch{display:block;flex:0 0 12px;width:12px;height:12px;border-radius:3px}.legend-count,.legend-share{white-space:nowrap;text-align:right}.audience-column-chart{position:relative;min-height:300px;display:grid;grid-template-columns:48px minmax(0,1fr);gap:12px;padding-top:8px}.audience-column-y-axis{display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;padding-bottom:42px;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}.audience-column-plot{position:relative;display:grid;align-items:end;gap:12px;min-width:0;padding:0 8px 42px;border-bottom:1px solid rgba(82,45,24,.22);background:repeating-linear-gradient(to top,transparent 0,transparent 72px,rgba(82,45,24,.11) 73px)}.audience-column-item{position:relative;min-width:0;height:230px;display:flex;align-items:end;justify-content:center;outline:0}.audience-column-item:focus-visible{outline:3px solid var(--focus);outline-offset:2px}.audience-column-bar{width:min(64px,72%);min-height:4px;border-radius:8px 8px 0 0;cursor:default}.audience-column-label{position:absolute;left:50%;bottom:-34px;width:76px;transform:translateX(-50%);color:var(--muted);font-size:13px;line-height:1.25;text-align:center;word-break:break-word}.audience-column-item .chart-tooltip{bottom:calc(100% + 10px)}@container (max-width:360px){.audience-pie-layout{grid-template-columns:1fr}.audience-chart .pie-chart,.audience-chart-gender .pie-chart{width:min(240px,100%)!important;height:auto!important;flex-basis:auto!important}.pie-legend{width:100%}}@media(max-width:760px){.audience-chart-grid{grid-template-columns:1fr}.audience-chart-crowd{grid-column:auto}}@media(max-width:560px){.audience-pie-layout{grid-template-columns:1fr}.audience-chart .pie-chart,.audience-chart-gender .pie-chart{width:min(240px,100%)!important;height:auto!important;flex-basis:auto!important}.audience-column-chart{grid-template-columns:38px minmax(0,1fr);gap:8px}.audience-column-y-axis{font-size:11px}.audience-column-plot{gap:4px;padding-inline:2px}.audience-column-label{width:44px;font-size:11px}.audience-column-bar{width:78%}}
 """
+    style += """
+.data-state{border-left:3px solid var(--accent);padding:16px 18px;background:#fbf0df}.data-state span{color:var(--accent-dark);font-size:.82rem;font-weight:700}.data-state p{max-width:70ch;margin:8px 0 0}.highlight-category{border-top:1px solid var(--line);margin-top:24px;padding-top:22px}.highlight-category h3{font-size:1.12rem;margin:0 0 14px}.highlight-category h4{font-size:.9rem;margin:0 0 8px}.highlight-summary ul{margin:0;padding-left:20px}.highlight-directions{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:16px}.highlight-direction{border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:12px}.highlight-direction p{margin:6px 0 0;color:var(--muted);font-size:.875rem}.highlight-frame-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:18px}.highlight-frame-card{margin:0;min-width:0}.highlight-frame-button{display:block;width:100%;border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:4px;cursor:zoom-in}.highlight-frame-button:hover{border-color:var(--accent-dark)}.highlight-frame-button img{display:block;width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:3px}.highlight-frame-card p{margin:6px 0 0;color:var(--muted);font-size:.75rem;line-height:1.45}.highlight-lightbox{position:relative;border:0;border-radius:8px;padding:10px;max-width:min(720px,92vw);background:var(--surface)}.highlight-lightbox::backdrop{background:rgba(13,7,4,.88)}.highlight-lightbox img{display:block;max-width:min(680px,88vw);max-height:80vh}.highlight-lightbox p{margin:7px 2px 0;color:var(--muted);font-size:.8125rem}.highlight-lightbox button{position:absolute;right:12px;top:12px;border:0;border-radius:4px;background:var(--ink);color:#fff;padding:6px 9px;cursor:pointer}@media(max-width:560px){.highlight-frame-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+"""
+    style += """
+.material-deep-tabs{display:flex;gap:0;overflow-x:auto;border-bottom:1px solid var(--line);padding:0 2px}.material-deep-tab{position:relative;flex:0 0 auto;min-height:42px;border:0;border-radius:0;background:transparent;color:var(--muted);padding:8px 14px;cursor:pointer;white-space:nowrap}.material-deep-tab[aria-selected=\"true\"]{color:var(--accent-dark);font-weight:700}.material-deep-tab[aria-selected=\"true\"]::after{position:absolute;right:12px;bottom:-1px;left:12px;height:2px;background:var(--accent-dark);content:\"\"}.material-deep-panel[hidden]{display:none!important}.material-deep-panels{padding-top:18px}.material-deep-header{display:flex;align-items:baseline;gap:10px;border-left:2px solid var(--accent);padding-left:12px}.material-deep-header span{color:var(--accent-dark);font-weight:800}.material-deep-header h3{margin:0;font-size:1.1rem}.material-deep-id{margin:10px 0 0;color:var(--muted);font-size:.78rem}.material-deep-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:12px 0 0;padding:0;list-style:none}.material-deep-metrics li{min-width:0;border-top:1px solid var(--line);padding-top:6px}.material-deep-metrics span,.material-deep-metrics b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.material-deep-metrics span{color:var(--muted);font-size:.7rem}.material-deep-metrics b{font-size:.85rem}.material-deep-panel>h4,.deep-visual-summary h4,.second-level-section>h4{font-size:.95rem;margin:24px 0 10px}.deep-frame-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.deep-frame-card{min-width:0}.deep-frame-card p{margin:6px 0 0;font-size:.78rem;line-height:1.45}.deep-frame-meta{color:var(--muted)}.deep-frame-observation{color:var(--ink)}.deep-visual-summary{border-top:1px solid var(--line);margin-top:22px;padding-top:2px}.deep-visual-summary p{margin:0;max-width:76ch}.second-level-section{border-top:1px solid var(--line);margin-top:22px}.second-level-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.second-level-chart{min-width:0;border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:10px}.second-level-chart h4{margin:0 0 8px;font-size:.875rem}.second-level-chart svg{display:block;width:100%;height:auto}.second-level-axis{stroke:#c6ad95;stroke-width:1}.second-level-line{fill:none;stroke:var(--accent-dark);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}.second-level-range.high{fill:rgba(215,154,75,.18)}.second-level-range.loss{fill:rgba(161,79,56,.16)}.second-level-chart text{fill:var(--muted);font-size:10px}.second-level-chart.is-unavailable{display:grid;align-content:start;min-height:122px}.second-level-chart.is-unavailable p{margin:0;color:var(--muted);font-size:.8125rem}.second-level-observations{margin-top:14px}.second-level-observations p{margin:7px 0;font-size:.875rem}@media(max-width:650px){.deep-frame-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.second-level-grid{grid-template-columns:1fr}.material-deep-tab{padding-inline:10px}.material-deep-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:390px){.deep-frame-grid{grid-template-columns:1fr}}
+"""
+    style += """
+.material-deep-layout.side-tabs{display:grid;grid-template-columns:220px minmax(0,1fr);gap:24px;align-items:start}.material-deep-tab-list{position:sticky;top:18px;display:grid;gap:4px;border-right:1px solid var(--line);padding-right:12px}.material-deep-tab{width:100%;min-height:44px;border:0;border-left:2px solid transparent;background:transparent;color:var(--muted);padding:8px 10px;text-align:left;cursor:pointer}.material-deep-tab:hover{color:var(--accent-dark)}.material-deep-tab[aria-selected=\"true\"]{border-left-color:var(--accent-dark);background:#f7e6cb;color:var(--accent-dark);font-weight:700}.material-deep-tab[aria-selected=\"true\"]::after{display:none}.material-deep-panel[hidden]{display:none!important}.material-deep-panels{padding-top:0}.deep-visual-strip{margin-top:22px}.deep-frame-grid.fixed-six{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.deep-frame-card{min-width:0;margin:0}.deep-frame-card .highlight-frame-button{width:100%;border:1px solid var(--line);border-radius:5px;background:var(--surface);padding:4px;cursor:zoom-in}.deep-frame-card .highlight-frame-button:hover{border-color:var(--accent-dark)}.deep-frame-card img{display:block;width:100%;aspect-ratio:9/16;object-fit:contain;background:#1d120c;border-radius:2px}.deep-frame-card figcaption{margin-top:6px;color:var(--muted);font-size:.72rem;line-height:1.35}.deep-frame-coverage{margin:10px 0 0;color:var(--muted);font-size:.78rem}.deep-frame-observations{border-top:1px solid var(--line);margin-top:22px;padding-top:2px}.deep-frame-observations h4{font-size:.95rem;margin:14px 0 10px}.deep-frame-observations ul{margin:0;padding-left:20px}.deep-frame-observations li{margin:6px 0}.second-level-timeline{border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:14px}.second-level-switcher{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}.second-level-switcher button{min-height:34px;border:1px solid var(--line);border-radius:4px;background:transparent;color:var(--muted);padding:5px 8px;cursor:pointer;font-size:.8rem}.second-level-switcher button[aria-pressed=\"true\"]{border-color:var(--accent-dark);background:#f7e6cb;color:var(--accent-dark);font-weight:700}.second-level-chart-mount{min-height:276px}.second-level-chart-mount svg{display:block;width:100%;height:auto}.second-level-axis,.second-level-grid-line{stroke:#c6ad95;stroke-width:1}.second-level-grid-line{stroke-dasharray:3 4}.second-level-line{fill:none;stroke:var(--accent-dark);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}.second-level-range.high{fill:rgba(215,154,75,.18)}.second-level-range.loss{fill:rgba(161,79,56,.16)}.second-level-point{fill:var(--accent-dark);cursor:help}.second-level-point:focus{outline:none;stroke:var(--ink);stroke-width:3}.second-level-tooltip{fill:var(--surface);stroke:var(--line-dark)}.second-level-chart-mount text{fill:var(--muted);font-size:11px}.second-level-range-control{display:flex;align-items:center;gap:10px;margin-top:8px;color:var(--muted);font-size:.8rem}.second-level-range-control input{flex:1;accent-color:var(--accent-dark)}.second-level-peak-note{margin:10px 0 0;color:var(--accent-dark);font-size:.82rem;font-weight:700}.second-level-observations{margin-top:14px}.second-level-observations p{margin:7px 0;font-size:.875rem}
+"""
+    style += """
+.material-deep-layout.side-tabs{display:grid;grid-template-columns:190px minmax(0,1fr);gap:18px;align-items:stretch}.material-deep-tab-list{position:sticky;top:18px;align-self:stretch;display:flex;flex-direction:column;gap:9px;max-height:calc(100vh - 36px);overflow-y:auto;border-right:1px solid var(--line);padding:0 14px 0 0}.material-deep-tab{width:100%;min-height:0;border:1px solid var(--line);border-radius:8px;background:#fff8ec;color:var(--ink);padding:8px 9px;text-align:left;font-size:12px;line-height:1.35;white-space:normal}.material-deep-tab[aria-selected=\"true\"]{border-color:#2c1810;border-left-color:#2c1810;background:#2c1810;color:#fff}.material-deep-panels{min-width:0;padding:0}.material-deep-panel.material-card{margin:0;padding:22px;border:1px solid var(--line);border-radius:24px;background:#fffdf9;box-shadow:0 16px 40px rgba(65,34,16,.1)}.material-deep-header.material-head{display:block;border:0;padding:0}.material-deep-header.material-head span{display:block;margin:0 0 14px;color:var(--accent-dark);font-size:12px;font-weight:800;letter-spacing:.14em}.material-deep-header.material-head h3{margin:0 0 10px;font-size:24px;line-height:1.35}.material-deep-id{margin:0;color:var(--muted);font-size:14px}.material-deep-metrics{margin:14px 0 0}.deep-visual-strip{--visual-height:560px;margin:18px 0}.deep-frame-grid.fixed-six{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:12px;height:var(--visual-height);margin:0}.deep-frame-card{display:grid;grid-template-rows:minmax(0,1fr) auto;overflow:hidden;border:1px solid var(--line);border-radius:18px;background:#f4e3cd}.deep-frame-card .highlight-frame-button{display:block;width:100%;min-width:0;min-height:0;padding:0;border:0;border-radius:0;background:transparent}.deep-frame-card img{width:100%;height:100%;min-height:0;aspect-ratio:auto;object-fit:contain;background:#efe6d9;border-radius:0}.deep-frame-card figcaption{margin:0;padding:10px 12px;color:var(--muted);font-size:13px;line-height:1.45}.deep-frame-coverage{margin:10px 0 0;color:var(--muted);font-size:13px}.deep-frame-observations,.deep-visual-summary,.second-level-section{margin-top:18px;padding:17px;border:1px solid var(--line);border-radius:18px;background:#f7ead8}.deep-frame-observations h4,.deep-visual-summary h4,.second-level-section>h4{margin:0 0 10px;font-size:16px}.second-level-timeline{padding:0;border:0;border-radius:0;background:transparent}.second-level-switcher{margin-bottom:10px}.second-level-switcher button{border-radius:8px;background:#fff8ec;color:var(--ink);font-size:12px;font-weight:800}.second-level-switcher button[aria-pressed=\"true\"]{border-color:#2c1810;background:#2c1810;color:#fff}.second-level-chart-mount{min-height:320px}.second-level-chart-mount svg{height:320px;border:1px solid rgba(82,45,24,.1);border-radius:14px;background:#fff8ec}.second-level-range-control{margin-top:10px;font-size:13px}.second-level-range-control input{height:8px;accent-color:#9b6a37;cursor:pointer}.second-level-peak-note{margin-top:10px;color:var(--ink);font-weight:800}.second-level-observations{margin-top:14px}
+"""
     filters = fact_pack.get("filters", {}) if isinstance(fact_pack, dict) else {}
     industry = str(filters.get("industry") or "食品饮料")
     brands = filters.get("brands") or []
@@ -741,6 +1225,9 @@ def _render_html(analysis, material_frames, fact_pack):
         source_derived=source_label("榜单 + 秒级详情派生"),
         top_material_combination=top_material_combination,
         audience_insights=audience_insights,
+        script_insights=script_insights,
+        highlight_insights=highlight_insights,
+        material_deep_dive=material_deep_dive,
         landscape=landscape,
         baseline=baseline,
         performance=performance,
@@ -760,13 +1247,19 @@ def _render_html(analysis, material_frames, fact_pack):
 
 def render_report(*, analysis_json, output_dir, fact_pack=None, analysis_provenance=None):
     analysis = _load_analysis(analysis_json)
+    fact_pack = fact_pack or {}
+    _validate_highlight_dashboard(analysis, fact_pack)
+    _validate_material_deep_dives(analysis, fact_pack)
     data = {"status": "complete", "analysis": analysis}
     if analysis_provenance is not None:
         data["analysisProvenance"] = analysis_provenance
+    data["highlightFrames"] = {
+        frame["frame_ref"]: frame for frame in _available_highlight_frames(fact_pack)
+    }
     audience_dashboard = fact_pack.get("audienceDashboard") if isinstance(fact_pack, dict) else None
-    markdown = _render_markdown(analysis, audience_dashboard)
+    markdown = _render_markdown(analysis, audience_dashboard, fact_pack)
     rendered_html = _render_html(
-        analysis, _material_frames(fact_pack or {}), fact_pack or {}
+        analysis, _material_frames(fact_pack), fact_pack
     )
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)

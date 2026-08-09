@@ -29,7 +29,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("内联", skill)
         self.assertIn("不得手工修改", skill)
         self.assertIn("1440x1000", skill)
-        self.assertNotIn("390x844", skill)
+        self.assertIn("390x844", skill)
 
     def analysis_json(self):
         return {
@@ -104,6 +104,76 @@ class YuntuReportTests(unittest.TestCase):
             "experimentMatrix": [{"priority": "P1", "hypothesis": "通勤开场提升 3 秒播放率", "creative_variable": "前 3 秒场景钩子", "target_audience": "新锐白领", "success_metric": "play_3s_rate", "control": "现有商品直展示素材", "review_action": "按人群拆分复盘"}],
         }
 
+    def highlight_dashboard(self):
+        return {
+            "highlightDashboard": {
+                "availability": {"available": True, "reason": ""},
+                "groups": [
+                    {
+                        "category": "portrait",
+                        "frame_refs": ["highlight:101:cover:0"],
+                        "common_patterns": ["人物近景占据主体，视线和产品形成清晰焦点。"],
+                        "derivative_directions": [
+                            {
+                                "title": "保留近景人物开场",
+                                "body": "以人物近景和明确主体作为可复用的开场画面方向。",
+                                "frame_refs": ["highlight:101:cover:0"],
+                            }
+                        ],
+                    }
+                ],
+            }
+        }
+
+    def deep_dive_fact_pack(self):
+        def metric(name, value):
+            return {
+                "trend_name": name,
+                "available": True,
+                "missing_reason": "",
+                "points": [{"second": 0, "value": value}, {"second": 2, "value": value + 1}],
+                "high_points": [{"start_sec": 2, "end_sec": 2}],
+                "loss_points": [],
+            }
+
+        facts = []
+        for rank, material_id in enumerate(("101", "102"), start=1):
+            facts.append({
+                "material_id": material_id,
+                "rank": rank,
+                "title": f"测试素材 {material_id}",
+                "highlightFrames": [
+                    {"frame_ref": f"highlight:{material_id}:cover:0", "second": 0, "frame_type": "cover", "available": True, "relative_path": f"highlights/{material_id}/01-000s.jpg"},
+                    {"frame_ref": f"highlight:{material_id}:click_peak:2", "second": 2, "frame_type": "click_peak", "peak_rank": 1, "click_value": 0.8, "available": True, "relative_path": f"highlights/{material_id}/02-002s.jpg"},
+                ],
+                "secondLevelBreakdown": {"metrics": [metric(name, index) for index, name in enumerate(("点赞指数", "流失指数", "点击指数", "互动指数", "评论指数"))]},
+            })
+        return {"selectedMaterials": [{"rank": 1, "material_id": "101"}, {"rank": 2, "material_id": "102"}], "materialFacts": facts}
+
+    def deep_dive_analysis(self):
+        analysis = self.analysis_json()
+        analysis["highlightDashboard"] = {
+            "groups": [{
+                "category": "portrait",
+                "frame_refs": ["highlight:101:cover:0", "highlight:101:click_peak:2", "highlight:102:cover:0", "highlight:102:click_peak:2"],
+                "common_patterns": ["画面主体明确。"],
+                "derivative_directions": [],
+            }]
+        }
+        analysis["materialDeepDives"] = [
+            {
+                "material_id": material_id,
+                "frame_observations": [
+                    {"frame_ref": f"highlight:{material_id}:cover:0", "observation": "人物近景作为开场主体。"},
+                    {"frame_ref": f"highlight:{material_id}:click_peak:2", "observation": "产品与人物共同处于画面中心。"},
+                ],
+                "visual_summary": "画面围绕人物与产品的近距离展示展开。",
+                "second_level_observations": [{"trend_name": "点击指数", "summary": "第 2 秒为已返回的高点秒数。", "evidence_seconds": [2]}],
+            }
+            for material_id in ("101", "102")
+        ]
+        return analysis
+
     def test_render_report_writes_conclusion_only_report_without_evidence(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:
@@ -174,10 +244,10 @@ class YuntuReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             template_path = Path(directory) / "template.html"
             template_path.write_text(
-                original.replace("$audience_insights", ""), encoding="utf-8"
+                original.replace("$script_insights", ""), encoding="utf-8"
             )
             with patch.object(report, "HTML_TEMPLATE_PATH", template_path):
-                with self.assertRaisesRegex(report.YuntuReportError, "audience_insights"):
+                with self.assertRaisesRegex(report.YuntuReportError, "script_insights"):
                     report._load_html_template()
 
     def test_render_report_inlines_unified_assets_and_emits_unified_structure(self):
@@ -429,7 +499,7 @@ class YuntuReportTests(unittest.TestCase):
                             analysis_json=path, output_dir=Path(directory) / "report"
                         )
 
-    def test_render_report_renders_the_two_current_delivery_sections(self):
+    def test_render_report_renders_script_placeholder_and_highlight_unavailable_state(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -438,14 +508,194 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=analysis_path, output_dir=root / "report")
             markdown = (root / "report" / "final-report.md").read_text(encoding="utf-8")
             rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
-        self.assertEqual(rendered.count('class="section"'), 2)
+        self.assertEqual(rendered.count('class="section"'), 5)
         self.assertIn('class="report-nav"', rendered)
         self.assertIn('href="#top-material-combination"', rendered)
         self.assertIn('href="#audience-insights"', rendered)
+        self.assertIn('href="#script-insights"', rendered)
+        self.assertIn('href="#highlight-insights"', rendered)
+        self.assertIn('href="#material-deep-dive"', rendered)
+        self.assertIn("脚本数据：未接入", rendered)
+        self.assertIn("本次云图 RPA 未提供可用于汇总的脚本正文与时间戳段落", markdown)
+        self.assertIn("暂无可用高光帧", rendered)
         self.assertNotIn('href="#landscape"', rendered)
         self.assertIn('</article></section>', rendered)
         self.assertNotIn('</article></div></section>', rendered)
         self.assertNotIn("榜单竞争格局", markdown)
+
+    def test_render_report_renders_material_deep_dive_with_tabs_frames_and_five_charts(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(self.deep_dive_analysis(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=self.deep_dive_fact_pack())
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+            markdown = (root / "report" / "final-report.md").read_text(encoding="utf-8")
+        self.assertIn('aria-label="单素材深度分析"', rendered)
+        self.assertIn('data-material-tab', rendered)
+        self.assertIn('class="deep-frame-grid fixed-six"', rendered)
+        self.assertIn('class="second-level-timeline"', rendered)
+        self.assertEqual(rendered.count('class="second-level-chart"'), 0)
+        self.assertIn("点击 Top1 峰值帧｜2s｜点击指数 0.80", rendered)
+        self.assertIn("## 05｜单素材深度分析", markdown)
+        self.assertIn("秒级拆解", markdown)
+
+    def test_render_report_uses_qianchuan_style_frame_first_deep_dive_layout(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(self.deep_dive_analysis(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=self.deep_dive_fact_pack())
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('class="material-deep-layout side-tabs"', rendered)
+        self.assertIn('class="material-deep-tab-list"', rendered)
+        self.assertIn('class="deep-visual-strip"', rendered)
+        self.assertIn('class="deep-frame-grid fixed-six"', rendered)
+        self.assertNotIn("<video", rendered)
+
+    def test_render_report_matches_reference_material_card_and_fixed_frame_strip(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(self.deep_dive_analysis(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=self.deep_dive_fact_pack())
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('class="material-deep-panel material-card"', rendered)
+        self.assertIn('class="material-deep-header material-head"', rendered)
+        self.assertIn('--visual-height:560px', rendered)
+        self.assertIn('grid-template-rows:repeat(2,minmax(0,1fr))', rendered)
+        self.assertIn('max-height:calc(100vh - 36px)', rendered)
+
+    def test_render_report_reports_unavailable_deep_dive_frames(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+        for frame in fact_pack["materialFacts"][0]["highlightFrames"]:
+            frame.update({"available": False, "failure_reason": "视频链接已过期"})
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"]["groups"][0]["frame_refs"] = [
+            "highlight:102:cover:0", "highlight:102:click_peak:2"
+        ]
+        analysis["materialDeepDives"][0]["frame_observations"] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=fact_pack)
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn("高光帧可用：0/2", rendered)
+        self.assertIn("视频链接已过期", rendered)
+        self.assertIn("暂无可用于观察的高光帧。", rendered)
+
+    def test_render_report_renders_second_level_timeline_interactions(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(self.deep_dive_analysis(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=self.deep_dive_fact_pack())
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('class="second-level-timeline"', rendered)
+        self.assertIn('data-second-level-metric="点赞指数"', rendered)
+        self.assertIn('class="second-level-range-control"', rendered)
+        self.assertIn('data-second-level-point', rendered)
+        self.assertNotIn('class="second-level-chart"', rendered)
+
+    def test_render_report_rejects_invalid_material_deep_dive_frame_and_second(self):
+        report = load_module()
+        cases = (
+            ("frame", "highlight:102:cover:0", "exactly once"),
+            ("second", 9, "evidence_seconds"),
+        )
+        for kind, value, error in cases:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                analysis = self.deep_dive_analysis()
+                if kind == "frame":
+                    analysis["materialDeepDives"][0]["frame_observations"][1]["frame_ref"] = value
+                else:
+                    analysis["materialDeepDives"][0]["second_level_observations"][0]["evidence_seconds"] = [value]
+                path = Path(directory) / "analysis.json"
+                path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+                with self.assertRaisesRegex(report.YuntuReportError, error):
+                    report.render_report(analysis_json=path, output_dir=Path(directory) / "report", fact_pack=self.deep_dive_fact_pack())
+
+    def test_render_report_renders_classified_highlight_frames(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        analysis.update(self.highlight_dashboard())
+        fact_pack = {
+            "selectedMaterials": [{"rank": 1, "material_id": "101"}],
+            "materialFacts": [{
+                "material_id": "101",
+                "rank": 1,
+                "title": "测试素材",
+                "highlightFrames": [{
+                    "frame_ref": "highlight:101:cover:0",
+                    "second": 0,
+                    "frame_type": "cover",
+                    "peak_rank": None,
+                    "click_value": None,
+                    "available": True,
+                    "relative_path": "highlights/101/01-000s.jpg",
+                }],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "report", fact_pack=fact_pack)
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+            data = json.loads((root / "report" / "final-report-data.json").read_text(encoding="utf-8"))
+
+        self.assertIn("人像画面", rendered)
+        self.assertIn("保留近景人物开场", rendered)
+        self.assertIn('class="highlight-frame-button"', rendered)
+        self.assertIn('src="../highlights/101/01-000s.jpg"', rendered)
+        self.assertIn('aria-label="查看高光帧大图"', rendered)
+        self.assertIn("highlight:101:cover:0", data["highlightFrames"])
+
+    def test_render_report_rejects_highlight_frames_classified_more_than_once(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        analysis.update(self.highlight_dashboard())
+        analysis["highlightDashboard"]["groups"].append({
+            "category": "other",
+            "frame_refs": ["highlight:101:cover:0"],
+            "common_patterns": ["其他画面。"],
+            "derivative_directions": [],
+        })
+        fact_pack = {"materialFacts": [{"material_id": "101", "highlightFrames": [{
+            "frame_ref": "highlight:101:cover:0", "second": 0, "frame_type": "cover",
+            "available": True, "relative_path": "highlights/101/01-000s.jpg",
+        }]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "exactly once"):
+                report.render_report(analysis_json=path, output_dir=Path(directory) / "report", fact_pack=fact_pack)
+
+    def test_render_report_requires_dashboard_for_standard_highlight_frames(self):
+        report = load_module()
+        fact_pack = {"materialFacts": [{"material_id": "101", "highlightFrames": [{
+            "frame_ref": "highlight:101:cover:0", "second": 0, "frame_type": "cover",
+            "available": True, "relative_path": "highlights/101/01-000s.jpg",
+        }]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "highlightDashboard is required"):
+                report.render_report(
+                    analysis_json=path,
+                    output_dir=Path(directory) / "report",
+                    fact_pack=fact_pack,
+                )
 
     def test_render_report_rejects_incomplete_experiment(self):
         report = load_module()

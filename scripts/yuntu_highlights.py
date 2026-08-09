@@ -18,6 +18,8 @@ ALLOWED_HIGHLIGHT_TRENDS = (
     "互动指数",
     "评论指数",
 )
+STANDARD_HIGHLIGHT_TREND = "点击指数"
+STANDARD_HIGHLIGHT_PEAK_LIMIT = 5
 
 VIDEO_DOWNLOAD_TIMEOUT_SECONDS = 30
 VIDEO_DOWNLOAD_MAX_BYTES = 200 * 1024 * 1024
@@ -71,7 +73,7 @@ def _collapse_plateaus(points):
     return collapsed
 
 
-def _local_peaks(series):
+def _local_peaks(series, *, limit=3):
     points = _collapse_plateaus(_normalized_points(series))
     if len(points) < 2:
         return []
@@ -86,7 +88,7 @@ def _local_peaks(series):
             is_peak = value > points[index - 1][1] and value > points[index + 1][1]
         if is_peak:
             peaks.append((second, value))
-    return sorted(peaks, key=lambda point: (-point[1], point[0]))[:3]
+    return sorted(peaks, key=lambda point: (-point[1], point[0]))[:limit]
 
 
 def _within_high_point(detail, trend_name, second):
@@ -141,6 +143,52 @@ def select_highlight_candidates(detail, trend_names):
     return [candidates[second] for second in sorted(candidates)]
 
 
+def select_standard_highlight_candidates(detail):
+    """Select the report's fixed cover plus click-index Top5 peak frames."""
+    cover = {
+        "second": 0,
+        "is_cover": True,
+        "frame_type": "cover",
+        "peak_rank": None,
+        "click_value": None,
+        "reasons": [{"type": "cover"}],
+    }
+    candidates = [cover]
+    for rank, (second, value) in enumerate(
+        _local_peaks(
+            _series_for_trend(detail, STANDARD_HIGHLIGHT_TREND),
+            limit=STANDARD_HIGHLIGHT_PEAK_LIMIT,
+        ),
+        start=1,
+    ):
+        reason = {
+            "type": "local_peak",
+            "trend_name": STANDARD_HIGHLIGHT_TREND,
+            "value": value,
+            "rank": rank,
+            "within_high_point": _within_high_point(
+                detail, STANDARD_HIGHLIGHT_TREND, second
+            ),
+        }
+        if second == 0:
+            # The cover owns 0s so a boundary peak never produces two JPEGs.
+            cover["peak_rank"] = rank
+            cover["click_value"] = value
+            cover["reasons"].append(reason)
+            continue
+        candidates.append(
+            {
+                "second": second,
+                "is_cover": False,
+                "frame_type": "click_peak",
+                "peak_rank": rank,
+                "click_value": value,
+                "reasons": [reason],
+            }
+        )
+    return candidates
+
+
 def download_video(
     url,
     destination,
@@ -192,11 +240,40 @@ def download_video(
             response.close()
 
 
-def _resolve_ffmpeg(ffmpeg_bin=None):
-    candidate = ffmpeg_bin or os.environ.get("IMAGEIO_FFMPEG_EXE") or shutil.which("ffmpeg")
-    if not candidate:
-        raise HighlightFrameError("ffmpeg executable was not found")
-    return candidate
+def _resolve_ffmpeg(ffmpeg_bin=None, *, environ=None, imageio_resolver=None, which=None):
+    environment = os.environ if environ is None else environ
+    path_resolver = shutil.which if which is None else which
+
+    for candidate in (ffmpeg_bin, environment.get("IMAGEIO_FFMPEG_EXE")):
+        if candidate:
+            return str(candidate)
+
+    imageio_error = None
+    if imageio_resolver is None:
+        try:
+            from imageio_ffmpeg import get_ffmpeg_exe
+        except ImportError as error:
+            imageio_error = error
+        else:
+            imageio_resolver = get_ffmpeg_exe
+
+    if imageio_resolver is not None:
+        try:
+            candidate = imageio_resolver()
+        except Exception as error:
+            imageio_error = error
+        else:
+            if candidate:
+                return str(candidate)
+
+    candidate = path_resolver("ffmpeg")
+    if candidate:
+        return str(candidate)
+
+    message = "ffmpeg executable was not found; install imageio-ffmpeg or set IMAGEIO_FFMPEG_EXE"
+    if imageio_error is not None:
+        raise HighlightFrameError(f"{message}: {imageio_error}") from imageio_error
+    raise HighlightFrameError(message)
 
 
 def extract_frame(video_path, second, destination, *, ffmpeg_bin=None):
@@ -206,15 +283,26 @@ def extract_frame(video_path, second, destination, *, ffmpeg_bin=None):
     partial = target.with_name(f".{target.stem}.part{target.suffix}")
     command = [
         _resolve_ffmpeg(ffmpeg_bin),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
         "-y",
-        "-ss",
-        str(second),
         "-i",
         str(video_path),
+        "-ss",
+        str(second),
+        "-map",
+        "0:v:0",
         "-frames:v",
         "1",
+        "-an",
+        "-sn",
+        "-dn",
         "-q:v",
         "2",
+        "-f",
+        "image2",
         str(partial),
     ]
     try:
@@ -227,7 +315,9 @@ def extract_frame(video_path, second, destination, *, ffmpeg_bin=None):
             check=False,
         )
         if completed.returncode != 0 or not partial.is_file() or partial.stat().st_size == 0:
-            raise HighlightFrameError("ffmpeg frame extraction failed")
+            detail = (completed.stderr or "").strip().splitlines()
+            suffix = f": {detail[-1][:240]}" if detail else ""
+            raise HighlightFrameError(f"ffmpeg frame extraction failed{suffix}")
         partial.replace(target)
         return target
     except HighlightFrameError:
@@ -251,8 +341,15 @@ def _write_json_atomically(payload, destination):
         partial.unlink(missing_ok=True)
 
 
-def _frame_record(candidate, *, available, relative_path=None, failure_reason=None):
+def _frame_record(
+    candidate, *, material_id, available, relative_path=None, failure_reason=None
+):
     frame = {**candidate, "available": available}
+    frame_type = frame.get("frame_type") or (
+        "cover" if frame.get("is_cover") else "click_peak"
+    )
+    frame["frame_type"] = frame_type
+    frame["frame_ref"] = f"highlight:{material_id}:{frame_type}:{frame['second']}"
     if relative_path is not None:
         frame["relative_path"] = relative_path
     if failure_reason is not None:
@@ -260,13 +357,17 @@ def _frame_record(candidate, *, available, relative_path=None, failure_reason=No
     return frame
 
 
-def _material_frames(detail, trend_names, root, downloader, frame_extractor, ffmpeg_bin):
-    candidates = select_highlight_candidates(detail, trend_names)
+def _material_frames(detail, candidates, root, downloader, frame_extractor, ffmpeg_bin):
     material_id = str(detail.get("material_id") or "")
     video_url = detail.get("video_url")
     if not isinstance(video_url, str) or not video_url.strip():
         return [
-            _frame_record(candidate, available=False, failure_reason="missing_video_url")
+            _frame_record(
+                candidate,
+                material_id=material_id,
+                available=False,
+                failure_reason="missing_video_url",
+            )
             for candidate in candidates
         ]
 
@@ -286,6 +387,7 @@ def _material_frames(detail, trend_names, root, downloader, frame_extractor, ffm
                     frames.append(
                         _frame_record(
                             candidate,
+                            material_id=material_id,
                             available=True,
                             relative_path=relative_path,
                         )
@@ -293,12 +395,22 @@ def _material_frames(detail, trend_names, root, downloader, frame_extractor, ffm
                 except Exception:
                     target.unlink(missing_ok=True)
                     frames.append(
-                        _frame_record(candidate, available=False, failure_reason="extract_failed")
+                        _frame_record(
+                            candidate,
+                            material_id=material_id,
+                            available=False,
+                            failure_reason="extract_failed",
+                        )
                     )
             return frames
     except Exception:
         return [
-            _frame_record(candidate, available=False, failure_reason="download_failed")
+            _frame_record(
+                candidate,
+                material_id=material_id,
+                available=False,
+                failure_reason="download_failed",
+            )
             for candidate in candidates
         ]
 
@@ -322,7 +434,7 @@ def generate_highlights(
         material_id = str(detail.get("material_id") or "")
         frames = _material_frames(
             detail,
-            selected_trends,
+            select_highlight_candidates(detail, selected_trends),
             root,
             downloader,
             frame_extractor,
@@ -338,5 +450,45 @@ def generate_highlights(
         )
     _write_json_atomically(
         {"schemaVersion": 1, "materials": materials}, root / "highlights-manifest.json"
+    )
+    return results
+
+
+def generate_standard_highlights(
+    details,
+    output_dir,
+    *,
+    downloader=download_video,
+    frame_extractor=extract_frame,
+    ffmpeg_bin=None,
+):
+    """Create the standard cover plus click-index Top5 frames for the report."""
+    root = Path(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    results = {}
+    materials = []
+    for detail in details:
+        material_id = str(detail.get("material_id") or "")
+        frames = _material_frames(
+            detail,
+            select_standard_highlight_candidates(detail),
+            root,
+            downloader,
+            frame_extractor,
+            ffmpeg_bin,
+        )
+        results[material_id] = frames
+        materials.append(
+            {
+                "material_id": material_id,
+                "video_url": detail.get("video_url")
+                if isinstance(detail.get("video_url"), str)
+                else "",
+                "frames": frames,
+            }
+        )
+    _write_json_atomically(
+        {"schemaVersion": 2, "standard": "cover_plus_click_top5", "materials": materials},
+        root / "highlights-manifest.json",
     )
     return results

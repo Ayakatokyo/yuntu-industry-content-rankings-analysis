@@ -12,14 +12,18 @@
   <main class="page">
     <header class="report-cover"><div class="hero-copy"><h1>云图 TOP 素材池商业诊断报告</h1><p class="subtitle">$subtitle</p></div></header>
     <div class="report-shell">
-      <nav class="report-nav" aria-label="报告目录"><small>报告目录</small><a href="#top-material-combination" aria-current="location">01｜TOP 素材组合结论</a><a href="#audience-insights">02｜人群洞察</a></nav>
+      <nav class="report-nav" aria-label="报告目录"><small>报告目录</small><a href="#top-material-combination" aria-current="location">01｜TOP 素材组合结论</a><a href="#audience-insights">02｜人群洞察</a><a href="#script-insights">03｜脚本洞察</a><a href="#highlight-insights">04｜高光画面洞察</a><a href="#material-deep-dive">05｜单素材深度分析</a></nav>
       <div class="report-content" id="report-content">
         <section class="section" id="top-material-combination"><header class="section-header"><h2>01｜TOP 素材组合结论</h2></header>$top_material_combination</section>
         $audience_insights
+        <section class="section" id="script-insights"><header class="section-header"><h2>03｜脚本洞察</h2></header>$script_insights</section>
+        <section class="section" id="highlight-insights"><header class="section-header"><h2>04｜高光画面洞察</h2></header>$highlight_insights</section>
+        <section class="section" id="material-deep-dive"><header class="section-header"><h2>05｜单素材深度分析</h2></header>$material_deep_dive</section>
       </div>
     </div>
   </main>
   <noscript><style>.brand-panel[hidden]{display:block!important}</style></noscript>
+  <dialog class="highlight-lightbox" id="highlight-lightbox" aria-label="高光帧大图"><button type="button" data-close-highlight-lightbox aria-label="关闭高光帧大图">关闭</button><img alt="高光帧大图"><p></p></dialog>
   <script>
     (function () {
       var tabs = document.querySelectorAll('[data-brand-tab]');
@@ -84,6 +88,150 @@
           chart.addEventListener('blur', function () { tooltip.classList.remove('is-visible'); });
         }(charts[chartIndex]));
       }
+
+      var highlightLightbox = document.getElementById('highlight-lightbox');
+      var highlightImage = highlightLightbox && highlightLightbox.querySelector('img');
+      var highlightCaption = highlightLightbox && highlightLightbox.querySelector('p');
+      document.querySelectorAll('[data-highlight-src]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          highlightImage.src = button.getAttribute('data-highlight-src');
+          highlightCaption.textContent = button.getAttribute('data-highlight-caption') || '';
+          highlightLightbox.showModal();
+        });
+      });
+      if (highlightLightbox) {
+        highlightLightbox.querySelector('[data-close-highlight-lightbox]').addEventListener('click', function () {
+          highlightLightbox.close();
+        });
+        highlightLightbox.addEventListener('close', function () { highlightImage.removeAttribute('src'); });
+      }
+
+      var materialTabs = document.querySelectorAll('[data-material-tab]');
+      function activateMaterial(tab, focus) {
+        for (var materialIndex = 0; materialIndex < materialTabs.length; materialIndex += 1) {
+          var candidate = materialTabs[materialIndex];
+          var selected = candidate === tab;
+          var panel = document.getElementById(candidate.getAttribute('data-material-target'));
+          candidate.setAttribute('aria-selected', selected ? 'true' : 'false');
+          candidate.tabIndex = selected ? 0 : -1;
+          if (panel) panel.hidden = !selected;
+        }
+        if (focus) tab.focus();
+      }
+      for (var materialIndex = 0; materialIndex < materialTabs.length; materialIndex += 1) {
+        (function (tab, tabIndex) {
+          tab.addEventListener('click', function () { activateMaterial(tab, false); });
+          tab.addEventListener('keydown', function (event) {
+            var direction = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+            if (event.key === 'Home' || event.key === 'End' || direction[event.key]) {
+              event.preventDefault();
+              var next = event.key === 'Home' ? 0 : event.key === 'End' ? materialTabs.length - 1 : (tabIndex + direction[event.key] + materialTabs.length) % materialTabs.length;
+              activateMaterial(materialTabs[next], true);
+            }
+          });
+        }(materialTabs[materialIndex], materialIndex));
+      }
+
+      document.querySelectorAll('[data-second-level-timeline]').forEach(function (root) {
+        var metrics;
+        try {
+          metrics = JSON.parse(root.getAttribute('data-second-level-metrics') || '[]');
+        } catch (error) {
+          metrics = [];
+        }
+        var buttons = root.querySelectorAll('[data-second-level-metric]');
+        var mount = root.querySelector('.second-level-chart-mount');
+        var range = root.querySelector('[data-second-level-range]');
+        var peakNote = root.querySelector('[data-second-level-peak]');
+        var active = null;
+
+        function svgElement(name, attributes) {
+          var node = document.createElementNS('http://www.w3.org/2000/svg', name);
+          Object.keys(attributes || {}).forEach(function (key) { node.setAttribute(key, attributes[key]); });
+          return node;
+        }
+
+        function formatValue(value) {
+          var number = Number(value);
+          if (!Number.isFinite(number)) return '-';
+          return Number.isInteger(number) ? String(number) : number.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+        }
+
+        function render(metric) {
+          active = metric;
+          buttons.forEach(function (button) {
+            button.setAttribute('aria-pressed', String(button.getAttribute('data-second-level-metric') === metric.trend_name));
+          });
+          mount.replaceChildren();
+          peakNote.textContent = '';
+          if (!metric.available || !Array.isArray(metric.points) || !metric.points.length) {
+            var unavailable = document.createElement('p');
+            unavailable.className = 'data-note';
+            unavailable.textContent = metric.missing_reason || '该指标暂无可用秒级数据';
+            mount.append(unavailable);
+            return;
+          }
+          var maxSecond = Math.max.apply(null, metric.points.map(function (point) { return Number(point.second) || 0; }), 1);
+          var visibleSecond = Math.max(1, maxSecond * Number(range.value || 100) / 100);
+          var points = metric.points.filter(function (point) { return Number(point.second) <= visibleSecond; });
+          if (!points.length) points = [metric.points[0]];
+          var maxValue = Math.max.apply(null, points.map(function (point) { return Number(point.value) || 0; }), 1);
+          var bounds = { left: 52, top: 18, right: 836, bottom: 270 };
+          var width = bounds.right - bounds.left;
+          var height = bounds.bottom - bounds.top;
+          function x(second) { return bounds.left + Number(second) / visibleSecond * width; }
+          function y(value) { return bounds.bottom - Number(value) / maxValue * height; }
+          var svg = svgElement('svg', { viewBox: '0 0 860 310', role: 'img', 'aria-label': metric.trend_name + '秒级趋势图' });
+          for (var tick = 0; tick <= 4; tick += 1) {
+            var tickValue = maxValue * tick / 4;
+            var tickY = y(tickValue);
+            svg.append(svgElement('line', { class: 'second-level-grid-line', x1: bounds.left, x2: bounds.right, y1: tickY, y2: tickY }));
+            var tickLabel = svgElement('text', { x: bounds.left - 8, y: tickY + 4, 'text-anchor': 'end' });
+            tickLabel.textContent = formatValue(tickValue);
+            svg.append(tickLabel);
+          }
+          svg.append(svgElement('line', { class: 'second-level-axis', x1: bounds.left, x2: bounds.right, y1: bounds.bottom, y2: bounds.bottom }));
+          ['high_points', 'loss_points'].forEach(function (key) {
+            (metric[key] || []).forEach(function (interval) {
+              var start = Math.max(0, Number(interval.start_sec) || 0);
+              var end = Math.min(visibleSecond, Number(interval.end_sec) || start);
+              if (end < 0 || start > visibleSecond) return;
+              svg.append(svgElement('rect', { class: 'second-level-range ' + (key === 'high_points' ? 'high' : 'loss'), x: x(start), y: bounds.top, width: Math.max(3, x(end) - x(start)), height: height }));
+            });
+          });
+          var polyline = svgElement('polyline', { class: 'second-level-line', points: points.map(function (point) { return x(point.second).toFixed(2) + ',' + y(point.value).toFixed(2); }).join(' ') });
+          svg.append(polyline);
+          points.forEach(function (point) {
+            var circle = svgElement('circle', { class: 'second-level-point', cx: x(point.second), cy: y(point.value), r: 4, tabindex: 0, 'data-second-level-point': '', 'aria-label': point.second + ' 秒，' + metric.trend_name + ' ' + formatValue(point.value) });
+            var title = svgElement('title', {});
+            title.textContent = point.second + ' 秒：' + formatValue(point.value);
+            circle.append(title);
+            svg.append(circle);
+          });
+          var peak = points.reduce(function (winner, point) { return Number(point.value) > Number(winner.value) ? point : winner; }, points[0]);
+          var peakDot = svgElement('circle', { cx: x(peak.second), cy: y(peak.value), r: 6, class: 'second-level-point' });
+          svg.append(peakDot);
+          var peakLabel = svgElement('text', { x: Math.min(bounds.right - 36, x(peak.second) + 10), y: Math.max(bounds.top + 12, y(peak.value) - 10) });
+          peakLabel.textContent = '峰值';
+          svg.append(peakLabel);
+          [0, Math.round(visibleSecond / 2), Math.round(visibleSecond)].forEach(function (second) {
+            var label = svgElement('text', { x: x(second), y: bounds.bottom + 22, 'text-anchor': second === 0 ? 'start' : second === Math.round(visibleSecond) ? 'end' : 'middle' });
+            label.textContent = second + 's';
+            svg.append(label);
+          });
+          mount.append(svg);
+          peakNote.textContent = metric.trend_name + '峰值：' + peak.second + 's，' + formatValue(peak.value);
+        }
+
+        buttons.forEach(function (button) {
+          button.addEventListener('click', function () {
+            var next = metrics.find(function (metric) { return metric.trend_name === button.getAttribute('data-second-level-metric'); });
+            if (next) render(next);
+          });
+        });
+        range.addEventListener('input', function () { if (active) render(active); });
+        render(metrics.find(function (metric) { return metric.available; }) || metrics[0] || { trend_name: '秒级拆解', available: false });
+      });
     }());
   </script>
   <script data-unified-report-script="true">$unified_script</script>

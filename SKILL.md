@@ -112,16 +112,9 @@ python <skill-root>/scripts/rpa_connector.py prepare-analysis \
   --output-dir "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis"
 ```
 
-需要截取高光帧时，在 `prepare-analysis` 增加 `--highlight-trends`，可多选“点赞指数”“流失指数”“点击指数”“互动指数”“评论指数”：
+`prepare-analysis` 会自动为每条成功详情素材生成标准高光帧，无需也不支持额外的趋势选择参数。每条素材固定截取 `0s` 封面帧，并从“点击指数”完整序列中按局部峰值的点击值降序、秒数升序选取最多 5 帧。连续相等的平台只取最早秒数；峰值不足 5 个时保留实际数量，不用其他指标或高点区间补足。帧写入 `highlights/<material_id>/`，清单为 `highlights-manifest.json`。
 
-```bash
-python <skill-root>/scripts/rpa_connector.py prepare-analysis \
-  --input-dir "RPA数据汇总/yuntu-rankings-analysis" \
-  --output-dir "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis" \
-  --highlight-trends "点击指数" "互动指数"
-```
-
-每条素材固定截取 `0s` 封面帧；每个选中指标另取最多 3 个局部波峰，跨指标同秒只保留一张并合并指标说明。帧写入 `highlights/<material_id>/`，清单为 `highlights-manifest.json`。视频下载或截图失败只记录失败原因，不阻断事实包或最终报告；HTML 会展示成功帧，不输出失败图片。
+视频下载、FFmpeg 或单帧截图失败只记录具体失败原因，不阻断事实包或最终报告；HTML 只展示成功 JPEG，不输出损坏图片。这里的“点击指数”不是实际点击次数，局部峰值也不能用于推断转化因果。
 
 模型读取 `diagnostic-analysis/yuntu-analysis-data.json` 和 `diagnostic-analysis/yuntu-analysis-prompt.md` 后，生成 `diagnostic-analysis/yuntu-ai-analysis.json`。模型或人工模型步骤完成后，必须登记来源回执；未经回执核验不得渲染最终报告：
 
@@ -201,13 +194,19 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 
 前五章中每项必须带有 `summary`、`evidence` 及 `material_id` 或 `material_ids`。实验矩阵每项必须包含 `priority`、`hypothesis`、`creative_variable`、`target_audience`、`success_metric`、`control` 和 `review_action`。涉及滋补、孕期、功效或健康人群的方向只能作为需业务和合规确认的测试假设。
 
-`render-report` 会拒绝缺少章节、证据、素材引用或实验字段的 JSON；CLI 会先拒绝缺少、不匹配或非模型来源的分析回执。它只将已验证的模型洞察渲染为 Markdown/HTML，不新增业务判断。当前用户可见报告只交付两个板块：`01｜TOP 素材组合结论` 与 `02｜人群洞察`。在外部 RPA 的脚本、内容公式、带时间戳脚本段字段尚未可用且经数据可用性核验前，不启动报告第 `03` 部分。渲染器会校验两者的模板占位符、目录锚点和最终 HTML；其余分析键保留为后续板块扩展的内部事实，不得宣称已在当前报告中交付。
+`render-report` 会拒绝缺少章节、证据、素材引用或实验字段的 JSON；CLI 会先拒绝缺少、不匹配或非模型来源的分析回执。它只将已验证的模型洞察渲染为 Markdown/HTML，不新增业务判断。当前用户可见报告交付五个板块：`01｜TOP 素材组合结论`、`02｜人群洞察`、`03｜脚本洞察`、`04｜高光画面洞察` 与 `05｜单素材深度分析`。
+
+`03｜脚本洞察` 为固定占位：当前云图 RPA 未提供可用于汇总的脚本正文与时间戳段落，报告只显示“脚本数据：未接入”，不输出话术、内容公式或帧-话术对应关系，也不得基于标题、标签或画面推断脚本。
+
+`04｜高光画面洞察` 只消费成功落盘的高光 JPEG。模型在实际查看每张图片后，必须通过 `highlightDashboard` 将每张成功帧且仅一次归入 `portrait`、`product`、`other` 三类之一，分类顺序固定；每个非空分类包含帧引用、可观察的共同画面特征和仅引用本类帧的裂变方向。失败帧不得被分类；没有成功帧时不编造视觉洞察。高光帧不能被宣称对应某句脚本、真实点击次数、转化表现或因果关系。渲染器会校验报告占位符、目录锚点、分类完整性与最终 HTML。
+
+`05｜单素材深度分析` 为每个入选素材提供可键盘操作的页签，默认显示榜单排名最高的素材。它展示按秒数排序的成功高光帧、逐帧画面观察、画面总结，以及固定顺序的 `点赞指数`、`流失指数`、`点击指数`、`互动指数`、`评论指数` 五项“秒级拆解”小图。`0s` 同时命中点击峰值时仅展示一张封面帧卡片，但保留封面与点击峰值的双重入选原因和峰值信息。新事实包中的 `materialDeepDives` 必须与入选素材一一对应；每张成功帧仅观察一次，指标观察的秒数必须存在于对应趋势。该部分不得输出脚本、话术、真实互动次数、转化或因果结论；没有新事实包契约的历史报告可重渲染为无数据状态。
 
 HTML 报告使用深棕、暖金、米白的离线视觉系统。报告正文只展示结论与必要关键数字，结构化 `evidence` 保留在 `final-report-data.json`，不进入用户可读报告正文，也不展示为可展开区域。高光帧预览必须支持点击、键盘焦点和 Escape 关闭；失败帧不输出损坏图片，素材诊断继续保留。
 
 报告统一视觉与交互资产位于本技能 `assets/report/`，`render-report` 会将 CSS 和 JavaScript 自动内联到 `final-report.html`，成品不依赖外部样式或脚本文件。不得手工修改成品 HTML 绕过渲染器。
 
-交付前只需用桌面 `1440x1000` 视口检查封面、左侧目录、章节卡片、人群图表和预览层，确认无文本遮挡、正文横向溢出或不可见的键盘焦点；本技能不要求移动端验收。HTML 不得依赖远程图片、脚本或数据请求；归档为单文件时，高光帧须压缩后以 data URI 内嵌。
+交付前使用桌面 `1440x1000` 与移动端 `390x844` 视口检查封面、目录、章节卡片、人群图表、高光帧网格和预览层，确认无文本遮挡、正文横向溢出或不可见的键盘焦点。HTML 不得依赖远程图片、脚本或数据请求；归档为单文件时，高光帧须压缩后以 data URI 内嵌。
 
 ## 输出与失败处理
 
@@ -220,7 +219,7 @@ HTML 报告使用深棕、暖金、米白的离线视觉系统。报告正文只
 - `diagnostic-analysis/yuntu-analysis-data.json`：分析事实包。
 - `diagnostic-analysis/yuntu-analysis-prompt.md`：模型分析提示。
 - `diagnostic-analysis/yuntu-ai-analysis.json`：模型生成的结构化分析结论。
-- `final-report/final-report-data.json`、`final-report/final-report.md` 和 `final-report/final-report.html`：当前两板块报告产物。
+- `final-report/final-report-data.json`、`final-report/final-report.md` 和 `final-report/final-report.html`：包含 01 至 05 板块的最终报告产物；`final-report-data.json` 保留高光帧、分类引用和素材深度洞察。
 
 先运行 `list-accounts` 确认注入网关可用，再运行 `fetch`。若返回 404，检查注入网关是否缺少或多出平台基路径；若返回 504 网关超时，保留 `run-summary.json` 和 `batch-manifest.json`，通过 `status` 交叉检查后再排查，不要将其解释为无素材。
 
@@ -228,4 +227,4 @@ HTML 报告使用深棕、暖金、米白的离线视觉系统。报告正文只
 
 `retry-failed` 只重试 `batch-manifest.json` 中的 `rejectedMaterials`，不会重跑列表请求，也不会重复请求已经成功落盘的详情。
 
-此技能不下载视频、不提取帧。报告由 `prepare-analysis` 生成事实包、模型写入 `yuntu-ai-analysis.json`、再由 `render-report` 渲染；渲染器本身不调用外部模型，也不生成新的业务判断。
+`prepare-analysis` 会在本地下载可用视频并提取标准高光帧；`render-report` 本身不下载视频、不提取帧、不调用外部模型，也不生成新的业务判断。

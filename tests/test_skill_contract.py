@@ -163,7 +163,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
             skill,
         )
 
-    def test_documents_rpa_run_state_and_two_section_report_scope(self):
+    def test_documents_rpa_run_state_and_five_section_report_scope(self):
         skill = self.read_skill()
 
         for phrase in (
@@ -174,9 +174,24 @@ class AnalysisSkillContractTests(unittest.TestCase):
             "list_context",
             "01｜TOP 素材组合结论",
             "02｜人群洞察",
+            "03｜脚本洞察",
+            "04｜高光画面洞察",
+            "05｜单素材深度分析",
+            "脚本数据：未接入",
+            "点击指数",
+            "最多 5",
+            "portrait",
+            "product",
+            "other",
+            "秒级拆解",
+            "点赞指数",
+            "流失指数",
+            "互动指数",
+            "评论指数",
         ):
             self.assertIn(phrase, skill)
         self.assertIn("python <skill-root>/scripts/rpa_connector.py status", skill)
+        self.assertNotIn("--highlight-trends", skill)
 
     def test_documents_xiaoxian_dun_closed_loop_report(self):
         skill = self.read_skill()

@@ -62,6 +62,57 @@ class YuntuHighlightTests(unittest.TestCase):
         )
         self.assertEqual([item["reasons"][0]["rank"] for item in candidates[1:]], [1, 2, 3])
 
+    def test_select_standard_candidates_keeps_cover_and_click_top_five(self):
+        highlights = load_module()
+        detail = detail_with_trends(
+            {
+                "trend_name": "点击指数",
+                "series": [
+                    {"second": 0, "value": 0},
+                    {"second": 1, "value": 9}, {"second": 2, "value": 0},
+                    {"second": 3, "value": 8}, {"second": 4, "value": 0},
+                    {"second": 5, "value": 7}, {"second": 6, "value": 0},
+                    {"second": 7, "value": 6}, {"second": 8, "value": 0},
+                    {"second": 9, "value": 5}, {"second": 10, "value": 0},
+                    {"second": 11, "value": 4}, {"second": 12, "value": 0},
+                ],
+            },
+            {
+                "trend_name": "点赞指数",
+                "series": [{"second": 2, "value": 0}, {"second": 3, "value": 99}, {"second": 4, "value": 0}],
+            },
+        )
+
+        candidates = highlights.select_standard_highlight_candidates(detail)
+
+        self.assertEqual([item["second"] for item in candidates], [0, 1, 3, 5, 7, 9])
+        self.assertEqual(candidates[0]["frame_type"], "cover")
+        self.assertIsNone(candidates[0]["peak_rank"])
+        self.assertEqual(
+            [(item["frame_type"], item["peak_rank"], item["click_value"]) for item in candidates[1:]],
+            [("click_peak", 1, 9), ("click_peak", 2, 8), ("click_peak", 3, 7), ("click_peak", 4, 6), ("click_peak", 5, 5)],
+        )
+
+    def test_standard_candidates_merge_a_zero_second_click_peak_into_the_cover(self):
+        highlights = load_module()
+        detail = detail_with_trends(
+            {
+                "trend_name": "点击指数",
+                "series": [
+                    {"second": 0, "value": 9}, {"second": 1, "value": 0},
+                    {"second": 2, "value": 8}, {"second": 3, "value": 0},
+                ],
+            }
+        )
+
+        candidates = highlights.select_standard_highlight_candidates(detail)
+
+        self.assertEqual([candidate["second"] for candidate in candidates], [0, 2])
+        self.assertEqual(candidates[0]["frame_type"], "cover")
+        self.assertEqual(candidates[0]["peak_rank"], 1)
+        self.assertEqual(candidates[0]["click_value"], 9)
+        self.assertEqual([reason["type"] for reason in candidates[0]["reasons"]], ["cover", "local_peak"])
+
     def test_select_candidates_uses_earliest_second_for_peak_plateau(self):
         highlights = load_module()
         detail = detail_with_trends(
@@ -214,6 +265,28 @@ class YuntuHighlightTests(unittest.TestCase):
                     session=Session(),
                     max_bytes=4,
                 )
+
+    def test_resolve_ffmpeg_uses_imageio_before_system_path(self):
+        highlights = load_module()
+
+        resolved = highlights._resolve_ffmpeg(
+            environ={},
+            imageio_resolver=lambda: "/tmp/imageio-ffmpeg",
+            which=lambda _name: self.fail("PATH lookup must not run after imageio resolves"),
+        )
+
+        self.assertEqual(resolved, "/tmp/imageio-ffmpeg")
+
+    def test_resolve_ffmpeg_falls_back_to_system_path_after_imageio_failure(self):
+        highlights = load_module()
+
+        resolved = highlights._resolve_ffmpeg(
+            environ={},
+            imageio_resolver=lambda: (_ for _ in ()).throw(RuntimeError("imageio unavailable")),
+            which=lambda name: "/usr/local/bin/ffmpeg" if name == "ffmpeg" else None,
+        )
+
+        self.assertEqual(resolved, "/usr/local/bin/ffmpeg")
 
 
 if __name__ == "__main__":

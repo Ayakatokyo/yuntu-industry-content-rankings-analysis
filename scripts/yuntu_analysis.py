@@ -5,12 +5,15 @@ from pathlib import Path
 from statistics import median
 
 from rpa_io import write_json_atomically
-from yuntu_highlights import generate_highlights, normalize_highlight_trends
+from yuntu_highlights import ALLOWED_HIGHLIGHT_TRENDS, generate_standard_highlights
 from yuntu_top_materials import build_audience_dashboard, build_top_material_combination
 
 
 class YuntuAnalysisError(RuntimeError):
     """Raised when analysis facts cannot be prepared."""
+
+
+SECOND_LEVEL_TRENDS = ALLOWED_HIGHLIGHT_TRENDS
 
 
 def _load_json(path):
@@ -117,6 +120,80 @@ def _trend_summary(details):
     return {"byTrendName": dict(sorted(by_name.items()))}
 
 
+def _second_level_breakdown(detail):
+    """Project normalized Yuntu trends into the fixed five-index report contract."""
+    series_by_name = {}
+    for trend in detail.get("trend_series", []):
+        if not isinstance(trend, dict) or trend.get("trend_name") not in SECOND_LEVEL_TRENDS:
+            continue
+        series_by_name.setdefault(trend["trend_name"], []).extend(
+            trend.get("series", []) if isinstance(trend.get("series"), list) else []
+        )
+
+    metrics = []
+    for trend_name in SECOND_LEVEL_TRENDS:
+        by_second = {}
+        conflict = False
+        for point in series_by_name.get(trend_name, []):
+            if not isinstance(point, dict):
+                continue
+            second = point.get("second")
+            value = point.get("value")
+            if (
+                not isinstance(second, int)
+                or isinstance(second, bool)
+                or not isinstance(value, (int, float))
+                or isinstance(value, bool)
+            ):
+                continue
+            previous = by_second.get(second)
+            if previous is not None and previous != value:
+                conflict = True
+            by_second[second] = value
+        if conflict:
+            available = False
+            missing_reason = "conflicting_seconds"
+            points = []
+        elif not series_by_name.get(trend_name):
+            available = False
+            missing_reason = "trend_not_returned"
+            points = []
+        elif not by_second:
+            available = False
+            missing_reason = "no_usable_points"
+            points = []
+        else:
+            available = True
+            missing_reason = ""
+            points = [
+                {"second": second, "value": by_second[second]}
+                for second in sorted(by_second)
+            ]
+        metrics.append(
+            {
+                "trend_name": trend_name,
+                "available": available,
+                "missing_reason": missing_reason,
+                "points": points,
+                "high_points": [
+                    {"start_sec": item.get("start_sec"), "end_sec": item.get("end_sec")}
+                    for item in detail.get("high_points", [])
+                    if isinstance(item, dict) and item.get("trend_name") == trend_name
+                ],
+                "loss_points": [
+                    {
+                        "start_sec": item.get("start_sec"),
+                        "end_sec": item.get("end_sec"),
+                        "loss_percent": item.get("loss_percent"),
+                    }
+                    for item in detail.get("loss_points", [])
+                    if isinstance(item, dict) and item.get("trend_name") == trend_name
+                ],
+            }
+        )
+    return {"metrics": metrics}
+
+
 def _availability_summary(material_facts):
     summary = {}
     for fact in material_facts:
@@ -152,20 +229,23 @@ def _prompt_text():
 
 读取同目录的 `yuntu-analysis-data.json`，生成 `yuntu-ai-analysis.json`。
 
-输出必须是 JSON 对象，包含：topMaterialCombination、rankingOverview、materialComparison、materialDiagnoses、competitorPatterns、xiaoxianDunOpportunityMap、experimentMatrix。
+输出必须是 JSON 对象，包含：topMaterialCombination、rankingOverview、materialComparison、materialDiagnoses、competitorPatterns、xiaoxianDunOpportunityMap、experimentMatrix。若事实包中存在成功高光帧，还必须包含 highlightDashboard。若每条素材包含 `secondLevelBreakdown`，还必须包含 materialDeepDives。
 
 `topMaterialCombination` 必须是对象，包含 `overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。`overallConclusions` 必须恰好有三项，每项含 dimension、summary、evidence、material_ids，dimension 分别且只能为 `data`、`people`、`marketing`：data 总结曝光集中度与内容表现，people 总结年龄、性别和八大人群的曝光加权覆盖，marketing 总结成分/功效/痛点/场景/内容形式/促销利益。人群结论必须明确写出“人群标签是重叠标签，不是真实人群分布，不能相加为 100%。”每个品牌结论必须含 brand、classificationSource、dataSummary、peopleSummary、marketingSummary、evidence、material_ids，且 classificationSource 必须为 `title_rule`；三个 Summary 分别只写该品牌的数据、人群、营销卖点结论。`brandComparisonConclusion` 必须含 summary、evidence、material_ids，summary 直接总结品牌间的曝光集中度、内容表现、人群覆盖与卖点结构差异。标题匹配归属是业务分类，不得称作 RPA 原生品牌字段。CPM 缺失或标签比较样本不足时写“数据不足以判断”。标签与指标只能描述共现关系，不得声称因果。
 
 前五个章节的每一项必须含 summary、evidence，以及 material_id 或 material_ids。experimentMatrix 的每一项必须含 priority、hypothesis、creative_variable、target_audience、success_metric、control、review_action。
 
 所有结论必须引用素材 ID、指标、标签或秒级趋势作为证据。事实不足时写“数据不足以判断”。解释只能描述可能关系，不得声称因果；不得生成未经业务与合规确认的滋补、孕期或健康功效宣称。不得写执行过程、重跑、补位调度、代码状态或排障细节。
+
+`highlightDashboard` 只使用事实包中 `available=true` 的 highlightFrames。实际查看每张 JPEG 后，将每张成功帧且仅一次归入 portrait、product、other 中的一个分类，分类顺序固定为 portrait、product、other。每个非空分类包含 frame_refs、common_patterns 和 derivative_directions；方向只能引用本分类的 frame_refs。没有成功帧时不得编造视觉洞察。高光帧为封面帧和点击指数局部峰值，不能声称其对应某句脚本话术、真实点击次数或转化因果。
+
+`materialDeepDives` 必须与入选素材一一对应。每项包含 material_id、frame_observations、visual_summary、second_level_observations。`frame_observations` 必须将该素材每一张 `available=true` 的 highlightFrames 恰好引用一次，每项只含 frame_ref 和可观察的 observation；不得引用其他素材或失败帧。`visual_summary` 只概括本素材实际可见的画面特征，不得生成脚本、内容公式、真实互动量、转化或因果结论。`second_level_observations` 只使用 `点赞指数`、`流失指数`、`点击指数`、`互动指数`、`评论指数`，每项含 trend_name、summary、evidence_seconds；evidence_seconds 只能填写该素材对应趋势 `points` 中实际存在的秒数。该部分在报告中叫“秒级拆解”，不叫“互动时序分析”。
 """
 
 
-def prepare_analysis(*, input_dir, output_dir, highlight_trends=None):
+def prepare_analysis(*, input_dir, output_dir):
     root = Path(input_dir)
     output = Path(output_dir)
-    selected_trends = normalize_highlight_trends(highlight_trends or [])
     manifest = _load_json(root / "batch-manifest.json")
     list_records = _load_json(root / "normalized" / "list-records.json")
     selected = manifest.get("selectedMaterials", [])
@@ -196,18 +276,17 @@ def prepare_analysis(*, input_dir, output_dir, highlight_trends=None):
                 "material_tags": list_record.get("material_tags", []),
                 "high_points": detail.get("high_points", []),
                 "loss_points": detail.get("loss_points", []),
+                "secondLevelBreakdown": _second_level_breakdown(detail),
                 "listDataAvailability": list_record.get("data_availability", {}),
                 "detailDataAvailability": detail.get("data_availability", {}),
             }
         )
-    highlights = (
-        generate_highlights(details, selected_trends, root) if selected_trends else {}
-    )
+    highlights = generate_standard_highlights(details, root)
     for fact in material_facts:
         frames = highlights.get(str(fact["material_id"]), [])
         fact["highlightFrames"] = frames
         fact["highlightFrameAvailability"] = _highlight_frame_availability(
-            frames, requested=bool(selected_trends)
+            frames, requested=True
         )
     fact_pack = {
         "schemaVersion": 3,

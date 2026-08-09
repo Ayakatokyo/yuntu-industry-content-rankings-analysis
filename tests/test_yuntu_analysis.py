@@ -133,7 +133,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(data["materialFacts"][0]["metricComparison"]["ctr"]["tier"], "observed")
         self.assertEqual(data["dataAvailabilitySummary"]["source_empty"], 2)
 
-    def test_prepare_analysis_includes_generated_highlight_frames_when_requested(self):
+    def test_prepare_analysis_automatically_generates_standard_highlight_frames(self):
         analysis = load_module()
         records = [
             {"material_id": "1", "title": "素材", "metrics": {}, "people_tags": [], "material_tags": [], "data_availability": {}},
@@ -144,19 +144,15 @@ class YuntuAnalysisTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_input(root, records, selected, details)
-            with mock.patch.object(analysis, "generate_highlights", return_value={"1": frames}) as generate:
-                analysis.prepare_analysis(
-                    input_dir=root,
-                    output_dir=root / "diagnostic-analysis",
-                    highlight_trends=["点击指数"],
-                )
+            with mock.patch.object(analysis, "generate_standard_highlights", return_value={"1": frames}) as generate:
+                analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
             data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
 
-        generate.assert_called_once_with(mock.ANY, ["点击指数"], root)
+        generate.assert_called_once_with(mock.ANY, root)
         self.assertEqual(data["materialFacts"][0]["highlightFrames"], frames)
         self.assertEqual(data["materialFacts"][0]["highlightFrameAvailability"], {"available": True, "missing_reason": ""})
 
-    def test_prepare_analysis_skips_highlight_generation_when_not_requested(self):
+    def test_prepare_analysis_records_standard_highlight_failure_states(self):
         analysis = load_module()
         records = [
             {"material_id": "1", "title": "素材", "metrics": {}, "people_tags": [], "material_tags": [], "data_availability": {}},
@@ -166,15 +162,16 @@ class YuntuAnalysisTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_input(root, records, selected, details)
-            with mock.patch.object(analysis, "generate_highlights") as generate:
+            frames = [{"second": 0, "frame_type": "cover", "available": False, "failure_reason": "missing_video_url"}]
+            with mock.patch.object(analysis, "generate_standard_highlights", return_value={"1": frames}) as generate:
                 analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
             data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
 
-        generate.assert_not_called()
-        self.assertEqual(data["materialFacts"][0]["highlightFrames"], [])
+        generate.assert_called_once_with(mock.ANY, root)
+        self.assertEqual(data["materialFacts"][0]["highlightFrames"], frames)
         self.assertEqual(
             data["materialFacts"][0]["highlightFrameAvailability"],
-            {"available": False, "missing_reason": "not_requested"},
+            {"available": False, "missing_reason": "missing_video_url"},
         )
 
     def test_prepare_analysis_writes_top_material_combination_and_prompt_contract(self):
@@ -237,6 +234,33 @@ class YuntuAnalysisTests(unittest.TestCase):
             "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。",
             prompt,
         )
+
+    def test_second_level_breakdown_keeps_five_yuntu_indices_in_fixed_order(self):
+        analysis = load_module()
+        detail = {
+            "trend_series": [
+                {"trend_name": "点击指数", "series": [{"second": 2, "value": 3}, {"second": 0, "value": 1}]},
+                {"trend_name": "点赞指数", "series": [{"second": 0, "value": 2}]},
+                {"trend_name": "评论指数", "series": [{"second": 1, "value": 4}]},
+            ],
+            "high_points": [{"trend_name": "点击指数", "start_sec": 2, "end_sec": 2}],
+            "loss_points": [{"trend_name": "点击指数", "start_sec": 0, "end_sec": 1, "loss_percent": 0.2}],
+            "data_availability": {"trends": {"available": True, "missing_reason": ""}},
+        }
+
+        breakdown = analysis._second_level_breakdown(detail)
+
+        self.assertEqual(
+            [metric["trend_name"] for metric in breakdown["metrics"]],
+            ["点赞指数", "流失指数", "点击指数", "互动指数", "评论指数"],
+        )
+        click = breakdown["metrics"][2]
+        self.assertTrue(click["available"])
+        self.assertEqual(click["points"], [{"second": 0, "value": 1}, {"second": 2, "value": 3}])
+        self.assertEqual(click["high_points"], [{"start_sec": 2, "end_sec": 2}])
+        self.assertEqual(click["loss_points"], [{"start_sec": 0, "end_sec": 1, "loss_percent": 0.2}])
+        self.assertFalse(breakdown["metrics"][1]["available"])
+        self.assertEqual(breakdown["metrics"][1]["missing_reason"], "trend_not_returned")
 
 
 if __name__ == "__main__":

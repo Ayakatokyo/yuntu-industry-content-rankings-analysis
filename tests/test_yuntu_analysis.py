@@ -99,7 +99,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
 
         self.assertEqual(status, 0)
-        self.assertEqual(data["schemaVersion"], 3)
+        self.assertEqual(data["schemaVersion"], 4)
         self.assertEqual(data["candidatePool"]["count"], 4)
         self.assertEqual(data["candidatePool"]["metrics"]["ctr"]["median"], 0.25)
         self.assertEqual(data["audienceDashboard"]["sample"]["recordCount"], 4)
@@ -151,6 +151,72 @@ class YuntuAnalysisTests(unittest.TestCase):
         generate.assert_called_once_with(mock.ANY, root)
         self.assertEqual(data["materialFacts"][0]["highlightFrames"], frames)
         self.assertEqual(data["materialFacts"][0]["highlightFrameAvailability"], {"available": True, "missing_reason": ""})
+
+    def test_prepare_analysis_writes_v4_model_facts_and_visual_assets(self):
+        analysis = load_module()
+        records = [{
+            "material_id": "1", "title": "产品开盖展示", "rank": 1,
+            "metrics": {"ctr": 0.2, "show_cnt": 100},
+            "people_tags": ["新锐白领"], "material_tags": ["产品展示"],
+            "data_availability": {
+                "cpm": {"available": False, "missing_reason": "not_returned"},
+            },
+        }]
+        selected = [{
+            "rank": 1, "material_id": "1",
+            "detailRecordPath": "normalized/detail-records/1.json",
+        }]
+        details = {"1": {
+            "material_id": "1",
+            "trend_series": [{
+                "trend_name": "点击指数", "series": [{"second": 2, "value": 0.8}],
+            }],
+            "high_points": [], "loss_points": [], "data_availability": {},
+        }}
+        frames = [{
+            "frame_ref": "highlight:1:click_peak:2", "second": 2,
+            "frame_type": "click_peak", "peak_rank": 1, "click_value": 0.8,
+            "available": True, "relative_path": "highlights/1/02-002s.jpg",
+            "frame_source": "reused_local_extracted_frame",
+        }]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            with mock.patch.object(
+                analysis, "generate_standard_highlights", return_value={"1": frames}
+            ):
+                analysis.prepare_analysis(
+                    input_dir=root, output_dir=root / "diagnostic-analysis"
+                )
+            data = json.loads(
+                (root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertEqual(data["schemaVersion"], 4)
+        self.assertEqual(data["rankingFacts"]["materials"][0]["material_id"], "1")
+        self.assertTrue(data["audienceFacts"]["labelsMayOverlap"])
+        self.assertEqual(
+            data["marketingFacts"]["materials"][0]["material_tags"], ["产品展示"]
+        )
+        self.assertEqual(data["secondLevelFacts"]["materials"][0]["material_id"], "1")
+        self.assertEqual(
+            data["highlightFrameFacts"][0]["frame_ref"], "highlight:1:click_peak:2"
+        )
+        self.assertEqual(
+            data["visualAssets"][0]["image_path"], "highlights/1/02-002s.jpg"
+        )
+        self.assertEqual(
+            data["visualAssets"][0]["frame_source"],
+            "reused_local_extracted_frame",
+        )
+        self.assertEqual(data["dataLimitations"][0]["reason"], "not_returned")
+        self.assertIn("visualAssets", prompt)
+        self.assertIn("实际查看每张成功 JPEG", prompt)
 
     def test_prepare_analysis_records_standard_highlight_failure_states(self):
         analysis = load_module()

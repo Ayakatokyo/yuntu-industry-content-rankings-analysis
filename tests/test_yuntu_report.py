@@ -30,6 +30,14 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("不得手工修改", skill)
         self.assertIn("1440x1000", skill)
         self.assertIn("390x844", skill)
+        self.assertIn("rankingFacts", skill)
+        self.assertIn("visualAssets", skill)
+        self.assertIn("当前对话模型", skill)
+        self.assertIn("scene", skill)
+        self.assertIn("text_overlay", skill)
+        self.assertIn("replication_advice", skill)
+        self.assertIn("audienceInsights", skill)
+        self.assertIn("do_not_copy", skill)
 
     def analysis_json(self):
         return {
@@ -97,11 +105,16 @@ class YuntuReportTests(unittest.TestCase):
                 },
             },
             "rankingOverview": [{"summary": "竞品出现价格利益点。", "material_ids": ["101"], "evidence": [{"metric": "ctr", "value": 0.7}]}],
+            "audienceInsights": [{
+                "summary": "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。新锐白领标签在已返回素材中更常出现。",
+                "material_ids": ["101"],
+                "evidence": [{"tag": "新锐白领"}],
+            }],
             "materialComparison": [{"material_id": "101", "summary": "CTR 位于候选池高位。", "evidence": [{"metric": "ctr", "value": 0.7}]}],
             "materialDiagnoses": [{"material_id": "101", "summary": "第 1-2 秒出现点击高点。", "evidence": [{"trend_name": "点击指数", "start_sec": 1, "end_sec": 2}]}],
             "competitorPatterns": [{"summary": "价格利益点前置。", "material_ids": ["101"], "evidence": [{"tag": "限时抢购"}]}],
             "xiaoxianDunOpportunityMap": [{"summary": "测试通勤滋补场景。", "material_ids": ["101"], "evidence": [{"tag": "商品展示(有语音)"}]}],
-            "experimentMatrix": [{"priority": "P1", "hypothesis": "通勤开场提升 3 秒播放率", "creative_variable": "前 3 秒场景钩子", "target_audience": "新锐白领", "success_metric": "play_3s_rate", "control": "现有商品直展示素材", "review_action": "按人群拆分复盘"}],
+            "experimentMatrix": [{"priority": "P1", "hypothesis": "测试通勤开场的 3 秒播放率表现", "creative_variable": "前 3 秒场景钩子", "target_audience": "新锐白领", "success_metric": "play_3s_rate", "control": "现有商品直展示素材", "review_action": "按人群拆分复盘", "evidence": [{"material_id": "101", "metric": "play_3s_rate"}]}],
         }
 
     def highlight_dashboard(self):
@@ -148,7 +161,7 @@ class YuntuReportTests(unittest.TestCase):
                 ],
                 "secondLevelBreakdown": {"metrics": [metric(name, index) for index, name in enumerate(("点赞指数", "流失指数", "点击指数", "互动指数", "评论指数"))]},
             })
-        return {"selectedMaterials": [{"rank": 1, "material_id": "101"}, {"rank": 2, "material_id": "102"}], "materialFacts": facts}
+        return {"schemaVersion": 4, "selectedMaterials": [{"rank": 1, "material_id": "101"}, {"rank": 2, "material_id": "102"}], "materialFacts": facts}
 
     def deep_dive_analysis(self):
         analysis = self.analysis_json()
@@ -168,6 +181,18 @@ class YuntuReportTests(unittest.TestCase):
                     {"frame_ref": f"highlight:{material_id}:click_peak:2", "observation": "产品与人物共同处于画面中心。"},
                 ],
                 "visual_summary": "画面围绕人物与产品的近距离展示展开。",
+                "data_summary": "该素材使用已返回的榜单指标作为展示事实。",
+                "audience_summary": "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。",
+                "marketing_summary": "产品展示标签与画面中的产品主体共同出现。",
+                "replication_advice": "可测试近景产品主体与清晰包装展示的组合。",
+                "risk_notes": "画面结论仅限已提取帧，健康相关表达需业务与合规复核。",
+                "opening_judgment": "前 3 秒以稳定主体承接注意力，仅描述可见画面。",
+                "visual_rhythm": "已提取帧中的主体与景别有可见变化。",
+                "peak_frame_reading": "点击峰值秒点展示产品与人物同框的画面。",
+                "second_level_reading": "五类指数只按已返回秒级点位作描述。",
+                "audience_fit": "人群标签与画面主题的匹配仅为待验证判断。",
+                "xiaoxian_dun_reference": "小仙炖可测试产品主体和日常场景的组合。",
+                "do_not_copy": "不直接照搬健康功效或特定人群承诺。",
                 "second_level_observations": [{"trend_name": "点击指数", "summary": "第 2 秒为已返回的高点秒数。", "evidence_seconds": [2]}],
             }
             for material_id in ("101", "102")
@@ -540,6 +565,13 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("点击 Top1 峰值帧｜2s｜点击指数 0.80", rendered)
         self.assertIn("## 05｜单素材深度分析", markdown)
         self.assertIn("秒级拆解", markdown)
+        self.assertNotIn("可测试近景产品主体与清晰包装展示的组合。", rendered)
+        self.assertNotIn("健康相关表达需业务与合规复核。", rendered)
+        self.assertNotIn("#### 数据总结", markdown)
+        self.assertNotIn("#### 复用建议", markdown)
+        self.assertNotIn("#### 不建议照搬", markdown)
+        self.assertNotIn("可结合画面主体、字幕和产品露出查看节奏分布", rendered)
+        self.assertNotIn("未输出观察。", markdown)
 
     def test_render_report_uses_qianchuan_style_frame_first_deep_dive_layout(self):
         report = load_module()
@@ -625,6 +657,70 @@ class YuntuReportTests(unittest.TestCase):
                 with self.assertRaisesRegex(report.YuntuReportError, error):
                     report.render_report(analysis_json=path, output_dir=Path(directory) / "report", fact_pack=self.deep_dive_fact_pack())
 
+    def test_render_report_rejects_deep_dive_without_ai_summary_fields(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        del analysis["materialDeepDives"][0]["replication_advice"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "replication_advice"):
+                report.render_report(
+                    analysis_json=path,
+                    output_dir=root / "report",
+                    fact_pack=self.deep_dive_fact_pack(),
+                )
+
+    def test_render_report_accepts_scene_and_text_overlay_highlight_groups(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"]["groups"] = [
+            {
+                "category": "scene",
+                "frame_refs": ["highlight:101:cover:0"],
+                "common_patterns": ["冰箱场景可见。"],
+                "derivative_directions": [],
+            },
+            {
+                "category": "text_overlay",
+                "frame_refs": [
+                    "highlight:101:click_peak:2",
+                    "highlight:102:cover:0",
+                    "highlight:102:click_peak:2",
+                ],
+                "common_patterns": ["画面含可见文字信息。"],
+                "derivative_directions": [],
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            self.assertEqual(
+                report.render_report(
+                    analysis_json=path,
+                    output_dir=root / "report",
+                    fact_pack=self.deep_dive_fact_pack(),
+                ),
+                0,
+            )
+
+    def test_render_report_rejects_experiment_without_fact_reference(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        del analysis["experimentMatrix"][0]["evidence"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "experimentMatrix.*reference"):
+                report.render_report(
+                    analysis_json=path,
+                    output_dir=root / "report",
+                    fact_pack=self.deep_dive_fact_pack(),
+                )
+
     def test_render_report_renders_classified_highlight_frames(self):
         report = load_module()
         analysis = self.analysis_json()
@@ -648,17 +744,29 @@ class YuntuReportTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            source_frame = root / "highlights" / "101" / "01-000s.jpg"
+            source_frame.parent.mkdir(parents=True)
+            source_frame.write_bytes(b"fake-jpg")
             analysis_path = root / "analysis.json"
             analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
             report.render_report(analysis_json=analysis_path, output_dir=root / "report", fact_pack=fact_pack)
             rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
             data = json.loads((root / "report" / "final-report-data.json").read_text(encoding="utf-8"))
+            copied_frame = (root / "report" / "assets" / "highlight-frames" / "101" / "01-000s.jpg").read_bytes()
 
         self.assertIn("人像画面", rendered)
         self.assertIn("保留近景人物开场", rendered)
+        self.assertIn('role="tablist" aria-label="高光画面分类"', rendered)
+        self.assertIn('data-highlight-category-tab', rendered)
+        self.assertIn('role="tabpanel"', rendered)
         self.assertIn('class="highlight-frame-button"', rendered)
-        self.assertIn('src="../highlights/101/01-000s.jpg"', rendered)
+        self.assertIn('src="assets/highlight-frames/101/01-000s.jpg"', rendered)
+        self.assertEqual(copied_frame, b"fake-jpg")
         self.assertIn('aria-label="查看高光帧大图"', rendered)
+        self.assertLess(
+            rendered.index('class="highlight-analysis-pair"'),
+            rendered.index('class="highlight-frame-grid"'),
+        )
         self.assertIn("highlight:101:cover:0", data["highlightFrames"])
 
     def test_render_report_rejects_highlight_frames_classified_more_than_once(self):
@@ -754,6 +862,7 @@ class YuntuReportTests(unittest.TestCase):
         analysis = self.analysis_json()
         evidence_sections = {
             "rankingOverview": analysis["rankingOverview"],
+            "audienceInsights": analysis["audienceInsights"],
             "materialComparison": analysis["materialComparison"],
             "materialDiagnoses": analysis["materialDiagnoses"],
             "competitorPatterns": analysis["competitorPatterns"],
@@ -769,7 +878,7 @@ class YuntuReportTests(unittest.TestCase):
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
             markdown = (root / "final-report" / "final-report.md").read_text(encoding="utf-8")
             data = json.loads((root / "final-report" / "final-report-data.json").read_text(encoding="utf-8"))
-        self.assertNotIn('class="insight-row"', rendered)
+        self.assertIn('class="insight-row"', rendered)
         self.assertNotIn('class="material-reference" href="#material-101"', rendered)
         self.assertNotIn('<details class="evidence-details">', rendered)
         self.assertNotIn("查看数据依据", rendered)

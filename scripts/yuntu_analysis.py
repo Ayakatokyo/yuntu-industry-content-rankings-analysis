@@ -224,22 +224,149 @@ def _highlight_frame_availability(frames, *, requested):
     }
 
 
+def _data_limitations(material_facts):
+    limitations = []
+    for fact in material_facts:
+        material_id = str(fact.get("material_id", ""))
+        for source_name, source in (
+            ("list", fact.get("listDataAvailability", {})),
+            ("detail", fact.get("detailDataAvailability", {})),
+        ):
+            for field, state in source.items() if isinstance(source, dict) else ():
+                if not isinstance(state, dict) or state.get("available"):
+                    continue
+                limitations.append(
+                    {
+                        "material_id": material_id,
+                        "field": f"{source_name}.{field}",
+                        "reason": state.get("missing_reason") or "no_usable_values",
+                    }
+                )
+        for frame in fact.get("highlightFrames", []):
+            if not isinstance(frame, dict) or frame.get("available"):
+                continue
+            limitations.append(
+                {
+                    "material_id": material_id,
+                    "field": f"highlightFrames.{frame.get('frame_ref', frame.get('second', 'unknown'))}",
+                    "reason": frame.get("failure_reason") or "no_available_frame",
+                }
+            )
+    return sorted(
+        limitations,
+        key=lambda item: (item["material_id"], item["field"], item["reason"]),
+    )
+
+
+def _model_input_sections(material_facts, candidate_pool, audience_dashboard, tag_insights, trend_summary):
+    visual_assets = []
+    for fact in material_facts:
+        for frame in fact.get("highlightFrames", []):
+            if not isinstance(frame, dict):
+                continue
+            visual_assets.append(
+                {
+                    "material_id": str(fact["material_id"]),
+                    "title": fact["title"],
+                    "rank": fact["rank"],
+                    "frame_ref": frame.get("frame_ref"),
+                    "second": frame.get("second"),
+                    "frame_type": frame.get("frame_type"),
+                    "peak_rank": frame.get("peak_rank"),
+                    "click_value": frame.get("click_value"),
+                    "image_path": frame.get("relative_path", ""),
+                    "available": bool(frame.get("available")),
+                    "failure_reason": frame.get("failure_reason", ""),
+                    "frame_source": frame.get(
+                        "frame_source", "newly_extracted_frame"
+                    ),
+                }
+            )
+    return {
+        "rankingFacts": {
+            "candidatePool": candidate_pool,
+            "materials": [
+                {
+                    "material_id": str(fact["material_id"]),
+                    "rank": fact["rank"],
+                    "title": fact["title"],
+                    "metrics": fact["metrics"],
+                    "metricComparison": fact["metricComparison"],
+                }
+                for fact in material_facts
+            ],
+        },
+        "audienceFacts": {
+            "labelsMayOverlap": True,
+            "notice": "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。",
+            "dashboard": audience_dashboard,
+            "materials": [
+                {
+                    "material_id": str(fact["material_id"]),
+                    "people_tags": fact["people_tags"],
+                }
+                for fact in material_facts
+            ],
+        },
+        "marketingFacts": {
+            "tagInsights": tag_insights,
+            "materials": [
+                {
+                    "material_id": str(fact["material_id"]),
+                    "material_tags": fact["material_tags"],
+                }
+                for fact in material_facts
+            ],
+        },
+        "secondLevelFacts": {
+            "trendSummary": trend_summary,
+            "materials": [
+                {
+                    "material_id": str(fact["material_id"]),
+                    "metrics": fact["secondLevelBreakdown"]["metrics"],
+                }
+                for fact in material_facts
+            ],
+        },
+        "highlightFrameFacts": [
+            {
+                key: asset[key]
+                for key in (
+                    "material_id",
+                    "frame_ref",
+                    "second",
+                    "frame_type",
+                    "peak_rank",
+                    "click_value",
+                    "available",
+                    "failure_reason",
+                )
+            }
+            for asset in visual_assets
+        ],
+        "visualAssets": visual_assets,
+        "dataLimitations": _data_limitations(material_facts),
+    }
+
+
 def _prompt_text():
     return """# 小仙炖云图行业内容榜单分析任务
 
 读取同目录的 `yuntu-analysis-data.json`，生成 `yuntu-ai-analysis.json`。
 
-输出必须是 JSON 对象，包含：topMaterialCombination、rankingOverview、materialComparison、materialDiagnoses、competitorPatterns、xiaoxianDunOpportunityMap、experimentMatrix。若事实包中存在成功高光帧，还必须包含 highlightDashboard。若每条素材包含 `secondLevelBreakdown`，还必须包含 materialDeepDives。
+事实包同时提供 `rankingFacts`、`audienceFacts`、`marketingFacts`、`secondLevelFacts`、`highlightFrameFacts`、`visualAssets` 与 `dataLimitations`。它们是模型可分析材料：规则只计算事实，模型负责写业务判断。`visualAssets` 是本地图片清单；必须实际查看每张成功 JPEG（`available=true`），原视频 URL 过期时仍使用已落盘的本地帧，不得以 URL 不可用为由跳过画面分析。
+
+输出必须是 JSON 对象，包含：topMaterialCombination、rankingOverview、audienceInsights、materialComparison、materialDiagnoses、competitorPatterns、xiaoxianDunOpportunityMap、experimentMatrix。若事实包中存在成功高光帧，还必须包含 highlightDashboard。若每条素材包含 `secondLevelBreakdown`，还必须包含 materialDeepDives。
 
 `topMaterialCombination` 必须是对象，包含 `overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。`overallConclusions` 必须恰好有三项，每项含 dimension、summary、evidence、material_ids，dimension 分别且只能为 `data`、`people`、`marketing`：data 总结曝光集中度与内容表现，people 总结年龄、性别和八大人群的曝光加权覆盖，marketing 总结成分/功效/痛点/场景/内容形式/促销利益。人群结论必须明确写出“人群标签是重叠标签，不是真实人群分布，不能相加为 100%。”每个品牌结论必须含 brand、classificationSource、dataSummary、peopleSummary、marketingSummary、evidence、material_ids，且 classificationSource 必须为 `title_rule`；三个 Summary 分别只写该品牌的数据、人群、营销卖点结论。`brandComparisonConclusion` 必须含 summary、evidence、material_ids，summary 直接总结品牌间的曝光集中度、内容表现、人群覆盖与卖点结构差异。标题匹配归属是业务分类，不得称作 RPA 原生品牌字段。CPM 缺失或标签比较样本不足时写“数据不足以判断”。标签与指标只能描述共现关系，不得声称因果。
 
-前五个章节的每一项必须含 summary、evidence，以及 material_id 或 material_ids。experimentMatrix 的每一项必须含 priority、hypothesis、creative_variable、target_audience、success_metric、control、review_action。
+`audienceInsights` 的每项必须含 summary、evidence，以及 material_id 或 material_ids，且 summary 必须明确写出“人群标签是重叠标签，不是真实人群分布，不能相加为 100%。”前五个章节的每一项必须含 summary、evidence，以及 material_id 或 material_ids。experimentMatrix 的每一项必须含 priority、hypothesis、creative_variable、target_audience、success_metric、control、review_action、evidence；每项 evidence 至少引用事实包中真实存在的 material_id、metric、frame_ref，或趋势及其真实秒数。
 
 所有结论必须引用素材 ID、指标、标签或秒级趋势作为证据。事实不足时写“数据不足以判断”。解释只能描述可能关系，不得声称因果；不得生成未经业务与合规确认的滋补、孕期或健康功效宣称。不得写执行过程、重跑、补位调度、代码状态或排障细节。
 
-`highlightDashboard` 只使用事实包中 `available=true` 的 highlightFrames。实际查看每张 JPEG 后，将每张成功帧且仅一次归入 portrait、product、other 中的一个分类，分类顺序固定为 portrait、product、other。每个非空分类包含 frame_refs、common_patterns 和 derivative_directions；方向只能引用本分类的 frame_refs。没有成功帧时不得编造视觉洞察。高光帧为封面帧和点击指数局部峰值，不能声称其对应某句脚本话术、真实点击次数或转化因果。
+`highlightDashboard` 只使用事实包中 `available=true` 的 highlightFrames。实际查看每张 JPEG 后，将每张成功帧且仅一次归入 portrait、product、scene、text_overlay、other 中的一个主视觉分类，分类顺序固定为 portrait、product、scene、text_overlay、other。每个非空分类包含 frame_refs、common_patterns 和 derivative_directions；方向只能引用本分类的 frame_refs。没有成功帧时不得编造视觉洞察。高光帧为封面帧和点击指数局部峰值。只能描述该帧处于点击指数峰值秒点；不得说该画面导致点击、转化或指标提升，也不能声称其对应某句脚本话术或真实点击次数。
 
-`materialDeepDives` 必须与入选素材一一对应。每项包含 material_id、frame_observations、visual_summary、second_level_observations。`frame_observations` 必须将该素材每一张 `available=true` 的 highlightFrames 恰好引用一次，每项只含 frame_ref 和可观察的 observation；不得引用其他素材或失败帧。`visual_summary` 只概括本素材实际可见的画面特征，不得生成脚本、内容公式、真实互动量、转化或因果结论。`second_level_observations` 只使用 `点赞指数`、`流失指数`、`点击指数`、`互动指数`、`评论指数`，每项含 trend_name、summary、evidence_seconds；evidence_seconds 只能填写该素材对应趋势 `points` 中实际存在的秒数。该部分在报告中叫“秒级拆解”，不叫“互动时序分析”。
+`materialDeepDives` 必须与入选素材一一对应。每项包含 material_id、frame_observations、second_level_observations、visual_summary、data_summary、audience_summary、marketing_summary、replication_advice、risk_notes、opening_judgment、visual_rhythm、peak_frame_reading、second_level_reading、audience_fit、xiaoxian_dun_reference、do_not_copy。`frame_observations` 必须将该素材每一张 `available=true` 的 highlightFrames 恰好引用一次，每项只含 frame_ref 和可观察的 observation；不得引用其他素材或失败帧。所有摘要只使用事实包和实际可见画面，不得生成脚本、内容公式、真实互动量、转化或因果结论。`second_level_observations` 只使用 `点赞指数`、`流失指数`、`点击指数`、`互动指数`、`评论指数`，每项含 trend_name、summary、evidence_seconds；evidence_seconds 只能填写该素材对应趋势 `points` 中实际存在的秒数。`do_not_copy` 必须说明不宜照搬的画面、表达或未验证健康宣称。该部分在报告中叫“秒级拆解”，不叫“互动时序分析”。
 """
 
 
@@ -288,20 +415,33 @@ def prepare_analysis(*, input_dir, output_dir):
         fact["highlightFrameAvailability"] = _highlight_frame_availability(
             frames, requested=True
         )
+    candidate_pool = _candidate_pool(pool_records)
+    audience_dashboard = build_audience_dashboard(pool_records)
+    tag_insights = _tag_insights(pool_records, selected_ids)
+    trend_summary = _trend_summary(details)
     fact_pack = {
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "filters": manifest.get("filters", {}),
         "selectedMaterials": selected,
         "rejectedMaterials": rejected,
         "summaryMetrics": {"selectedCount": len(selected), "rejectedCount": len(rejected), "candidateCount": len(pool_records)},
-        "candidatePool": _candidate_pool(pool_records),
+        "candidatePool": candidate_pool,
         "topMaterialCombination": build_top_material_combination(pool_records),
-        "audienceDashboard": build_audience_dashboard(pool_records),
-        "tagInsights": _tag_insights(pool_records, selected_ids),
-        "trendSummary": _trend_summary(details),
+        "audienceDashboard": audience_dashboard,
+        "tagInsights": tag_insights,
+        "trendSummary": trend_summary,
         "dataAvailabilitySummary": _availability_summary(material_facts),
         "materialFacts": material_facts,
     }
+    fact_pack.update(
+        _model_input_sections(
+            material_facts,
+            candidate_pool,
+            audience_dashboard,
+            tag_insights,
+            trend_summary,
+        )
+    )
     write_json_atomically(fact_pack, output / "yuntu-analysis-data.json")
     output.mkdir(parents=True, exist_ok=True)
     (output / "yuntu-analysis-prompt.md").write_text(_prompt_text(), encoding="utf-8")

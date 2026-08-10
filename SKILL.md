@@ -116,7 +116,7 @@ python <skill-root>/scripts/rpa_connector.py prepare-analysis \
 
 视频下载、FFmpeg 或单帧截图失败只记录具体失败原因，不阻断事实包或最终报告；HTML 只展示成功 JPEG，不输出损坏图片。这里的“点击指数”不是实际点击次数，局部峰值也不能用于推断转化因果。
 
-模型读取 `diagnostic-analysis/yuntu-analysis-data.json` 和 `diagnostic-analysis/yuntu-analysis-prompt.md` 后，生成 `diagnostic-analysis/yuntu-ai-analysis.json`。模型或人工模型步骤完成后，必须登记来源回执；未经回执核验不得渲染最终报告：
+当前对话模型读取 `diagnostic-analysis/yuntu-analysis-data.json` 和 `diagnostic-analysis/yuntu-analysis-prompt.md` 后，生成 `diagnostic-analysis/yuntu-ai-analysis.json`。模型或人工模型步骤完成后，必须登记来源回执；未经回执核验不得渲染最终报告：
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py attest-analysis \
@@ -178,29 +178,32 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 
 `prepare-analysis` 会以完整榜单作为候选池、以成功详情素材作为秒级诊断范围，计算指标均值、中位数、分位与分层，汇总人群和内容标签覆盖，并归纳高点与流失区间。该阶段只生成可审计事实和图表数据，不生成最终业务结论文字。候选池少于四条时不输出高表现分层或标签关联；缺少指标、标签或趋势时在事实包中标记数据不足，不得补造结论。
 
-模型读取事实包后，必须写入包含以下七个键的 `yuntu-ai-analysis.json`：
+`prepare-analysis` 生成 schema v4 事实包，在保留既有统计字段外，明确提供 `rankingFacts`、`audienceFacts`、`marketingFacts`、`secondLevelFacts`、`highlightFrameFacts`、`visualAssets` 和 `dataLimitations`。当前对话模型必须读取这些结构化事实；对每一张 `visualAssets` 中 `available=true` 的本地 JPEG 实际查看后再写视觉结论。视频 URL 过期时复用已落盘帧，`frame_source: reused_local_extracted_frame` 只说明资产来源，不改变帧的事实身份。
+
+模型读取事实包后，必须写入包含以下八个基础键的 `yuntu-ai-analysis.json`：
 
 1. `topMaterialCombination`：TOP 素材组合结论
 2. `rankingOverview`：榜单机会总览
-3. `materialComparison`：素材表现对比
-4. `materialDiagnoses`：单素材秒级诊断
-5. `competitorPatterns`：竞品创意模式
-6. `xiaoxianDunOpportunityMap`：小仙炖机会地图
-7. `experimentMatrix`：下一轮实验矩阵
+3. `audienceInsights`：人群结构洞察
+4. `materialComparison`：素材表现对比
+5. `materialDiagnoses`：单素材秒级诊断
+6. `competitorPatterns`：竞品创意模式
+7. `xiaoxianDunOpportunityMap`：小仙炖机会地图
+8. `experimentMatrix`：下一轮实验矩阵
 
 `topMaterialCombination` 包含 `overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。`overallConclusions` 必须且只能包含 `data`、`people`、`marketing` 三个维度；`brandConclusions` 的每个品牌必须包含 `dataSummary`、`peopleSummary`、`marketingSummary`；`brandComparisonConclusion` 必须基于每个参与品牌的指标证据总结横向差异。整体结论分析品牌筛选条件下 TOP30 的曝光、CTR、CVR、PVR、3S/5S/完播、互动、组件点击和平均播放时长，以及年龄、性别、八大画像和营销卖点。品牌结论按标题匹配规则独立分析各品牌下 TOP30：万益蓝/WONDERLAB 命中“万益蓝”或“wonderlab”，五个女博士命中“五个女博士”，燕之屋命中“燕之屋”。标题匹配是业务分类，不是 RPA 原生品牌字段；未知品牌保留在品牌筛选条件下 TOP30，但不进入品牌 TOP30；命中多个品牌的标题标为歧义并不进入品牌对比。
 
 人群标签同时给出素材数量占比和曝光加权覆盖率。标签可以重叠，因此曝光加权覆盖率不可相加为 100%，也不得写成真实人群比例。CPM 未由 RPA 提供时必须显示不可用，禁止从曝光或其他指标推算。卖点与指标只能描述共现，不得声称因果；某标签的有/无标签比较任一侧样本少于 3 条时写“数据不足以判断”。
 
-前五章中每项必须带有 `summary`、`evidence` 及 `material_id` 或 `material_ids`。实验矩阵每项必须包含 `priority`、`hypothesis`、`creative_variable`、`target_audience`、`success_metric`、`control` 和 `review_action`。涉及滋补、孕期、功效或健康人群的方向只能作为需业务和合规确认的测试假设。
+`audienceInsights` 的每项必须带有 `summary`、`evidence` 及 `material_id` 或 `material_ids`，并明确“人群标签是重叠标签，不是真实人群分布，不能相加为 100%。”前五章中每项必须带有 `summary`、`evidence` 及 `material_id` 或 `material_ids`。实验矩阵每项必须包含 `priority`、`hypothesis`、`creative_variable`、`target_audience`、`success_metric`、`control`、`review_action` 和 `evidence`；evidence 至少引用一个真实素材 ID、指标、`frame_ref` 或已返回的秒级点。涉及滋补、孕期、功效或健康人群的方向只能作为需业务和合规确认的测试假设。
 
 `render-report` 会拒绝缺少章节、证据、素材引用或实验字段的 JSON；CLI 会先拒绝缺少、不匹配或非模型来源的分析回执。它只将已验证的模型洞察渲染为 Markdown/HTML，不新增业务判断。当前用户可见报告交付五个板块：`01｜TOP 素材组合结论`、`02｜人群洞察`、`03｜脚本洞察`、`04｜高光画面洞察` 与 `05｜单素材深度分析`。
 
 `03｜脚本洞察` 为固定占位：当前云图 RPA 未提供可用于汇总的脚本正文与时间戳段落，报告只显示“脚本数据：未接入”，不输出话术、内容公式或帧-话术对应关系，也不得基于标题、标签或画面推断脚本。
 
-`04｜高光画面洞察` 只消费成功落盘的高光 JPEG。模型在实际查看每张图片后，必须通过 `highlightDashboard` 将每张成功帧且仅一次归入 `portrait`、`product`、`other` 三类之一，分类顺序固定；每个非空分类包含帧引用、可观察的共同画面特征和仅引用本类帧的裂变方向。失败帧不得被分类；没有成功帧时不编造视觉洞察。高光帧不能被宣称对应某句脚本、真实点击次数、转化表现或因果关系。渲染器会校验报告占位符、目录锚点、分类完整性与最终 HTML。
+`04｜高光画面洞察` 只消费成功落盘的高光 JPEG。模型在实际查看每张图片后，必须通过 `highlightDashboard` 将每张成功帧且仅一次归入 `portrait`、`product`、`scene`、`text_overlay`、`other` 五类主视觉之一，分类顺序固定；每个非空分类包含帧引用、可观察的共同画面特征和仅引用本类帧的裂变方向。失败帧不得被分类；没有成功帧时不编造视觉洞察。高光帧只能表述为处于点击指数峰值秒点，不能被宣称对应某句脚本、真实点击次数、转化表现或因果关系。渲染器会校验报告占位符、目录锚点、分类完整性与最终 HTML。
 
-`05｜单素材深度分析` 为每个入选素材提供可键盘操作的页签，默认显示榜单排名最高的素材。它展示按秒数排序的成功高光帧、逐帧画面观察、画面总结，以及固定顺序的 `点赞指数`、`流失指数`、`点击指数`、`互动指数`、`评论指数` 五项“秒级拆解”小图。`0s` 同时命中点击峰值时仅展示一张封面帧卡片，但保留封面与点击峰值的双重入选原因和峰值信息。新事实包中的 `materialDeepDives` 必须与入选素材一一对应；每张成功帧仅观察一次，指标观察的秒数必须存在于对应趋势。该部分不得输出脚本、话术、真实互动次数、转化或因果结论；没有新事实包契约的历史报告可重渲染为无数据状态。
+`05｜单素材深度分析` 为每个入选素材提供可键盘操作的页签，默认显示榜单排名最高的素材。它展示按秒数排序的成功高光帧、逐帧画面观察、画面总结，以及固定顺序的 `点赞指数`、`流失指数`、`点击指数`、`互动指数`、`评论指数` 五项“秒级拆解”小图。`0s` 同时命中点击峰值时仅展示一张封面帧卡片，但保留封面与点击峰值的双重入选原因和峰值信息。新事实包中的 `materialDeepDives` 必须与入选素材一一对应；每张成功帧仅观察一次，指标观察的秒数必须存在于对应趋势。每项必须由模型生成 `visual_summary`、`data_summary`、`audience_summary`、`marketing_summary`、`replication_advice`、`risk_notes`、`opening_judgment`、`visual_rhythm`、`peak_frame_reading`、`second_level_reading`、`audience_fit`、`xiaoxian_dun_reference` 和 `do_not_copy`。该部分不得输出脚本、话术、真实互动次数、转化或因果结论；没有新事实包契约的历史报告可重渲染为无数据状态。
 
 HTML 报告使用深棕、暖金、米白的离线视觉系统。报告正文只展示结论与必要关键数字，结构化 `evidence` 保留在 `final-report-data.json`，不进入用户可读报告正文，也不展示为可展开区域。高光帧预览必须支持点击、键盘焦点和 Escape 关闭；失败帧不输出损坏图片，素材诊断继续保留。
 

@@ -961,6 +961,11 @@ body.unified-report {
   margin-block: auto;
 }
 
+.unified-yuntu .audience-chart-age .pie-legend .legend-label,
+.unified-yuntu .audience-chart-gender .pie-legend .legend-label {
+  font-weight: 700;
+}
+
 .unified-yuntu .audience-chart-age .pie-legend .legend-item,
 .unified-yuntu .audience-chart-gender .pie-legend .legend-item {
   display: grid;

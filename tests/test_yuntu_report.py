@@ -414,7 +414,8 @@ class YuntuReportTests(unittest.TestCase):
                     "unlabeledRecordCount": 1,
                     "tagOccurrenceCount": 2,
                     "buckets": [
-                        {"label": "24-30", "materialCount": 2, "materialShare": 2 / 3, "chartShare": 1},
+                        {"label": "18-19", "materialCount": 1, "materialShare": 1 / 3, "chartShare": 1 / 3},
+                        {"label": "24-30", "materialCount": 2, "materialShare": 2 / 3, "chartShare": 2 / 3},
                     ],
                 },
                 "gender": {
@@ -475,6 +476,10 @@ class YuntuReportTests(unittest.TestCase):
         self.assertEqual(html.count(' data-audience-column '), 1)
         self.assertIn('class="chart-card audience-chart audience-chart-age"', html)
         self.assertIn('class="chart-card audience-chart audience-chart-gender"', html)
+        self.assertIn('style="background:conic-gradient(#9b6a37 0.0000%', html)
+        age_chart = html[html.index('class="chart-card audience-chart audience-chart-age"'):html.index('class="chart-card audience-chart audience-chart-gender"')]
+        self.assertLess(age_chart.index('&quot;24-30&quot;'), age_chart.index('&quot;18-19&quot;'))
+        self.assertLess(age_chart.index('title="18-19：'), age_chart.index('title="24-30：'))
         self.assertIn('class="chart-card audience-chart audience-chart-crowd"', html)
         self.assertLess(
             html.index('class="chart-card audience-chart audience-chart-crowd"'),
@@ -483,16 +488,28 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('class="audience-column-chart"', html)
         self.assertIn('class="audience-column-label">新锐白领</span>', html)
         self.assertIn('class="audience-dashboard" data-audience-records=', html)
+        self.assertIn('data-collapsible-expanded-label="收起人群汇总数据"', html)
+        self.assertIn('data-collapsible-collapsed-label="展开人群汇总数据"', html)
+        self.assertIn('class="collapsible-toggle-action">收起人群汇总数据</span>', html)
+        self.assertNotIn('class="collapsible-body-title">人群数据</b>', html)
         self.assertIn('data-audience-topn-range', html)
         self.assertIn('data-audience-topn-input', html)
         self.assertIn('data-audience-topn-label', html)
         self.assertIn('computeAudienceDimension', html)
         self.assertIn('renderAudienceTopN', html)
+        self.assertIn("var visualBuckets = key === 'age'", html)
+        self.assertIn("var legendBuckets = key === 'age'", html)
         self.assertIn("renderAudienceGroupDrill(item.closest('article')", html)
         self.assertIn('class="legend-label"><i class="legend-swatch"', html)
         self.assertIn('class="legend-count">2 条</span>', html)
         self.assertIn('class="legend-share">100.0%</span>', html)
         self.assertIn('class="chart-tooltip"', html)
+        self.assertIn('命中素材数：2条', html)
+        self.assertIn('占比：100.0%', html)
+        self.assertIn("item.title = bucket.label + '：命中素材数：'", html)
+        self.assertIn("'条 占比：' + pct(bucket.chartShare)", html)
+        self.assertIn("tooltip.append(title, count, share);", html)
+        self.assertIn("pieTooltip.replaceChildren(title, count, share);", html)
         self.assertIn("showPieTooltip", html)
         self.assertIn("hidePieTooltip", html)
         self.assertIn("data-pie-tooltip", html)
@@ -501,9 +518,9 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("覆盖率", markdown)
         self.assertNotIn("覆盖率", html)
         self.assertIn("占比 100.0%", markdown)
-        self.assertIn("占比 100.0%", html)
+        self.assertIn("占比：100.0%", html)
         self.assertIn('class="audience-data-card raw-fact-card"', html)
-        self.assertIn('data-collapsible-toggle aria-expanded="true" aria-controls="audience-dashboard-body"', html)
+        self.assertIn('data-collapsible-toggle data-collapsible-expanded-label=', html)
         self.assertIn('class="collapsible-body" id="audience-dashboard-body"', html)
         self.assertIn('.page{width:min(1280px,calc(100% - 20px));', html)
         self.assertIn('overflow-x: hidden;', html)
@@ -520,6 +537,8 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('width: min(320px, 100%) !important;', html)
         self.assertIn('.unified-report .pie-legend {', html)
         self.assertIn(".unified-yuntu .audience-chart-age .pie-legend", html)
+        self.assertIn('.unified-yuntu .audience-chart-age .pie-legend .legend-label', html)
+        self.assertIn('font-weight: 700;', html)
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", html)
         self.assertIn("grid-template-columns: max-content max-content max-content;", html)
         self.assertIn('contain: layout paint;', html)

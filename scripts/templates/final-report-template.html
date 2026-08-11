@@ -65,7 +65,11 @@
             tooltip.replaceChildren();
             var title = document.createElement('b');
             title.textContent = active.label;
-            tooltip.append(title, document.createTextNode('素材数 ' + active.count + ' 条 · 占比 ' + active.share + '%'));
+            var count = document.createElement('span');
+            count.textContent = '命中素材数：' + active.count + '条';
+            var share = document.createElement('span');
+            share.textContent = '占比：' + active.share + '%';
+            tooltip.append(title, count, share);
             tooltip.classList.add('is-visible');
           }
           function updateTooltip(event) {
@@ -218,9 +222,11 @@
       document.querySelectorAll('[data-collapsible-toggle]').forEach(function (button) {
         var target = document.getElementById(button.getAttribute('aria-controls'));
         var action = button.querySelector('.collapsible-toggle-action');
+        var expandedLabel = button.getAttribute('data-collapsible-expanded-label') || '收起数据';
+        var collapsedLabel = button.getAttribute('data-collapsible-collapsed-label') || '展开数据';
         function sync(expanded) {
           button.setAttribute('aria-expanded', String(expanded));
-          if (action) action.textContent = expanded ? '收起数据' : '展开数据';
+          if (action) action.textContent = expanded ? expandedLabel : collapsedLabel;
           if (target) target.hidden = !expanded;
         }
         sync(button.getAttribute('aria-expanded') !== 'false');
@@ -300,20 +306,33 @@
           pie.setAttribute('aria-label', title + '标签占比图，素材样本共 ' + dimension.recordCount + ' 条');
           var cursor = 0;
           var stops = [];
+          var slices = [];
           var legend = document.createElement('ul');
           legend.className = 'pie-legend';
-          dimension.buckets.forEach(function (bucket, index) {
+          var visualBuckets = key === 'age' ? dimension.buckets.slice().sort(function (left, right) {
+            return Number(right.chartShare || 0) - Number(left.chartShare || 0) || String(left.label).localeCompare(String(right.label));
+          }) : dimension.buckets;
+          var colorsByLabel = {};
+          visualBuckets.forEach(function (bucket, index) {
             var next = cursor + bucket.chartShare * 100;
             var color = colors[index % colors.length];
+            colorsByLabel[bucket.label] = color;
             stops.push(color + ' ' + cursor.toFixed(4) + '% ' + next.toFixed(4) + '%');
+            slices.push({ label: bucket.label, count: bucket.materialCount, share: Number((bucket.chartShare * 100).toFixed(1)), start: cursor * 3.6, end: next * 3.6 });
+            cursor = next;
+          });
+          var legendBuckets = key === 'age' ? dimension.buckets.slice().sort(function (left, right) {
+            return Number.parseInt(left.label, 10) - Number.parseInt(right.label, 10) || String(left.label).localeCompare(String(right.label));
+          }) : visualBuckets;
+          legendBuckets.forEach(function (bucket) {
             var item = document.createElement('li');
             item.className = 'legend-item';
-            item.title = bucket.label + '：' + bucket.materialCount + ' 条素材，占比 ' + pct(bucket.chartShare);
+            item.title = bucket.label + '：命中素材数：' + bucket.materialCount + '条 占比：' + pct(bucket.chartShare);
             var name = document.createElement('span');
             name.className = 'legend-label';
             var swatch = document.createElement('i');
             swatch.className = 'legend-swatch';
-            swatch.style.background = color;
+            swatch.style.background = colorsByLabel[bucket.label];
             name.append(swatch, document.createTextNode(bucket.label));
             var count = document.createElement('span');
             count.className = 'legend-count';
@@ -323,8 +342,8 @@
             share.textContent = pct(bucket.chartShare);
             item.append(name, count, share);
             legend.append(item);
-            cursor = next;
           });
+          pie.setAttribute('data-pie-slices', JSON.stringify(slices));
           pie.style.background = 'conic-gradient(' + stops.join(', ') + ')';
           layout.append(pie, legend);
           article.append(heading, layout);
@@ -426,7 +445,7 @@
             var tooltip = document.createElement('div');
             tooltip.className = 'chart-tooltip';
             tooltip.setAttribute('role', 'tooltip');
-            tooltip.innerHTML = '<b>' + bucket.label + '</b><span>素材数 ' + bucket.materialCount + ' 条</span><span>占比 ' + pct(bucket.chartShare) + '</span>';
+            tooltip.innerHTML = '<b>' + bucket.label + '</b><span>命中素材数：' + bucket.materialCount + '条</span><span>占比：' + pct(bucket.chartShare) + '</span>';
             item.append(bar, name, tooltip);
             item.addEventListener('click', function () {
               renderAudienceGroupDrill(item.closest('article'), dimension, bucket, selectedRecords, item);

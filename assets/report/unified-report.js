@@ -283,6 +283,8 @@
           var swatch = legendItems[index] && legendItems[index].querySelector('.legend-swatch');
           return {
             label: slice.label,
+            count: slice.count,
+            share: slice.share,
             start: Number(slice.start),
             end: Number(slice.end),
             color: swatch ? swatch.style.backgroundColor || swatch.style.background : ''
@@ -373,9 +375,20 @@
 
     function showPieTooltip(index) {
       if (!pieTooltip || index < 0) return;
-      var text = tooltipText(index);
-      if (!text) return;
-      pieTooltip.textContent = text;
+      var slice = slices[index];
+      if (slice && slice.count !== undefined && slice.share !== undefined) {
+        var title = document.createElement('b');
+        title.textContent = slice.label;
+        var count = document.createElement('span');
+        count.textContent = '命中素材数：' + slice.count + '条';
+        var share = document.createElement('span');
+        share.textContent = '占比：' + slice.share + '%';
+        pieTooltip.replaceChildren(title, count, share);
+      } else {
+        var text = tooltipText(index);
+        if (!text) return;
+        pieTooltip.textContent = text;
+      }
       pieTooltip.classList.add('is-visible');
     }
 

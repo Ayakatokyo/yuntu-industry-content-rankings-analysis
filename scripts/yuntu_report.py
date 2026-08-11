@@ -1018,8 +1018,8 @@ def _render_html(analysis, material_frames, fact_pack):
                 chart_share = bucket["chartShare"] * 100
                 tooltip = (
                     '<div class="chart-tooltip" role="tooltip"><b>' + esc(bucket["label"]) + '</b>'
-                    + '<span>素材数 ' + esc(bucket["materialCount"]) + ' 条</span>'
-                    + '<span>占比 ' + f"{chart_share:.1f}%" + '</span></div>'
+                    + '<span>命中素材数：' + esc(bucket["materialCount"]) + '条</span>'
+                    + '<span>占比：' + f"{chart_share:.1f}%" + '</span></div>'
                 )
                 columns.append(
                     '<div class="audience-column-item" role="img" tabindex="0" aria-label="'
@@ -1045,19 +1045,35 @@ def _render_html(analysis, material_frames, fact_pack):
                 (bucket["label"], bucket["materialCount"], bucket["materialShare"], bucket["chartShare"])
                 for bucket in buckets
             ]
+            visual_items = (
+                sorted(items, key=lambda item: (-item[3], str(item[0])))
+                if key == "age"
+                else items
+            )
             cursor = 0.0
             stops, slices, legend = [], [], []
-            for index, (item_label, count, material_share, chart_share) in enumerate(items):
+            colors_by_label = {}
+            for index, (item_label, count, material_share, chart_share) in enumerate(visual_items):
                 color = colors[index % len(colors)]
+                colors_by_label[item_label] = color
                 next_cursor = cursor + chart_share * 100
                 stops.append(f"{color} {cursor:.4f}% {next_cursor:.4f}%")
                 slices.append({"label": item_label, "count": count, "materialShare": round(material_share * 100, 1), "share": round(chart_share * 100, 1), "start": cursor * 3.6, "end": next_cursor * 3.6})
+                cursor = next_cursor
+            legend_items = (
+                sorted(
+                    visual_items,
+                    key=lambda item: (int(re.match(r"\\d+", str(item[0])).group()) if re.match(r"\\d+", str(item[0])) else float("inf"), str(item[0])),
+                )
+                if key == "age"
+                else visual_items
+            )
+            for item_label, count, material_share, chart_share in legend_items:
                 legend.append(
-                    '<li class="legend-item" title="' + esc(item_label) + '：' + esc(count) + ' 条素材，占比 ' + f"{chart_share * 100:.1f}%" + '">'
-                    + '<span class="legend-label"><i class="legend-swatch" style="background:' + color + '"></i>'
+                    '<li class="legend-item" title="' + esc(item_label) + '：命中素材数：' + esc(count) + '条 占比：' + f"{chart_share * 100:.1f}%" + '">'
+                    + '<span class="legend-label"><i class="legend-swatch" style="background:' + colors_by_label[item_label] + '"></i>'
                     + esc(item_label) + '</span><span class="legend-count">' + esc(count) + ' 条</span><span class="legend-share">' + f"{chart_share * 100:.1f}%" + '</span></li>'
                 )
-                cursor = next_cursor
             return (
                 f'<article class="chart-card audience-chart audience-chart-{esc(key)}"><h3>{esc(label)}分布</h3><div class="audience-pie-layout">'
                 + f'<div class="pie-chart" data-audience-pie role="img" tabindex="0" aria-label="{esc(label)}标签占比饼图，素材样本共 {esc(record_count)} 条" data-pie-slices="{esc(json.dumps(slices, ensure_ascii=False))}" style="background:conic-gradient({", ".join(stops)})">'
@@ -1129,8 +1145,8 @@ def _render_html(analysis, material_frames, fact_pack):
             '<section class="section" id="audience-insights"><header class="section-header">'
             '<h2>02｜人群洞察</h2></header><div class="audience-ai-insights">'
             + ai_insights + '</div><div' + dashboard_attrs + '><div class="audience-data-card raw-fact-card">'
-            + '<div class="collapsible-head"><button class="collapsible-toggle" type="button" data-collapsible-toggle aria-expanded="true" aria-controls="audience-dashboard-body"><span class="collapsible-toggle-action">收起数据</span></button></div>'
-            + '<div class="collapsible-body" id="audience-dashboard-body"><b class="collapsible-body-title">人群数据</b>'
+            + '<div class="collapsible-head"><button class="collapsible-toggle" type="button" data-collapsible-toggle data-collapsible-expanded-label="收起人群汇总数据" data-collapsible-collapsed-label="展开人群汇总数据" aria-expanded="true" aria-controls="audience-dashboard-body"><span class="collapsible-toggle-action">收起人群汇总数据</span></button></div>'
+            + '<div class="collapsible-body" id="audience-dashboard-body">'
             + topn_controls + '<div class="audience-chart-grid" data-audience-chart-grid>'
             + charts + '</div></div></div></div></section>'
         )

@@ -101,6 +101,13 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(data["schemaVersion"], 4)
         self.assertEqual(data["candidatePool"]["count"], 4)
+        self.assertEqual(len(data["audienceTopNRecords"]), 4)
+        audience_topn = {
+            item["material_id"]: item["people_tags"]
+            for item in data["audienceTopNRecords"]
+        }
+        self.assertEqual(audience_topn["101"], ["新锐白领"])
+        self.assertEqual(audience_topn["104"], ["都市银发"])
         self.assertEqual(data["candidatePool"]["metrics"]["ctr"]["median"], 0.25)
         self.assertEqual(data["audienceDashboard"]["sample"]["recordCount"], 4)
         self.assertEqual(

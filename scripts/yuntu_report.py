@@ -403,18 +403,18 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
         ])
         for key, label in AUDIENCE_DIMENSION_LABELS.items():
             dimension = dimensions.get(key, {}) if isinstance(dimensions, dict) else {}
-            notice = "图表按素材标签出现次数归一化展示，用于观察标签结构，不代表真实人群分布。"
+            notice = "图表按素材标签占比展示，用于观察标签结构，不代表真实人群分布。"
             lines.extend([f"### {label}", "", notice, ""])
             buckets = dimension.get("buckets", [])
             if not buckets:
                 lines.extend(["暂无可视化数据。", ""])
             for bucket in buckets:
                 lines.append(
-                    f"- {bucket['label']}：{bucket['materialCount']} 条素材，覆盖率 {bucket['materialShare'] * 100:.1f}%，归一化占比 {bucket['chartShare'] * 100:.1f}%"
+                    f"- {bucket['label']}：{bucket['materialCount']} 条素材，占比 {bucket['chartShare'] * 100:.1f}%"
                 )
             unlabeled_count = dimension.get("unlabeledRecordCount", 0)
             if unlabeled_count:
-                lines.append(f"- 未识别到该维度标签：{unlabeled_count} 条素材（不计入饼图归一化分母）")
+                lines.append(f"- 未识别到该维度标签：{unlabeled_count} 条素材（不计入图表分母）")
             lines.append("")
     lines.extend([
         "## 03｜脚本洞察",
@@ -973,13 +973,12 @@ def _render_html(analysis, material_frames, fact_pack):
                 tooltip = (
                     '<div class="chart-tooltip" role="tooltip"><b>' + esc(bucket["label"]) + '</b>'
                     + '<span>素材数 ' + esc(bucket["materialCount"]) + ' 条</span>'
-                    + '<span>覆盖率 ' + f"{material_share:.1f}%" + '</span>'
-                    + '<span>归一化占比 ' + f"{chart_share:.1f}%" + '</span></div>'
+                    + '<span>占比 ' + f"{chart_share:.1f}%" + '</span></div>'
                 )
                 columns.append(
                     '<div class="audience-column-item" role="img" tabindex="0" aria-label="'
                     + esc(bucket["label"]) + '，素材数 ' + esc(bucket["materialCount"])
-                    + ' 条，覆盖率 ' + f"{material_share:.1f}%" + '，归一化占比 ' + f"{chart_share:.1f}%"
+                    + ' 条，占比 ' + f"{chart_share:.1f}%"
                     + '"><div class="audience-column-bar" style="height:'
                     + f"{max(2, chart_share / axis_max * 100):.2f}%" + ';background:'
                     + colors[index % len(colors)] + '"></div><span class="audience-column-label">'
@@ -988,7 +987,7 @@ def _render_html(analysis, material_frames, fact_pack):
             return (
                 '<article class="chart-card audience-chart audience-chart-crowd"><h3>' + esc(label)
                 + '分布</h3><div class="audience-column-chart" data-audience-column role="group" aria-label="'
-                + esc(label) + '标签出现次数归一化柱状图，素材样本共 ' + esc(record_count) + ' 条">'
+                + esc(label) + '标签占比柱状图，素材样本共 ' + esc(record_count) + ' 条">'
                 + '<div class="audience-column-y-axis">'
                 + ''.join('<span>' + f"{value:.0f}%" + '</span>' for value in axis_ticks)
                 + '</div><div class="audience-column-plot" style="grid-template-columns:repeat('
@@ -1008,14 +1007,14 @@ def _render_html(analysis, material_frames, fact_pack):
                 stops.append(f"{color} {cursor:.4f}% {next_cursor:.4f}%")
                 slices.append({"label": item_label, "count": count, "materialShare": round(material_share * 100, 1), "share": round(chart_share * 100, 1), "start": cursor * 3.6, "end": next_cursor * 3.6})
                 legend.append(
-                    '<li class="legend-item" title="' + esc(item_label) + '：' + esc(count) + ' 条素材，覆盖率 ' + f"{material_share * 100:.1f}%" + '，归一化占比 ' + f"{chart_share * 100:.1f}%" + '">'
+                    '<li class="legend-item" title="' + esc(item_label) + '：' + esc(count) + ' 条素材，占比 ' + f"{chart_share * 100:.1f}%" + '">'
                     + '<span class="legend-label"><i class="legend-swatch" style="background:' + color + '"></i>'
                     + esc(item_label) + '</span><span class="legend-count">' + esc(count) + ' 条</span><span class="legend-share">' + f"{chart_share * 100:.1f}%" + '</span></li>'
                 )
                 cursor = next_cursor
             return (
                 f'<article class="chart-card audience-chart audience-chart-{esc(key)}"><h3>{esc(label)}分布</h3><div class="audience-pie-layout">'
-                + f'<div class="pie-chart" data-audience-pie role="img" tabindex="0" aria-label="{esc(label)}标签出现次数归一化饼图，素材样本共 {esc(record_count)} 条" data-pie-slices="{esc(json.dumps(slices, ensure_ascii=False))}" style="background:conic-gradient({", ".join(stops)})">'
+                + f'<div class="pie-chart" data-audience-pie role="img" tabindex="0" aria-label="{esc(label)}标签占比饼图，素材样本共 {esc(record_count)} 条" data-pie-slices="{esc(json.dumps(slices, ensure_ascii=False))}" style="background:conic-gradient({", ".join(stops)})">'
                 + '<div class="chart-tooltip" role="tooltip"></div></div>'
                 + '<ul class="pie-legend">' + "".join(legend) + '</ul></div></article>'
             )
@@ -1033,18 +1032,61 @@ def _render_html(analysis, material_frames, fact_pack):
         dimensions = value.get("dimensions", {})
         if not isinstance(dimensions, dict):
             return ""
+        dimension_order = ("crowd", "age", "gender")
         charts = "".join(
+            audience_dimension_chart(key, dimensions[key])
+            for key in dimension_order
+            if key in dimensions and isinstance(dimensions[key], dict)
+        )
+        charts += "".join(
             audience_dimension_chart(key, dimension)
             for key, dimension in dimensions.items()
-            if key in AUDIENCE_DIMENSION_LABELS and isinstance(dimension, dict)
+            if key not in dimension_order
+            and key in AUDIENCE_DIMENSION_LABELS
+            and isinstance(dimension, dict)
         )
         if not charts:
             charts = '<p class="data-note">暂无人群汇总数据。</p>'
+        topn_records = fact_pack.get("audienceTopNRecords", [])
+        topn_records_json = ""
+        topn_controls = ""
+        if isinstance(topn_records, list) and topn_records:
+            topn_records = [
+                {
+                    **record,
+                    "title": facts.get(str(record.get("material_id")), {}).get(
+                        "title", str(record.get("material_id", ""))
+                    ),
+                }
+                for record in topn_records
+                if isinstance(record, dict)
+            ]
+            topn_records_json = html.escape(
+                json.dumps(topn_records, ensure_ascii=False, separators=(",", ":")),
+                quote=True,
+            )
+            max_topn = len(topn_records)
+            topn_controls = (
+                '<div class="audience-topn-controls" aria-label="人群分析素材范围">'
+                '<label>分析 TOP <input type="number" min="1" max="' + esc(max_topn)
+                + '" value="' + esc(max_topn)
+                + '" step="1" inputmode="numeric" data-audience-topn-input></label>'
+                '<input type="range" min="1" max="' + esc(max_topn)
+                + '" value="' + esc(max_topn) + '" step="1" data-audience-topn-range>'
+                '<span data-audience-topn-label>当前 TOP' + esc(max_topn)
+                + ' / ' + esc(max_topn) + '</span></div>'
+            )
+        dashboard_attrs = ' class="audience-dashboard"'
+        if topn_records_json:
+            dashboard_attrs += ' data-audience-records="' + topn_records_json + '"'
         return (
             '<section class="section" id="audience-insights"><header class="section-header">'
             '<h2>02｜人群洞察</h2></header><div class="audience-ai-insights">'
-            + ai_insights + '</div><div class="audience-chart-grid">'
-            + charts + '</div></section>'
+            + ai_insights + '</div><div' + dashboard_attrs + '><div class="audience-data-card raw-fact-card">'
+            + '<div class="collapsible-head"><button class="collapsible-toggle" type="button" data-collapsible-toggle aria-expanded="true" aria-controls="audience-dashboard-body"><span class="collapsible-toggle-action">收起数据</span></button></div>'
+            + '<div class="collapsible-body" id="audience-dashboard-body"><b class="collapsible-body-title">人群数据</b>'
+            + topn_controls + '<div class="audience-chart-grid" data-audience-chart-grid>'
+            + charts + '</div></div></div></div></section>'
         )
 
     def pie_chart(items, chart_id):
@@ -1185,36 +1227,44 @@ def _render_html(analysis, material_frames, fact_pack):
                 frame = frames_by_ref[frame_ref]
                 click_value = frame.get("click_value")
                 click_text = f"点击指数 {_format_index_value(click_value)}"
+                material_id = str(frame.get("material_id", ""))
+                source_label = f"查看素材：#{frame.get('rank', '-')}"
                 caption = (
                     f"#{esc(frame.get('rank', '-'))} · {esc(frame.get('title', frame['material_id']))} · "
                     f"{highlight_frame_label(frame)} · {esc(frame.get('second'))}s · {click_text}"
                 )
                 frame_cards.append(
-                    '<article class="highlight-frame-card"><button class="highlight-frame-button" type="button" '
+                    '<article class="highlight-frame-card" data-highlight-frame-card data-highlight-material-id="' + esc(material_id) + '">'
+                    + '<figure><button class="highlight-frame-preview highlight-frame-button" type="button" '
                     + f'data-highlight-src="{html.escape(image_src(frame), quote=True)}" '
                     + f'data-highlight-caption="{html.escape(caption, quote=True)}" '
                     + 'aria-label="查看高光帧大图">'
-                    + f'<img loading="lazy" src="{html.escape(image_src(frame), quote=True)}" alt="{esc(caption)}"></button>'
-                    + f'<p>{esc(caption)}</p></article>'
+                    + f'<img loading="lazy" src="{html.escape(image_src(frame), quote=True)}" alt="{esc(caption)}"></button></figure>'
+                    + '<div class="highlight-frame-meta"><small>' + esc(highlight_frame_label(frame))
+                    + '</small><span>' + esc(frame.get("second")) + 's · ' + esc(click_text)
+                    + '</span><button class="highlight-source-link" type="button" data-jump-material="'
+                    + esc(material_id) + '">' + esc(source_label) + '</button></div></article>'
                 )
             patterns = "".join(f"<li>{esc(pattern)}</li>" for pattern in group["common_patterns"])
             directions = "".join(
                 f'<article class="highlight-direction"><h4>{esc(direction["title"])}</h4><p>{esc(direction["body"])}</p></article>'
                 for direction in group["derivative_directions"]
             )
+            page_count = max(1, math.ceil(len(frame_refs) / 10))
             panels.append(
                 '<article class="highlight-category highlight-category-panel" role="tabpanel" id="'
                 + esc(panel_id) + '" aria-labelledby="' + esc(tab_id) + '"'
-                + (" hidden" if not selected else "") + "><div class=\"highlight-category-head\"><h3>"
-                + esc(HIGHLIGHT_CATEGORY_LABELS[category])
-                + '</h3><span class="highlight-category-count">'
-                + esc(len(frame_refs))
-                + ' 帧证据</span></div><div class="highlight-analysis-pair"><div class="highlight-summary"><h4>共性洞察</h4><ul>'
+                + (" hidden" if not selected else "")
+                + ' data-highlight-page-size="10" data-highlight-frame-count="' + esc(len(frame_refs)) + '"><div class="highlight-analysis-pair"><div class="highlight-summary"><h4>共性洞察</h4><ul>'
                 + patterns
                 + '</ul></div><div class="highlight-directions">'
                 + directions
                 + '</div></div><div class="highlight-frame-grid">'
                 + "".join(frame_cards)
+                + '</div><div class="highlight-pagination" data-highlight-pagination>'
+                + '<button type="button" data-highlight-page="previous">上一页</button>'
+                + '<span data-highlight-page-status>1 / ' + esc(page_count) + '</span>'
+                + '<button type="button" data-highlight-page="next">下一页</button>'
                 + "</div></article>"
             )
         return (
@@ -1232,7 +1282,7 @@ def _render_html(analysis, material_frames, fact_pack):
             labels.append(f"点击 Top{frame['peak_rank']} 峰值")
         return "｜".join(labels)
 
-    def second_level_timeline(metrics):
+    def second_level_timeline(metrics, material_index):
         ordered_metrics = []
         metrics_by_name = {metric.get("trend_name"): metric for metric in metrics if isinstance(metric, dict)}
         for trend_name in SECOND_LEVEL_TRENDS:
@@ -1255,12 +1305,16 @@ def _render_html(analysis, material_frames, fact_pack):
             for metric in ordered_metrics
         )
         payload = html.escape(json.dumps(ordered_metrics, ensure_ascii=False), quote=True)
+        body_id = "second-level-body-" + str(material_index)
         return (
-            '<div class="second-level-timeline" data-second-level-timeline data-second-level-metrics="' + payload + '">'
-            + '<div class="second-level-switcher" role="group" aria-label="秒级拆解指标">' + buttons + "</div>"
+            '<div class="second-level-timeline raw-fact-card" data-second-level-timeline data-second-level-metrics="' + payload + '">'
+            + '<div class="collapsible-head"><button class="collapsible-toggle" type="button" data-collapsible-toggle aria-expanded="true" aria-controls="'
+            + esc(body_id) + '"><span class="collapsible-toggle-action">收起数据</span></button></div>'
+            + '<div class="collapsible-body" id="' + esc(body_id) + '"><b class="collapsible-body-title">秒级拆解</b>'
+            + '<div class="second-level-switcher metric-switch" role="group" aria-label="秒级拆解指标">' + buttons + "</div>"
             + '<div class="second-level-chart-mount" aria-live="polite"></div>'
             + '<label class="second-level-range-control">查看时长 <input type="range" min="20" max="100" value="100" step="10" data-second-level-range></label>'
-            + '<p class="second-level-peak-note" data-second-level-peak></p></div>'
+            + '<p class="second-level-peak-note" data-second-level-peak></p></div></div>'
         )
 
     def material_deep_dive_cards():
@@ -1280,7 +1334,8 @@ def _render_html(analysis, material_frames, fact_pack):
                 '<button class="material-deep-tab" type="button" role="tab" id="material-deep-tab-'
                 + str(index) + '" aria-controls="material-deep-panel-' + str(index) + '" aria-selected="'
                 + str(selected_tab).lower() + '" tabindex="' + ("0" if selected_tab else "-1")
-                + '" data-material-tab data-material-target="material-deep-panel-' + str(index) + '">#'
+                + '" data-material-tab data-material-target="material-deep-panel-' + str(index)
+                + '" data-material-id="' + esc(material_id) + '">#'
                 + esc(fact.get("rank", "-")) + " " + esc(title) + "</button>"
             )
             observations = {item.get("frame_ref"): item.get("observation") for item in dive.get("frame_observations", []) if isinstance(item, dict)}
@@ -1330,7 +1385,7 @@ def _render_html(analysis, material_frames, fact_pack):
                 + metric_summary + '</ul><div class="deep-visual-strip"><div class="deep-frame-grid fixed-six">'
                 + "".join(frame_cards) + '</div><p class="deep-frame-coverage">' + esc(frame_coverage)
                 + '</p></div><div class="deep-frame-observations"><h4>高光帧观察</h4><ul>' + frame_observations
-                + '</ul></div><div class="second-level-section"><h4>秒级拆解</h4>' + second_level_timeline(metrics)
+                + '</ul></div><div class="second-level-section">' + second_level_timeline(metrics, index)
                 + '</div></article>'
             )
         return '<div class="material-deep-layout side-tabs"><div class="material-deep-tab-list" role="tablist" aria-label="单素材深度分析">' + "".join(tabs) + '</div><div class="material-deep-panels">' + "".join(panels) + "</div></div>"
@@ -1375,10 +1430,10 @@ def _render_html(analysis, material_frames, fact_pack):
 """
     style = """
 :root{--bg:#170d09;--paper:#fff8ec;--ink:#2a170f;--muted:#705c50;--accent:#d79a4b;--accent-dark:#8e5528;--line:#dfcfbd;--focus:#e8b85f}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;font-size:16px;line-height:1.65}button{font:inherit}.skip-link{position:fixed;left:12px;top:-60px;background:var(--paper);color:var(--ink);padding:10px;z-index:5}.skip-link:focus{top:12px}.page{width:min(1180px,calc(100% - 32px));margin:auto;padding:32px 0 72px}.report-cover{color:#fff;border-bottom:1px solid rgba(249,215,155,.32);padding:8px 0 28px}.report-cover p{max-width:68ch;color:#ead9c9;margin:0}.report-cover h1{font-size:2.5rem;line-height:1.15;margin:10px 0 12px;text-wrap:balance}.report-shell{display:grid;grid-template-columns:168px minmax(0,1fr);gap:28px;align-items:start;margin-top:24px}.report-nav{position:sticky;top:18px;display:grid;gap:5px;padding:10px 0}.report-nav small{color:#ac8970;padding:4px 10px;font-size:.75rem;font-weight:700}.report-nav a{border-left:1px solid rgba(223,199,174,.35);color:#dfc7ae;padding:8px 10px;font-size:.875rem;text-decoration:none}.report-nav a:hover,.report-nav a:focus-visible,.report-nav a[aria-current="location"]{border-left-color:var(--accent);background:#2a170f;color:#fff}.section{scroll-margin-top:18px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:28px}.section-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:24px}.section-header h2{font-size:1.55rem;line-height:1.2;margin:0;text-wrap:balance}.section-header p{color:var(--muted);font-size:.875rem;margin:7px 0 0}.source-label{display:inline-block;color:var(--accent-dark);background:#f7e6cb;padding:4px 7px;border-radius:4px;font-size:.75rem;font-weight:700;white-space:nowrap}.top-material-overall h3,.top-material-brands h3,.brand-difference h3{font-size:1.08rem;margin:0 0 12px}.top-material-overall>p,.brand-panel>p,.brand-difference>p{margin:10px 0;max-width:76ch}.section-divider{height:0;border:0;border-top:1px solid var(--line);margin:32px 0}.brand-tabs{display:flex;gap:0;overflow-x:auto;border-bottom:1px solid var(--line);padding:0 2px}.brand-tab{position:relative;flex:0 0 auto;min-height:42px;border:0;border-radius:0;background:transparent;color:var(--muted);padding:8px 14px;cursor:pointer;white-space:nowrap}.brand-tab:hover{color:var(--accent-dark)}.brand-tab[aria-selected="true"]{color:#5e3820;font-weight:700}.brand-tab[aria-selected="true"]::after{position:absolute;right:12px;bottom:-1px;left:12px;height:2px;background:var(--accent-dark);content:""}.brand-tab:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}.brand-panels{padding:18px 0 0}.brand-panel[hidden]{display:none!important}.brand-panel{border-left:2px solid var(--accent);padding:0 0 0 16px}.brand-difference p{margin-bottom:0}@media(max-width:760px){.report-shell{grid-template-columns:1fr;gap:12px}.report-nav{position:static;display:flex;align-items:center;gap:8px;padding:0}.report-nav small{padding:0}.report-nav a{padding:5px 8px;border-left:0;border-bottom:1px solid rgba(223,199,174,.35)}}@media(max-width:560px){.page{width:min(100% - 20px,1180px);padding-top:18px}.report-cover h1{font-size:2rem}.section{padding:20px}.section-header{display:block}.source-label{margin-top:10px}.brand-tab{padding-inline:10px}.brand-panel{padding-left:12px}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;font-size:16px;line-height:1.65}button{font:inherit}.skip-link{position:fixed;left:12px;top:-60px;background:var(--paper);color:var(--ink);padding:10px;z-index:5}.skip-link:focus{top:12px}.page{width:min(1280px,calc(100% - 20px));margin:auto;padding:32px 0 72px}.report-cover{color:#fff;border-bottom:1px solid rgba(249,215,155,.32);padding:8px 0 28px}.report-cover p{max-width:68ch;color:#ead9c9;margin:0}.report-cover h1{font-size:2.5rem;line-height:1.15;margin:10px 0 12px;text-wrap:balance}.report-shell{display:grid;grid-template-columns:156px minmax(0,1fr);gap:18px;align-items:start;margin-top:24px}.report-nav{position:sticky;top:18px;display:grid;gap:5px;padding:10px 0}.report-nav small{color:#ac8970;padding:4px 10px;font-size:.75rem;font-weight:700}.report-nav a{border-left:1px solid rgba(223,199,174,.35);color:#dfc7ae;padding:8px 10px;font-size:.875rem;text-decoration:none}.report-nav a:hover,.report-nav a:focus-visible,.report-nav a[aria-current="location"]{border-left-color:var(--accent);background:#2a170f;color:#fff}.section{scroll-margin-top:18px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:28px}.section-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:24px}.section-header h2{font-size:1.55rem;line-height:1.2;margin:0;text-wrap:balance}.section-header p{color:var(--muted);font-size:.875rem;margin:7px 0 0}.source-label{display:inline-block;color:var(--accent-dark);background:#f7e6cb;padding:4px 7px;border-radius:4px;font-size:.75rem;font-weight:700;white-space:nowrap}.top-material-overall h3,.top-material-brands h3,.brand-difference h3{font-size:1.08rem;margin:0 0 12px}.top-material-overall>p,.brand-panel>p,.brand-difference>p{margin:10px 0;max-width:76ch}.section-divider{height:0;border:0;border-top:1px solid var(--line);margin:32px 0}.brand-tabs{display:flex;gap:0;overflow-x:auto;border-bottom:1px solid var(--line);padding:0 2px}.brand-tab{position:relative;flex:0 0 auto;min-height:42px;border:0;border-radius:0;background:transparent;color:var(--muted);padding:8px 14px;cursor:pointer;white-space:nowrap}.brand-tab:hover{color:var(--accent-dark)}.brand-tab[aria-selected="true"]{color:#5e3820;font-weight:700}.brand-tab[aria-selected="true"]::after{position:absolute;right:12px;bottom:-1px;left:12px;height:2px;background:var(--accent-dark);content:""}.brand-tab:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}.brand-panels{padding:18px 0 0}.brand-panel[hidden]{display:none!important}.brand-panel{border-left:2px solid var(--accent);padding:0 0 0 16px}.brand-difference p{margin-bottom:0}@media(max-width:760px){.report-shell{grid-template-columns:1fr;gap:12px}.report-nav{position:static;display:flex;align-items:center;gap:8px;padding:0}.report-nav small{padding:0}.report-nav a{padding:5px 8px;border-left:0;border-bottom:1px solid rgba(223,199,174,.35)}}@media(max-width:560px){.page{width:min(100% - 20px,1280px);padding-top:18px}.report-cover h1{font-size:2rem}.section{padding:20px}.section-header{display:block}.source-label{margin-top:10px}.brand-tab{padding-inline:10px}.brand-panel{padding-left:12px}}
 """
     style += """
-.audience-chart-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.chart-card{container-type:inline-size;border:1px solid var(--line);border-radius:8px;background:#fff;padding:16px}.chart-card h3{font-size:18px;margin:0 0 12px}.audience-chart{min-width:0}.audience-chart-age,.audience-chart-gender{display:flex;flex-direction:column}.audience-chart-crowd{grid-column:1/-1}.audience-pie-layout{display:grid;grid-template-columns:minmax(0,45fr) minmax(0,55fr);flex:1;min-height:0;gap:14px;align-items:center}.pie-chart{position:relative;width:min(260px,100%);aspect-ratio:1;border-radius:50%;display:block;justify-self:center;background:conic-gradient(var(--accent) 0deg,var(--accent) 360deg);box-shadow:0 0 0 1px rgba(82,45,24,.1);cursor:default}.audience-chart-gender .pie-chart{width:min(240px,100%)}.chart-tooltip{position:absolute;z-index:2;left:50%;bottom:calc(100% + 10px);min-width:150px;transform:translateX(-50%);opacity:0;pointer-events:none;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,.96);box-shadow:0 14px 34px rgba(43,23,12,.16);color:var(--ink);font-size:13px;line-height:1.5;transition:opacity .15s ease}.chart-tooltip b{display:block;margin-bottom:4px}.chart-tooltip span{display:block}.chart-tooltip.is-visible,.audience-column-item:hover .chart-tooltip,.audience-column-item:focus .chart-tooltip{opacity:1}.pie-legend{display:grid;gap:8px;margin:0;padding:0;list-style:none}.pie-legend .legend-item{position:relative;display:grid;grid-template-columns:minmax(80px,1fr) auto auto;gap:8px;align-items:center;color:var(--muted);font-size:14px;padding:0;border:0;font-variant-numeric:tabular-nums}.pie-legend .legend-label{display:flex;align-items:center;gap:8px;min-width:0;overflow:visible;white-space:normal;overflow-wrap:anywhere}.legend-swatch{display:block;flex:0 0 12px;width:12px;height:12px;border-radius:3px}.legend-count,.legend-share{white-space:nowrap;text-align:right}.audience-column-chart{position:relative;min-height:300px;display:grid;grid-template-columns:48px minmax(0,1fr);gap:12px;padding-top:8px}.audience-column-y-axis{display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;padding-bottom:42px;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}.audience-column-plot{position:relative;display:grid;align-items:end;gap:12px;min-width:0;padding:0 8px 42px;border-bottom:1px solid rgba(82,45,24,.22);background:repeating-linear-gradient(to top,transparent 0,transparent 72px,rgba(82,45,24,.11) 73px)}.audience-column-item{position:relative;min-width:0;height:230px;display:flex;align-items:end;justify-content:center;outline:0}.audience-column-item:focus-visible{outline:3px solid var(--focus);outline-offset:2px}.audience-column-bar{width:min(64px,72%);min-height:4px;border-radius:8px 8px 0 0;cursor:default}.audience-column-label{position:absolute;left:50%;bottom:-34px;width:76px;transform:translateX(-50%);color:var(--muted);font-size:13px;line-height:1.25;text-align:center;word-break:break-word}.audience-column-item .chart-tooltip{bottom:calc(100% + 10px)}@container (max-width:360px){.audience-pie-layout{grid-template-columns:1fr}.audience-chart .pie-chart,.audience-chart-gender .pie-chart{width:min(240px,100%)!important;height:auto!important;flex-basis:auto!important}.pie-legend{width:100%}}@media(max-width:760px){.audience-chart-grid{grid-template-columns:1fr}.audience-chart-crowd{grid-column:auto}}@media(max-width:560px){.audience-pie-layout{grid-template-columns:1fr}.audience-chart .pie-chart,.audience-chart-gender .pie-chart{width:min(240px,100%)!important;height:auto!important;flex-basis:auto!important}.audience-column-chart{grid-template-columns:38px minmax(0,1fr);gap:8px}.audience-column-y-axis{font-size:11px}.audience-column-plot{gap:4px;padding-inline:2px}.audience-column-label{width:44px;font-size:11px}.audience-column-bar{width:78%}}
+.audience-chart-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.chart-card{container-type:inline-size;border:1px solid var(--line);border-radius:8px;background:#fff;padding:16px}.chart-card h3{font-size:18px;margin:0 0 12px}.audience-chart{min-width:0}.audience-chart-age,.audience-chart-gender{display:flex;flex-direction:column}.audience-chart-crowd{grid-column:1/-1}.audience-pie-layout{display:grid;grid-template-columns:minmax(0,45fr) minmax(0,55fr);flex:1;min-height:0;gap:14px;align-items:center}.pie-chart{position:relative;width:min(260px,100%);aspect-ratio:1;border-radius:50%;display:block;justify-self:center;background:conic-gradient(var(--accent) 0deg,var(--accent) 360deg);box-shadow:0 0 0 1px rgba(82,45,24,.1);cursor:default}.audience-chart-gender .pie-chart{width:min(240px,100%)}.chart-tooltip{position:absolute;z-index:2;left:50%;bottom:calc(100% + 10px);min-width:150px;transform:translateX(-50%);opacity:0;pointer-events:none;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,.96);box-shadow:0 14px 34px rgba(43,23,12,.16);color:var(--ink);font-size:13px;line-height:1.5;transition:opacity .15s ease}.chart-tooltip b{display:block;margin-bottom:4px}.chart-tooltip span{display:block}.chart-tooltip.is-visible,.audience-column-item:hover .chart-tooltip,.audience-column-item:focus .chart-tooltip{opacity:1}.pie-legend{display:grid;gap:8px;margin:0;padding:0;list-style:none}.pie-legend .legend-item{position:relative;display:grid;grid-template-columns:minmax(80px,1fr) auto auto;gap:8px;align-items:center;color:var(--muted);font-size:14px;padding:0;border:0;font-variant-numeric:tabular-nums}.pie-legend .legend-label{display:flex;align-items:center;gap:8px;min-width:0;overflow:visible;white-space:normal;overflow-wrap:anywhere}.legend-swatch{display:block;flex:0 0 12px;width:12px;height:12px;border-radius:3px}.legend-count,.legend-share{white-space:nowrap;text-align:right}.audience-column-chart{position:relative;min-height:250px;display:grid;grid-template-columns:48px minmax(0,1fr);gap:12px;padding-top:8px}.audience-column-y-axis{display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;padding-bottom:42px;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}.audience-column-plot{position:relative;display:grid;align-items:end;gap:12px;min-width:0;padding:0 8px 42px;border-bottom:1px solid rgba(82,45,24,.22);background:repeating-linear-gradient(to top,transparent 0,transparent 72px,rgba(82,45,24,.11) 73px)}.audience-column-item{position:relative;min-width:0;height:170px;display:flex;align-items:end;justify-content:center;outline:0}.audience-column-item:focus-visible{outline:3px solid var(--focus);outline-offset:2px}.audience-column-bar{width:min(64px,72%);min-height:4px;border-radius:8px 8px 0 0;cursor:default}.audience-column-label{position:absolute;left:50%;bottom:-34px;width:76px;transform:translateX(-50%);color:var(--muted);font-size:13px;line-height:1.25;text-align:center;word-break:break-word}.audience-column-item .chart-tooltip{bottom:calc(100% + 10px)}@container (max-width:360px){.audience-pie-layout{grid-template-columns:1fr}.audience-chart .pie-chart,.audience-chart-gender .pie-chart{width:min(240px,100%)!important;height:auto!important;flex-basis:auto!important}.pie-legend{width:100%}}@media(max-width:760px){.audience-chart-grid{grid-template-columns:1fr}.audience-chart-crowd{grid-column:auto}}@media(max-width:560px){.audience-pie-layout{grid-template-columns:1fr}.audience-chart .pie-chart,.audience-chart-gender .pie-chart{width:min(240px,100%)!important;height:auto!important;flex-basis:auto!important}.audience-column-chart{grid-template-columns:38px minmax(0,1fr);gap:8px}.audience-column-y-axis{font-size:11px}.audience-column-plot{gap:4px;padding-inline:2px}.audience-column-label{width:44px;font-size:11px}.audience-column-bar{width:78%}}
 """
     style += """
 .data-state{border-left:3px solid var(--accent);padding:16px 18px;background:#fbf0df}.data-state span{color:var(--accent-dark);font-size:.82rem;font-weight:700}.data-state p{max-width:70ch;margin:8px 0 0}.highlight-category{border-top:1px solid var(--line);margin-top:24px;padding-top:22px}.highlight-category h3{font-size:1.12rem;margin:0 0 14px}.highlight-category h4{font-size:.9rem;margin:0 0 8px}.highlight-summary ul{margin:0;padding-left:20px}.highlight-directions{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:16px}.highlight-direction{border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:12px}.highlight-direction p{margin:6px 0 0;color:var(--muted);font-size:.875rem}.highlight-frame-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:18px}.highlight-frame-card{margin:0;min-width:0}.highlight-frame-button{display:block;width:100%;border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:4px;cursor:zoom-in}.highlight-frame-button:hover{border-color:var(--accent-dark)}.highlight-frame-button img{display:block;width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:3px}.highlight-frame-card p{margin:6px 0 0;color:var(--muted);font-size:.75rem;line-height:1.45}.highlight-lightbox{position:relative;border:0;border-radius:8px;padding:10px;max-width:min(720px,92vw);background:var(--surface)}.highlight-lightbox::backdrop{background:rgba(13,7,4,.88)}.highlight-lightbox img{display:block;max-width:min(680px,88vw);max-height:80vh}.highlight-lightbox p{margin:7px 2px 0;color:var(--muted);font-size:.8125rem}.highlight-lightbox button{position:absolute;right:12px;top:12px;border:0;border-radius:4px;background:var(--ink);color:#fff;padding:6px 9px;cursor:pointer}@media(max-width:560px){.highlight-frame-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -1393,8 +1448,8 @@ def _render_html(analysis, material_frames, fact_pack):
 .material-deep-layout.side-tabs{display:grid;grid-template-columns:220px minmax(0,1fr);gap:24px;align-items:start}.material-deep-tab-list{position:sticky;top:18px;display:grid;gap:4px;border-right:1px solid var(--line);padding-right:12px}.material-deep-tab{width:100%;min-height:44px;border:0;border-left:2px solid transparent;background:transparent;color:var(--muted);padding:8px 10px;text-align:left;cursor:pointer}.material-deep-tab:hover{color:var(--accent-dark)}.material-deep-tab[aria-selected=\"true\"]{border-left-color:var(--accent-dark);background:#f7e6cb;color:var(--accent-dark);font-weight:700}.material-deep-tab[aria-selected=\"true\"]::after{display:none}.material-deep-panel[hidden]{display:none!important}.material-deep-panels{padding-top:0}.deep-visual-strip{margin-top:22px}.deep-frame-grid.fixed-six{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.deep-frame-card{min-width:0;margin:0}.deep-frame-card .highlight-frame-button{width:100%;border:1px solid var(--line);border-radius:5px;background:var(--surface);padding:4px;cursor:zoom-in}.deep-frame-card .highlight-frame-button:hover{border-color:var(--accent-dark)}.deep-frame-card img{display:block;width:100%;aspect-ratio:9/16;object-fit:contain;background:#1d120c;border-radius:2px}.deep-frame-card figcaption{margin-top:6px;color:var(--muted);font-size:.72rem;line-height:1.35}.deep-frame-coverage{margin:10px 0 0;color:var(--muted);font-size:.78rem}.deep-frame-observations{border-top:1px solid var(--line);margin-top:22px;padding-top:2px}.deep-frame-observations h4{font-size:.95rem;margin:14px 0 10px}.deep-frame-observations ul{margin:0;padding-left:20px}.deep-frame-observations li{margin:6px 0}.second-level-timeline{border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:14px}.second-level-switcher{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}.second-level-switcher button{min-height:34px;border:1px solid var(--line);border-radius:4px;background:transparent;color:var(--muted);padding:5px 8px;cursor:pointer;font-size:.8rem}.second-level-switcher button[aria-pressed=\"true\"]{border-color:var(--accent-dark);background:#f7e6cb;color:var(--accent-dark);font-weight:700}.second-level-chart-mount{min-height:276px}.second-level-chart-mount svg{display:block;width:100%;height:auto}.second-level-axis,.second-level-grid-line{stroke:#c6ad95;stroke-width:1}.second-level-grid-line{stroke-dasharray:3 4}.second-level-line{fill:none;stroke:var(--accent-dark);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}.second-level-range.high{fill:rgba(215,154,75,.18)}.second-level-range.loss{fill:rgba(161,79,56,.16)}.second-level-point{fill:var(--accent-dark);cursor:help}.second-level-point:focus{outline:none;stroke:var(--ink);stroke-width:3}.second-level-tooltip{fill:var(--surface);stroke:var(--line-dark)}.second-level-chart-mount text{fill:var(--muted);font-size:11px}.second-level-range-control{display:flex;align-items:center;gap:10px;margin-top:8px;color:var(--muted);font-size:.8rem}.second-level-range-control input{flex:1;accent-color:var(--accent-dark)}.second-level-peak-note{margin:10px 0 0;color:var(--accent-dark);font-size:.82rem;font-weight:700}.second-level-observations{margin-top:14px}.second-level-observations p{margin:7px 0;font-size:.875rem}
 """
     style += """
-.material-deep-layout.side-tabs{display:grid;grid-template-columns:190px minmax(0,1fr);gap:18px;align-items:stretch}.material-deep-tab-list{position:sticky;top:18px;align-self:stretch;display:flex;flex-direction:column;gap:9px;max-height:calc(100vh - 36px);overflow-y:auto;border-right:1px solid var(--line);padding:0 14px 0 0}.material-deep-tab{width:100%;min-height:0;border:1px solid var(--line);border-radius:8px;background:#fff8ec;color:var(--ink);padding:8px 9px;text-align:left;font-size:12px;line-height:1.35;white-space:normal}.material-deep-tab[aria-selected=\"true\"]{border-color:#2c1810;border-left-color:#2c1810;background:#2c1810;color:#fff}.material-deep-panels{min-width:0;padding:0}.material-deep-panel.material-card{margin:0;padding:22px;border:1px solid var(--line);border-radius:24px;background:#fffdf9;box-shadow:0 16px 40px rgba(65,34,16,.1)}.material-deep-header.material-head{display:block;border:0;padding:0}.material-deep-header.material-head span{display:block;margin:0 0 14px;color:var(--accent-dark);font-size:12px;font-weight:800;letter-spacing:.14em}.material-deep-header.material-head h3{margin:0 0 10px;font-size:24px;line-height:1.35}.material-deep-id{margin:0;color:var(--muted);font-size:14px}.material-deep-metrics{margin:14px 0 0}.deep-visual-strip{--visual-height:560px;margin:18px 0}.deep-frame-grid.fixed-six{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:12px;height:var(--visual-height);margin:0}.deep-frame-card{display:grid;grid-template-rows:minmax(0,1fr) auto;overflow:hidden;border:1px solid var(--line);border-radius:18px;background:#f4e3cd}.deep-frame-card .highlight-frame-button{display:block;width:100%;min-width:0;min-height:0;padding:0;border:0;border-radius:0;background:transparent}.deep-frame-card img{width:100%;height:100%;min-height:0;aspect-ratio:auto;object-fit:contain;background:#efe6d9;border-radius:0}.deep-frame-card figcaption{margin:0;padding:10px 12px;color:var(--muted);font-size:13px;line-height:1.45}.deep-frame-coverage{margin:10px 0 0;color:var(--muted);font-size:13px}.deep-frame-observations,.deep-visual-summary,.second-level-section{margin-top:18px;padding:17px;border:1px solid var(--line);border-radius:18px;background:#f7ead8}.deep-frame-observations h4,.deep-visual-summary h4,.second-level-section>h4{margin:0 0 10px;font-size:16px}.second-level-timeline{padding:0;border:0;border-radius:0;background:transparent}.second-level-switcher{margin-bottom:10px}.second-level-switcher button{border-radius:8px;background:#fff8ec;color:var(--ink);font-size:12px;font-weight:800}.second-level-switcher button[aria-pressed=\"true\"]{border-color:#2c1810;background:#2c1810;color:#fff}.second-level-chart-mount{min-height:320px}.second-level-chart-mount svg{height:320px;border:1px solid rgba(82,45,24,.1);border-radius:14px;background:#fff8ec}.second-level-range-control{margin-top:10px;font-size:13px}.second-level-range-control input{height:8px;accent-color:#9b6a37;cursor:pointer}.second-level-peak-note{margin-top:10px;color:var(--ink);font-weight:800}.second-level-observations{margin-top:14px}
-"""
+.material-deep-layout.side-tabs{display:grid;grid-template-columns:190px minmax(0,1fr);gap:18px;align-items:stretch}.material-deep-tab-list{position:sticky;top:18px;align-self:stretch;display:flex;flex-direction:column;gap:9px;max-height:calc(100vh - 36px);overflow-y:auto;border-right:1px solid var(--line);padding:0 14px 0 0}.material-deep-tab{width:100%;min-height:0;border:1px solid var(--line);border-radius:8px;background:#fff8ec;color:var(--ink);padding:8px 9px;text-align:left;font-size:12px;line-height:1.35;white-space:normal}.material-deep-tab[aria-selected=\"true\"]{border-color:#2c1810;border-left-color:#2c1810;background:#2c1810;color:#fff}.material-deep-panels{min-width:0;padding:0}.material-deep-panel.material-card{margin:0;padding:22px;border:1px solid var(--line);border-radius:24px;background:#fffdf9;box-shadow:0 16px 40px rgba(65,34,16,.1)}.material-deep-header.material-head{display:block;border:0;padding:0}.material-deep-header.material-head span{display:block;margin:0 0 14px;color:var(--accent-dark);font-size:12px;font-weight:800;letter-spacing:.14em}.material-deep-header.material-head h3{margin:0 0 10px;font-size:24px;line-height:1.35}.material-deep-id{margin:0;color:var(--muted);font-size:14px}.material-deep-metrics{margin:14px 0 0}.deep-visual-strip{--visual-height:560px;margin:18px 0}.deep-frame-grid.fixed-six{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:12px;height:var(--visual-height);margin:0}.deep-frame-card{display:grid;grid-template-rows:minmax(0,1fr) auto;overflow:hidden;border:1px solid var(--line);border-radius:18px;background:#f4e3cd}.deep-frame-card .highlight-frame-button{display:block;width:100%;min-width:0;min-height:0;padding:0;border:0;border-radius:0;background:transparent}.deep-frame-card img{width:100%;height:100%;min-height:0;aspect-ratio:auto;object-fit:contain;background:#efe6d9;border-radius:0}.deep-frame-card figcaption{margin:0;padding:10px 12px;color:var(--muted);font-size:13px;line-height:1.45}.deep-frame-coverage{margin:10px 0 0;color:var(--muted);font-size:13px}.deep-frame-observations,.deep-visual-summary{margin-top:18px;padding:17px;border:1px solid var(--line);border-radius:18px;background:#f7ead8}.deep-frame-observations h4,.deep-visual-summary h4,.second-level-section>h4{margin:0 0 10px;font-size:16px}.second-level-section{margin-top:18px}.second-level-timeline.raw-fact-card{padding:17px;border:1px solid var(--line);border-radius:18px;background:#fff}.collapsible-head{margin-bottom:12px}.collapsible-toggle{display:flex;align-items:center;justify-content:center;width:100%;border:1px solid var(--line);border-radius:12px;background:#f7ead8;color:var(--ink);padding:12px 14px;cursor:pointer;font:inherit;text-align:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.52)}.collapsible-toggle:hover{border-color:rgba(82,45,24,.24);background:#fff1dc}.collapsible-toggle-action{color:#2c1810;font-size:16px;font-weight:800;line-height:1.35;white-space:nowrap}.collapsible-body{display:grid;gap:12px}.collapsible-body[hidden]{display:none}.collapsible-body-title{display:block;margin-bottom:2px;color:var(--ink);font-size:16px;font-weight:800;line-height:1.35}.second-level-switcher.metric-switch{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:0}.second-level-switcher button{border-radius:8px;background:#fff8ec;color:var(--ink);font-size:12px;font-weight:800}.second-level-switcher button[aria-pressed=\"true\"]{border-color:#2c1810;background:#2c1810;color:#fff}.second-level-chart-mount{min-height:320px}.second-level-chart-mount svg,.timeline-chart{display:block;width:100%;height:320px;border:1px solid rgba(82,45,24,.1);border-radius:14px;background:#fff8ec}.second-level-axis,.second-level-grid-line{stroke:rgba(82,45,24,.16);stroke-width:1}.second-level-grid-line{stroke-dasharray:3 4}.second-level-line.timeline-line{fill:none;stroke:#9b6a37;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.second-level-point.timeline-point-dot{fill:#9b6a37;stroke:#fff8ec;stroke-width:2}.second-level-point-hitbox{cursor:default}.second-level-tooltip{opacity:0;pointer-events:none;transition:opacity .12s ease}.second-level-point-hitbox:hover .second-level-tooltip,.second-level-point-hitbox:focus .second-level-tooltip{opacity:1}.second-level-tooltip rect{fill:rgba(255,255,255,.96);stroke:rgba(82,45,24,.16)}.second-level-tooltip-title{fill:#2a170f;font-size:12px;font-weight:800}.second-level-tooltip-value{fill:#806758;font-size:12px}.second-level-range.high{fill:rgba(215,154,75,.18)}.second-level-range.loss{fill:rgba(161,79,56,.16)}.second-level-range-control{display:grid;grid-template-columns:max-content minmax(0,1fr);align-items:center;gap:10px;margin-top:0;color:var(--muted);font-size:13px}.second-level-range-control input{width:100%;height:8px;accent-color:#9b6a37;cursor:pointer}.second-level-peak-note{margin:0;color:var(--ink);font-weight:800}.second-level-observations{margin-top:14px}.audience-dashboard{display:grid;gap:12px}.audience-topn-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#fbf0df;color:var(--muted);font-size:13px}.audience-topn-controls label{display:flex;align-items:center;gap:6px;color:var(--ink);font-weight:700}.audience-topn-controls input[type=\"number\"]{width:84px;border:1px solid var(--line);border-radius:5px;padding:6px 8px;background:#fff}.audience-topn-controls input[type=\"range\"]{flex:1;min-width:180px;accent-color:#9b6a37}.audience-topn-controls [data-audience-topn-label]{font-weight:700;color:var(--accent-dark)}.highlight-dashboard-tabs{display:flex;flex-wrap:wrap;gap:8px;border-bottom:0;margin-top:16px;padding:0}.highlight-dashboard-tabs button{position:relative;flex:0 0 auto;min-height:40px;border:1px solid var(--line);border-radius:999px;background:#f7ead8;color:var(--muted);padding:8px 12px;cursor:pointer;white-space:nowrap}.highlight-dashboard-tabs button:hover{color:var(--accent-dark);border-color:var(--accent-dark)}.highlight-dashboard-tabs button[aria-selected=\"true\"]{border-color:var(--accent-dark);background:#2c1810;color:#fff;font-weight:800}.highlight-dashboard-tabs button[aria-selected=\"true\"]::after{display:none}.highlight-dashboard-tabs button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}.highlight-dashboard-panels{padding-top:18px}.highlight-category-panel{margin-top:0;padding-top:0;border-top:0}.highlight-category-panel[hidden]{display:none!important}.highlight-category-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px}.highlight-category-head h3{margin:0}.highlight-category-count{color:var(--muted);font-size:.78rem;font-weight:800}.highlight-analysis-pair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-bottom:18px}.highlight-summary,.highlight-directions{margin:0;border:1px solid var(--line);border-radius:8px;background:#f7ead8;padding:14px}.highlight-summary li{margin:6px 0}.highlight-directions{display:grid;grid-template-columns:1fr;gap:10px}.highlight-direction{padding:0;border:0;background:transparent}.highlight-frame-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:0}.highlight-frame-card{margin:0;min-width:0;display:grid;gap:8px}.highlight-frame-card figure{margin:0}.highlight-frame-card .highlight-frame-button{display:block;width:100%;border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:4px;cursor:zoom-in}.highlight-frame-card .highlight-frame-button:hover{border-color:var(--accent-dark)}.highlight-frame-card img{display:block;width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:3px}.highlight-frame-meta{display:grid;gap:4px;color:var(--muted);font-size:.75rem;line-height:1.4}.highlight-frame-meta small{font-size:.72rem;font-weight:800;color:var(--accent-dark)}.highlight-frame-meta span{font-variant-numeric:tabular-nums}.highlight-source-link{border:0;background:transparent;color:var(--accent-dark);padding:0;text-align:left;font:inherit;cursor:pointer}.highlight-source-link:hover{text-decoration:underline}.highlight-pagination{display:flex;justify-content:center;align-items:center;gap:10px;margin-top:14px}.highlight-pagination button{min-height:34px;border:1px solid var(--line);border-radius:999px;background:#fff8ec;color:var(--ink);padding:6px 12px;cursor:pointer}.highlight-pagination button[disabled]{opacity:.45;cursor:not-allowed}.highlight-pagination [data-highlight-page-status]{min-width:64px;text-align:center;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}@media(max-width:700px){.highlight-analysis-pair{grid-template-columns:1fr}.highlight-frame-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.highlight-dashboard-tabs button{padding-inline:10px}.audience-topn-controls{align-items:stretch}.audience-topn-controls input[type=\"range\"]{min-width:0;width:100%}}@media(max-width:560px){.deep-frame-grid.fixed-six{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(4,minmax(0,1fr));height:auto}.highlight-frame-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.highlight-pagination{flex-wrap:wrap}}
+    """
     filters = fact_pack.get("filters", {}) if isinstance(fact_pack, dict) else {}
     industry = str(filters.get("industry") or "食品饮料")
     brands = filters.get("brands") or []

@@ -65,7 +65,7 @@
             tooltip.replaceChildren();
             var title = document.createElement('b');
             title.textContent = active.label;
-            tooltip.append(title, document.createTextNode('素材数 ' + active.count + ' 条 · 覆盖率 ' + active.materialShare + '% · 归一化占比 ' + active.share + '%'));
+            tooltip.append(title, document.createTextNode('素材数 ' + active.count + ' 条 · 占比 ' + active.share + '%'));
             tooltip.classList.add('is-visible');
           }
           function updateTooltip(event) {
@@ -131,8 +131,52 @@
           });
         }(materialTabs[materialIndex], materialIndex));
       }
+      function activateMaterialById(materialId) {
+        var target = null;
+        for (var materialIndex = 0; materialIndex < materialTabs.length; materialIndex += 1) {
+          if (materialTabs[materialIndex].getAttribute('data-material-id') === String(materialId)) {
+            target = materialTabs[materialIndex];
+            break;
+          }
+        }
+        if (!target) return;
+        activateMaterial(target, false);
+        var deepDive = document.getElementById('material-deep-dive');
+        if (deepDive) deepDive.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }
+      document.querySelectorAll('[data-jump-material]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          activateMaterialById(button.getAttribute('data-jump-material'));
+        });
+      });
 
       var highlightTabs = document.querySelectorAll('[data-highlight-category-tab]');
+      function paginateHighlightPanel(panel, nextPage) {
+        if (!panel) return;
+        var cards = Array.prototype.slice.call(panel.querySelectorAll('[data-highlight-frame-card]'));
+        var pagination = panel.querySelector('[data-highlight-pagination]');
+        if (!pagination || cards.length <= 10) {
+          cards.forEach(function (card) { card.hidden = false; });
+          if (pagination) pagination.hidden = cards.length <= 10;
+          return;
+        }
+        pagination.hidden = false;
+        var pageSize = 10;
+        var pageCount = Math.ceil(cards.length / pageSize);
+        var currentPage = Number(panel.getAttribute('data-highlight-current-page') || '1');
+        if (typeof nextPage === 'number') currentPage = nextPage;
+        currentPage = Math.max(1, Math.min(pageCount, currentPage));
+        panel.setAttribute('data-highlight-current-page', String(currentPage));
+        cards.forEach(function (card, index) {
+          card.hidden = index < (currentPage - 1) * pageSize || index >= currentPage * pageSize;
+        });
+        var status = pagination.querySelector('[data-highlight-page-status]');
+        var previous = pagination.querySelector('[data-highlight-page="previous"]');
+        var next = pagination.querySelector('[data-highlight-page="next"]');
+        if (status) status.textContent = currentPage + ' / ' + pageCount;
+        if (previous) previous.disabled = currentPage <= 1;
+        if (next) next.disabled = currentPage >= pageCount;
+      }
       function activateHighlightCategory(tab, focus) {
         for (var highlightIndex = 0; highlightIndex < highlightTabs.length; highlightIndex += 1) {
           var candidate = highlightTabs[highlightIndex];
@@ -141,6 +185,7 @@
           candidate.setAttribute('aria-selected', selected ? 'true' : 'false');
           candidate.tabIndex = selected ? 0 : -1;
           if (panel) panel.hidden = !selected;
+          if (selected) paginateHighlightPanel(panel);
         }
         if (focus) tab.focus();
       }
@@ -157,6 +202,382 @@
           });
         }(highlightTabs[highlightIndex], highlightIndex));
       }
+      document.querySelectorAll('[data-highlight-pagination]').forEach(function (pagination) {
+        pagination.addEventListener('click', function (event) {
+          var button = event.target.closest('[data-highlight-page]');
+          if (!button) return;
+          var panel = button.closest('.highlight-category-panel');
+          var currentPage = Number(panel.getAttribute('data-highlight-current-page') || '1');
+          paginateHighlightPanel(panel, button.getAttribute('data-highlight-page') === 'next' ? currentPage + 1 : currentPage - 1);
+        });
+      });
+      document.querySelectorAll('.highlight-category-panel').forEach(function (panel) {
+        paginateHighlightPanel(panel, 1);
+      });
+
+      document.querySelectorAll('[data-collapsible-toggle]').forEach(function (button) {
+        var target = document.getElementById(button.getAttribute('aria-controls'));
+        var action = button.querySelector('.collapsible-toggle-action');
+        function sync(expanded) {
+          button.setAttribute('aria-expanded', String(expanded));
+          if (action) action.textContent = expanded ? '收起数据' : '展开数据';
+          if (target) target.hidden = !expanded;
+        }
+        sync(button.getAttribute('aria-expanded') !== 'false');
+        button.addEventListener('click', function () {
+          sync(button.getAttribute('aria-expanded') !== 'true');
+        });
+      });
+
+      document.querySelectorAll('[data-audience-records]').forEach(function (dashboard) {
+        var records;
+        try {
+          records = JSON.parse(dashboard.getAttribute('data-audience-records') || '[]');
+        } catch (error) {
+          records = [];
+        }
+        if (!Array.isArray(records) || !records.length) return;
+        var ageLabels = ['18-19', '20-23', '24-30', '31-35', '36-40', '41-45', '46-50', '51-55', '56-59', '60+'];
+        var genderLabels = ['女', '男'];
+        var crowdLabels = ['小镇青年', '精致妈妈', '新锐白领', '资深中产', '小镇中老年', '都市银发', 'genz', '都市蓝领'];
+        var colors = ['#9b6a37', '#d79a4b', '#6f7f5f', '#a14f38', '#6d5d4d', '#c7a36a', '#7d8f9a', '#b77d54', '#958268', '#ab8068'];
+        var grid = dashboard.querySelector('[data-audience-chart-grid]');
+        var range = dashboard.querySelector('[data-audience-topn-range]');
+        var input = dashboard.querySelector('[data-audience-topn-input]');
+        var label = dashboard.querySelector('[data-audience-topn-label]');
+
+        function pct(value) {
+          return (Number(value) * 100).toLocaleString('zh-CN', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%';
+        }
+
+        function computeAudienceDimension(selectedRecords, labels) {
+          var counts = labels.map(function (item) {
+            return selectedRecords.reduce(function (total, record) {
+              var tags = Array.isArray(record.people_tags) ? record.people_tags : [];
+              return total + (tags.indexOf(item) >= 0 ? 1 : 0);
+            }, 0);
+          });
+          var occurrenceCount = counts.reduce(function (sum, count) { return sum + count; }, 0);
+          return {
+            recordCount: selectedRecords.length,
+            buckets: labels.map(function (item, index) {
+              var materialCount = counts[index];
+              return {
+                label: item,
+                materialCount: materialCount,
+                materialShare: selectedRecords.length ? materialCount / selectedRecords.length : 0,
+                chartShare: occurrenceCount ? materialCount / occurrenceCount : 0
+              };
+            }).filter(function (bucket) { return bucket.materialCount > 0; })
+          };
+        }
+
+        function emptyChart(title) {
+          var article = document.createElement('article');
+          article.className = 'chart-card audience-chart';
+          var heading = document.createElement('h3');
+          heading.textContent = title + '分布';
+          var note = document.createElement('p');
+          note.className = 'data-note';
+          note.textContent = '当前 TOP N 未识别到该维度标签。';
+          article.append(heading, note);
+          return article;
+        }
+
+        function renderAudiencePieChart(key, title, dimension) {
+          if (!dimension.buckets.length) return emptyChart(title);
+          var article = document.createElement('article');
+          article.className = 'chart-card audience-chart audience-chart-' + key;
+          var heading = document.createElement('h3');
+          heading.textContent = title + '分布';
+          var layout = document.createElement('div');
+          layout.className = 'audience-pie-layout';
+          var pie = document.createElement('div');
+          pie.className = 'pie-chart';
+          pie.setAttribute('data-audience-pie', '');
+          pie.setAttribute('role', 'img');
+          pie.tabIndex = 0;
+          pie.setAttribute('aria-label', title + '标签占比图，素材样本共 ' + dimension.recordCount + ' 条');
+          var cursor = 0;
+          var stops = [];
+          var legend = document.createElement('ul');
+          legend.className = 'pie-legend';
+          dimension.buckets.forEach(function (bucket, index) {
+            var next = cursor + bucket.chartShare * 100;
+            var color = colors[index % colors.length];
+            stops.push(color + ' ' + cursor.toFixed(4) + '% ' + next.toFixed(4) + '%');
+            var item = document.createElement('li');
+            item.className = 'legend-item';
+            item.title = bucket.label + '：' + bucket.materialCount + ' 条素材，占比 ' + pct(bucket.chartShare);
+            var name = document.createElement('span');
+            name.className = 'legend-label';
+            var swatch = document.createElement('i');
+            swatch.className = 'legend-swatch';
+            swatch.style.background = color;
+            name.append(swatch, document.createTextNode(bucket.label));
+            var count = document.createElement('span');
+            count.className = 'legend-count';
+            count.textContent = bucket.materialCount + ' 条';
+            var share = document.createElement('span');
+            share.className = 'legend-share';
+            share.textContent = pct(bucket.chartShare);
+            item.append(name, count, share);
+            legend.append(item);
+            cursor = next;
+          });
+          pie.style.background = 'conic-gradient(' + stops.join(', ') + ')';
+          layout.append(pie, legend);
+          article.append(heading, layout);
+          return article;
+        }
+
+        function renderAudiencePreferencePanel(groupName, selectedRecords) {
+          var panel = document.createElement('aside');
+          panel.className = 'audience-drill-panel';
+          var card = document.createElement('div');
+          card.className = 'preference-card';
+          var heading = document.createElement('h3');
+          heading.textContent = '核心人群偏好 TOP3 素材';
+          var group = document.createElement('section');
+          group.className = 'preference-group';
+          var groupHeading = document.createElement('h4');
+          groupHeading.textContent = groupName;
+          group.append(groupHeading);
+          var materials = selectedRecords.filter(function (record) {
+            return Array.isArray(record.people_tags) && record.people_tags.indexOf(groupName) >= 0;
+          }).sort(function (left, right) {
+            return Number(left.rank || 0) - Number(right.rank || 0);
+          }).slice(0, 3);
+          var list = document.createElement('ol');
+          list.className = 'preference-list';
+          materials.forEach(function (record, index) {
+            var row = document.createElement('li');
+            row.className = 'preference-item';
+            var rank = document.createElement('span');
+            rank.className = 'preference-rank';
+            rank.textContent = 'TOP ' + (index + 1);
+            var button = document.createElement('button');
+            button.className = 'material-link';
+            button.type = 'button';
+            button.textContent = record.title || record.material_id || '未命名素材';
+            button.title = button.textContent;
+            button.addEventListener('click', function () {
+              activateMaterialById(record.material_id);
+            });
+            row.append(rank, button);
+            list.append(row);
+          });
+          if (!materials.length) {
+            var empty = document.createElement('p');
+            empty.className = 'audience-drill-empty';
+            empty.textContent = '暂无该人群的 TOP3 素材偏好数据。';
+            group.append(empty);
+          } else {
+            group.append(list);
+          }
+          card.append(heading, group);
+          panel.append(card);
+          return panel;
+        }
+
+        function renderAudienceColumnChart(title, dimension, selectedRecords) {
+          if (!dimension.buckets.length) return emptyChart(title);
+          var article = document.createElement('article');
+          article.className = 'chart-card audience-chart audience-chart-crowd column-chart-card';
+          var heading = document.createElement('h3');
+          heading.textContent = title + '分布';
+          var chart = document.createElement('div');
+          chart.className = 'script-dashboard-overview';
+          var columnChart = document.createElement('div');
+          columnChart.className = 'audience-column-chart';
+          columnChart.setAttribute('data-audience-column', '');
+          columnChart.setAttribute('role', 'group');
+          columnChart.setAttribute('aria-label', title + '标签占比柱状图，素材样本共 ' + dimension.recordCount + ' 条');
+          var maxShare = Math.max.apply(null, dimension.buckets.map(function (bucket) { return bucket.chartShare; }));
+          var axisMax = Math.max(10, Math.ceil(maxShare * 100 / 10) * 10);
+          var axis = document.createElement('div');
+          axis.className = 'audience-column-y-axis';
+          [axisMax, axisMax * 0.75, axisMax * 0.5, axisMax * 0.25, 0].forEach(function (tick) {
+            var tickNode = document.createElement('span');
+            tickNode.textContent = tick.toFixed(0) + '%';
+            axis.append(tickNode);
+          });
+          var plot = document.createElement('div');
+          plot.className = 'audience-column-plot';
+          plot.style.gridTemplateColumns = 'repeat(' + dimension.buckets.length + ',minmax(0,1fr))';
+          var hint = document.createElement('p');
+          hint.className = 'audience-crowd-hint';
+          hint.textContent = '点击柱状图查看对应人群 TOP3 素材';
+
+          dimension.buckets.forEach(function (bucket, index) {
+            var item = document.createElement('div');
+            item.className = 'audience-column-item';
+            item.setAttribute('data-audience-group', bucket.label);
+            item.tabIndex = 0;
+            item.setAttribute('role', 'button');
+            item.setAttribute('aria-label', bucket.label + '，素材数 ' + bucket.materialCount + ' 条，占比 ' + pct(bucket.chartShare));
+            var bar = document.createElement('div');
+            bar.className = 'audience-column-bar';
+            bar.style.height = Math.max(2, bucket.chartShare * 100 / axisMax * 100).toFixed(2) + '%';
+            bar.style.background = colors[index % colors.length];
+            var name = document.createElement('span');
+            name.className = 'audience-column-label';
+            name.textContent = bucket.label;
+            var tooltip = document.createElement('div');
+            tooltip.className = 'chart-tooltip';
+            tooltip.setAttribute('role', 'tooltip');
+            tooltip.innerHTML = '<b>' + bucket.label + '</b><span>素材数 ' + bucket.materialCount + ' 条</span><span>占比 ' + pct(bucket.chartShare) + '</span>';
+            item.append(bar, name, tooltip);
+            item.addEventListener('click', function () {
+              renderAudienceGroupDrill(item.closest('article'), dimension, bucket, selectedRecords, item);
+            });
+            item.addEventListener('keydown', function (event) {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                renderAudienceGroupDrill(item.closest('article'), dimension, bucket, selectedRecords, item);
+              }
+            });
+            plot.append(item);
+          });
+          columnChart.append(axis, plot);
+          chart.append(hint, columnChart);
+          article.append(heading, chart);
+          return article;
+        }
+
+        function captureAudienceBarTransition(sourceItem) {
+          var sourceBar = sourceItem && sourceItem.querySelector('.audience-column-bar, .script-drill-primary-bar');
+          if (!sourceBar) return null;
+          var sourceRect = sourceBar.getBoundingClientRect();
+          if (!sourceRect.width || !sourceRect.height) return null;
+          return { clone: sourceBar.cloneNode(true), sourceRect: sourceRect };
+        }
+
+        function prefersReducedMotion() {
+          return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        }
+
+        function animateAudienceDrill(transition, targetBar) {
+          if (!transition || !targetBar || prefersReducedMotion()) return;
+          var sourceRect = transition.sourceRect;
+          var targetRect = targetBar.getBoundingClientRect();
+          if (!targetRect.width || !targetRect.height) return;
+          targetBar.classList.add('is-arriving');
+          var clone = transition.clone;
+          clone.classList.add('script-drill-moving-bar');
+          clone.style.left = sourceRect.left + 'px';
+          clone.style.top = sourceRect.top + 'px';
+          clone.style.width = sourceRect.width + 'px';
+          clone.style.height = sourceRect.height + 'px';
+          document.body.append(clone);
+          var removed = false;
+          function removeClone() {
+            if (removed) return;
+            removed = true;
+            clone.remove();
+            targetBar.classList.remove('is-arriving');
+          }
+          clone.addEventListener('transitionend', removeClone, { once: true });
+          window.setTimeout(function () {
+            var translateX = targetRect.left + targetRect.width / 2 - (sourceRect.left + sourceRect.width / 2);
+            var translateY = targetRect.bottom - sourceRect.bottom;
+            var scaleX = targetRect.width / sourceRect.width;
+            var scaleY = targetRect.height / sourceRect.height;
+            clone.style.transform = 'translate(' + translateX + 'px, ' + translateY + 'px) scale(' + scaleX + ', ' + scaleY + ')';
+          }, 0);
+          window.setTimeout(removeClone, 360);
+        }
+
+        function restoreAudienceOverview(article, dimension, selectedRecords, selectedName, transition) {
+          var overview = renderAudienceColumnChart('八大人群', dimension, selectedRecords);
+          article.replaceChildren.apply(article, Array.prototype.slice.call(overview.childNodes));
+          var overviewBody = article.querySelector('.script-dashboard-overview');
+          if (overviewBody) {
+            overviewBody.classList.add('is-entering');
+            window.setTimeout(function () { overviewBody.classList.add('is-visible'); }, 0);
+          }
+          if (selectedName && transition) {
+            var targetItem = Array.prototype.slice.call(article.querySelectorAll('.audience-column-item')).find(function (item) {
+              return item.getAttribute('data-audience-group') === selectedName;
+            });
+            animateAudienceDrill(transition, targetItem && targetItem.querySelector('.audience-column-bar'));
+          }
+        }
+
+        function renderAudienceGroupDrill(article, dimension, bucket, selectedRecords, sourceItem) {
+          if (!article) return;
+          var selectedName = bucket.label;
+          var transition = captureAudienceBarTransition(sourceItem);
+          var view = document.createElement('div');
+          view.className = 'script-drill-view';
+          var control = document.createElement('div');
+          control.className = 'script-dashboard-control';
+          var back = document.createElement('button');
+          back.type = 'button';
+          back.className = 'script-drill-back';
+          back.textContent = '返回八大人群分布';
+          back.addEventListener('click', function () {
+            var detail = article.querySelector('.script-drill-detail');
+            var backTransition = captureAudienceBarTransition(article.querySelector('.script-drill-primary'));
+            if (!detail || prefersReducedMotion()) {
+              restoreAudienceOverview(article, dimension, selectedRecords, selectedName, backTransition);
+              return;
+            }
+            detail.classList.add('is-leaving');
+            window.setTimeout(function () {
+              restoreAudienceOverview(article, dimension, selectedRecords, selectedName, backTransition);
+            }, 260);
+          });
+          control.append(back);
+          var detail = document.createElement('div');
+          detail.className = 'script-drill-detail is-entering';
+          var layout = document.createElement('div');
+          layout.className = 'script-drill-layout';
+          var primary = document.createElement('section');
+          primary.className = 'script-drill-primary';
+          var primaryTitle = document.createElement('b');
+          primaryTitle.textContent = selectedName;
+          var plot = document.createElement('div');
+          plot.className = 'script-drill-primary-plot';
+          var bar = document.createElement('div');
+          bar.className = 'script-drill-primary-bar';
+          bar.style.height = '100%';
+          plot.append(bar);
+          primary.append(primaryTitle, plot);
+          var metric = document.createElement('span');
+          metric.className = 'muted';
+          metric.textContent = '占比 ' + pct(bucket.chartShare);
+          primary.append(metric);
+          layout.append(primary, renderAudiencePreferencePanel(selectedName, selectedRecords));
+          detail.append(layout);
+          view.append(control, detail);
+          article.replaceChildren();
+          article.append(view);
+          window.setTimeout(function () { detail.classList.add('is-visible'); }, 0);
+          animateAudienceDrill(transition, bar);
+        }
+
+        function renderAudienceTopN(topn) {
+          var limit = Math.max(1, Math.min(records.length, Number(topn) || records.length));
+          var selected = records.slice(0, limit);
+          if (range) range.value = String(limit);
+          if (input) input.value = String(limit);
+          if (label) label.textContent = '当前 TOP' + limit + ' / ' + records.length;
+          grid.replaceChildren(
+            renderAudienceColumnChart('八大人群', computeAudienceDimension(selected, crowdLabels), selected),
+            renderAudiencePieChart('age', '年龄', computeAudienceDimension(selected, ageLabels)),
+            renderAudiencePieChart('gender', '性别', computeAudienceDimension(selected, genderLabels))
+          );
+        }
+
+        if (range) range.addEventListener('input', function () { renderAudienceTopN(range.value); });
+        if (input) input.addEventListener('change', function () { renderAudienceTopN(input.value); });
+        if (input) input.addEventListener('input', function () {
+          var value = Number(input.value);
+          if (Number.isFinite(value)) renderAudienceTopN(value);
+        });
+        renderAudienceTopN(records.length);
+      });
 
       document.querySelectorAll('[data-second-level-timeline]').forEach(function (root) {
         var metrics;
@@ -183,6 +604,26 @@
           return Number.isInteger(number) ? String(number) : number.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
         }
 
+        function smoothPath(coords) {
+          if (!coords.length) return '';
+          if (coords.length === 1) return 'M' + coords[0].x.toFixed(2) + ' ' + coords[0].y.toFixed(2);
+          var d = 'M' + coords[0].x.toFixed(2) + ' ' + coords[0].y.toFixed(2);
+          for (var i = 0; i < coords.length - 1; i += 1) {
+            var p0 = coords[Math.max(0, i - 1)];
+            var p1 = coords[i];
+            var p2 = coords[i + 1];
+            var p3 = coords[Math.min(coords.length - 1, i + 2)];
+            var cp1x = p1.x + (p2.x - p0.x) / 6;
+            var cp1y = p1.y + (p2.y - p0.y) / 6;
+            var cp2x = p2.x - (p3.x - p1.x) / 6;
+            var cp2y = p2.y - (p3.y - p1.y) / 6;
+            d += ' C' + cp1x.toFixed(2) + ' ' + cp1y.toFixed(2) + ','
+              + cp2x.toFixed(2) + ' ' + cp2y.toFixed(2) + ','
+              + p2.x.toFixed(2) + ' ' + p2.y.toFixed(2);
+          }
+          return d;
+        }
+
         function render(metric) {
           active = metric;
           buttons.forEach(function (button) {
@@ -207,7 +648,7 @@
           var height = bounds.bottom - bounds.top;
           function x(second) { return bounds.left + Number(second) / visibleSecond * width; }
           function y(value) { return bounds.bottom - Number(value) / maxValue * height; }
-          var svg = svgElement('svg', { viewBox: '0 0 860 310', role: 'img', 'aria-label': metric.trend_name + '秒级趋势图' });
+          var svg = svgElement('svg', { class: 'timeline-chart', viewBox: '0 0 860 310', role: 'img', 'aria-label': metric.trend_name + '秒级趋势图' });
           for (var tick = 0; tick <= 4; tick += 1) {
             var tickValue = maxValue * tick / 4;
             var tickY = y(tickValue);
@@ -225,14 +666,26 @@
               svg.append(svgElement('rect', { class: 'second-level-range ' + (key === 'high_points' ? 'high' : 'loss'), x: x(start), y: bounds.top, width: Math.max(3, x(end) - x(start)), height: height }));
             });
           });
-          var polyline = svgElement('polyline', { class: 'second-level-line', points: points.map(function (point) { return x(point.second).toFixed(2) + ',' + y(point.value).toFixed(2); }).join(' ') });
-          svg.append(polyline);
+          var coords = points.map(function (point) { return { x: x(point.second), y: y(point.value), point: point }; });
+          var curve = svgElement('path', { class: 'second-level-line timeline-line', d: smoothPath(coords), 'data-second-level-curve': '' });
+          svg.append(curve);
           points.forEach(function (point) {
-            var circle = svgElement('circle', { class: 'second-level-point', cx: x(point.second), cy: y(point.value), r: 4, tabindex: 0, 'data-second-level-point': '', 'aria-label': point.second + ' 秒，' + metric.trend_name + ' ' + formatValue(point.value) });
-            var title = svgElement('title', {});
-            title.textContent = point.second + ' 秒：' + formatValue(point.value);
-            circle.append(title);
-            svg.append(circle);
+            var cx = x(point.second);
+            var cy = y(point.value);
+            var group = svgElement('g', { class: 'second-level-point-hitbox timeline-point-hitbox', tabindex: '0', 'data-second-level-point': '', 'aria-label': point.second + ' 秒，' + metric.trend_name + ' ' + formatValue(point.value) });
+            group.append(svgElement('circle', { cx: cx.toFixed(2), cy: cy.toFixed(2), r: 10, fill: 'transparent' }));
+            group.append(svgElement('circle', { class: 'second-level-point timeline-point-dot', cx: cx.toFixed(2), cy: cy.toFixed(2), r: 4 }));
+            var tooltipX = Math.min(bounds.right - 150, Math.max(bounds.left, cx - 74));
+            var tooltipY = Math.max(bounds.top + 8, cy - 58);
+            var tooltip = svgElement('g', { class: 'second-level-tooltip timeline-tooltip', transform: 'translate(' + tooltipX.toFixed(2) + ' ' + tooltipY.toFixed(2) + ')' });
+            tooltip.append(svgElement('rect', { width: 148, height: 46, rx: 8 }));
+            var tooltipTime = svgElement('text', { x: 12, y: 18, class: 'second-level-tooltip-title' });
+            tooltipTime.textContent = point.second + 's';
+            var tooltipValue = svgElement('text', { x: 12, y: 36, class: 'second-level-tooltip-value' });
+            tooltipValue.textContent = metric.trend_name + '：' + formatValue(point.value);
+            tooltip.append(tooltipTime, tooltipValue);
+            group.append(tooltip);
+            svg.append(group);
           });
           var peak = points.reduce(function (winner, point) { return Number(point.value) > Number(winner.value) ? point : winner; }, points[0]);
           var peakDot = svgElement('circle', { cx: x(peak.second), cy: y(peak.value), r: 6, class: 'second-level-point' });

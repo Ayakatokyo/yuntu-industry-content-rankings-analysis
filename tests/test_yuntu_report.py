@@ -385,7 +385,14 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(
                 analysis_json=analysis_path,
                 output_dir=root / "final-report",
-                fact_pack={"audienceDashboard": audience_dashboard},
+                fact_pack={
+                    "audienceDashboard": audience_dashboard,
+                    "audienceTopNRecords": [
+                        {"material_id": "1", "rank": 1, "people_tags": ["24-30", "女", "新锐白领"]},
+                        {"material_id": "2", "rank": 2, "people_tags": ["24-30", "女", "新锐白领", "精致妈妈"]},
+                        {"material_id": "3", "rank": 3, "people_tags": ["女"]},
+                    ],
+                },
             )
             markdown = (root / "final-report" / "final-report.md").read_text(encoding="utf-8")
             html = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
@@ -407,13 +414,37 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('class="chart-card audience-chart audience-chart-age"', html)
         self.assertIn('class="chart-card audience-chart audience-chart-gender"', html)
         self.assertIn('class="chart-card audience-chart audience-chart-crowd"', html)
+        self.assertLess(
+            html.index('class="chart-card audience-chart audience-chart-crowd"'),
+            html.index('class="chart-card audience-chart audience-chart-age"'),
+        )
         self.assertIn('class="audience-column-chart"', html)
         self.assertIn('class="audience-column-label">新锐白领</span>', html)
+        self.assertIn('class="audience-dashboard" data-audience-records=', html)
+        self.assertIn('data-audience-topn-range', html)
+        self.assertIn('data-audience-topn-input', html)
+        self.assertIn('data-audience-topn-label', html)
+        self.assertIn('computeAudienceDimension', html)
+        self.assertIn('renderAudienceTopN', html)
+        self.assertIn("renderAudienceGroupDrill(item.closest('article')", html)
         self.assertIn('class="legend-label"><i class="legend-swatch"', html)
         self.assertIn('class="legend-count">2 条</span>', html)
         self.assertIn('class="legend-share">100.0%</span>', html)
         self.assertIn('class="chart-tooltip"', html)
-        self.assertIn('.page{width:min(1180px,calc(100% - 32px));', html)
+        self.assertIn("showPieTooltip", html)
+        self.assertIn("hidePieTooltip", html)
+        self.assertIn("data-pie-tooltip", html)
+        self.assertNotIn("归一化占比", markdown)
+        self.assertNotIn("归一化占比", html)
+        self.assertNotIn("覆盖率", markdown)
+        self.assertNotIn("覆盖率", html)
+        self.assertIn("占比 100.0%", markdown)
+        self.assertIn("占比 100.0%", html)
+        self.assertIn('class="audience-data-card raw-fact-card"', html)
+        self.assertIn('data-collapsible-toggle aria-expanded="true" aria-controls="audience-dashboard-body"', html)
+        self.assertIn('class="collapsible-body" id="audience-dashboard-body"', html)
+        self.assertIn('.page{width:min(1280px,calc(100% - 20px));', html)
+        self.assertIn('overflow-x: hidden;', html)
         self.assertIn('.audience-pie-layout{display:grid;grid-template-columns:minmax(0,45fr) minmax(0,55fr);', html)
         self.assertIn('.audience-chart-age,.audience-chart-gender{display:flex;flex-direction:column}', html)
         self.assertIn('flex:1;min-height:0;gap:14px;align-items:center', html)
@@ -421,12 +452,22 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('.pie-chart{position:relative;width:min(260px,100%);', html)
         self.assertIn('.audience-chart-gender .pie-chart{width:min(240px,100%)}', html)
         self.assertIn('.pie-legend .legend-item{position:relative;display:grid;grid-template-columns:minmax(80px,1fr) auto auto;', html)
-        self.assertIn('.audience-column-chart{position:relative;min-height:300px;', html)
+        self.assertIn('.audience-column-chart{position:relative;min-height:250px;', html)
         self.assertIn('.unified-report :is(.pie-layout, .audience-pie-layout)', html)
         self.assertIn('flex-direction: column;', html)
         self.assertIn('width: min(320px, 100%) !important;', html)
         self.assertIn('.unified-report .pie-legend {', html)
-        self.assertIn('overflow-x: auto;', html)
+        self.assertIn(".unified-yuntu .audience-chart-age .pie-legend", html)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", html)
+        self.assertIn("grid-template-columns: max-content max-content max-content;", html)
+        self.assertIn('contain: layout paint;', html)
+        self.assertIn(".unified-report .section-header {", html)
+        self.assertIn("border-bottom: 0;", html)
+        self.assertIn(".unified-yuntu :is(#audience-insights, #highlight-insights, #material-deep-dive) > .section-header", html)
+        self.assertIn(".unified-yuntu .brand-tabs {", html)
+        self.assertIn("gap: 12px;", html)
+        self.assertIn("padding: 0 2px 16px;", html)
+        self.assertIn("scrollbar-width: thin;", html)
         self.assertNotIn('class="pie-tooltip"', html)
         self.assertNotIn('class="audience-bar-chart"', html)
 
@@ -559,10 +600,15 @@ class YuntuReportTests(unittest.TestCase):
             markdown = (root / "report" / "final-report.md").read_text(encoding="utf-8")
         self.assertIn('aria-label="单素材深度分析"', rendered)
         self.assertIn('data-material-tab', rendered)
+        self.assertIn('data-material-id="101"', rendered)
         self.assertIn('class="deep-frame-grid fixed-six"', rendered)
-        self.assertIn('class="second-level-timeline"', rendered)
+        self.assertIn('class="second-level-timeline raw-fact-card"', rendered)
+        self.assertIn('data-collapsible-toggle', rendered)
+        self.assertIn('class="collapsible-toggle-action">收起数据</span>', rendered)
         self.assertEqual(rendered.count('class="second-level-chart"'), 0)
         self.assertIn("点击 Top1 峰值帧｜2s｜点击指数 0.80", rendered)
+        self.assertIn('data-jump-material="101"', rendered)
+        self.assertIn('class="highlight-source-link"', rendered)
         self.assertIn("## 05｜单素材深度分析", markdown)
         self.assertIn("秒级拆解", markdown)
         self.assertNotIn("可测试近景产品主体与清晰包装展示的组合。", rendered)
@@ -633,10 +679,14 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=self.deep_dive_fact_pack())
             rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
 
-        self.assertIn('class="second-level-timeline"', rendered)
+        self.assertIn('class="second-level-timeline raw-fact-card"', rendered)
         self.assertIn('data-second-level-metric="点赞指数"', rendered)
+        self.assertIn('class="second-level-switcher metric-switch"', rendered)
         self.assertIn('class="second-level-range-control"', rendered)
         self.assertIn('data-second-level-point', rendered)
+        self.assertIn('data-second-level-curve', rendered)
+        self.assertIn("second-level-tooltip timeline-tooltip", rendered)
+        self.assertIn('smoothPath(coords)', rendered)
         self.assertNotIn('class="second-level-chart"', rendered)
 
     def test_render_report_rejects_invalid_material_deep_dive_frame_and_second(self):
@@ -724,50 +774,79 @@ class YuntuReportTests(unittest.TestCase):
     def test_render_report_renders_classified_highlight_frames(self):
         report = load_module()
         analysis = self.analysis_json()
-        analysis.update(self.highlight_dashboard())
+        frame_refs = [
+            f"highlight:101:click_peak:{second}" for second in range(1, 10)
+        ]
+        analysis["highlightDashboard"] = {
+            "groups": [{
+                "category": "portrait",
+                "frame_refs": frame_refs,
+                "common_patterns": ["人像主体稳定。"],
+                "derivative_directions": [{
+                    "title": "保留近景人物开场",
+                    "body": "以人物近景作为第一视觉。",
+                    "frame_refs": [frame_refs[0]],
+                }],
+            }]
+        }
         fact_pack = {
             "selectedMaterials": [{"rank": 1, "material_id": "101"}],
             "materialFacts": [{
                 "material_id": "101",
                 "rank": 1,
                 "title": "测试素材",
-                "highlightFrames": [{
-                    "frame_ref": "highlight:101:cover:0",
-                    "second": 0,
-                    "frame_type": "cover",
-                    "peak_rank": None,
-                    "click_value": None,
-                    "available": True,
-                    "relative_path": "highlights/101/01-000s.jpg",
-                }],
+                "highlightFrames": [
+                    {
+                        "frame_ref": frame_ref,
+                        "second": index,
+                        "frame_type": "click_peak",
+                        "peak_rank": index,
+                        "click_value": 1 / index,
+                        "available": True,
+                        "relative_path": f"highlights/101/{index:02d}-{index:03d}s.jpg",
+                    }
+                    for index, frame_ref in enumerate(frame_refs, start=1)
+                ],
             }],
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source_frame = root / "highlights" / "101" / "01-000s.jpg"
-            source_frame.parent.mkdir(parents=True)
-            source_frame.write_bytes(b"fake-jpg")
+            for index in range(1, 10):
+                source_frame = root / "highlights" / "101" / f"{index:02d}-{index:03d}s.jpg"
+                source_frame.parent.mkdir(parents=True, exist_ok=True)
+                source_frame.write_bytes(b"fake-jpg")
             analysis_path = root / "analysis.json"
             analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
             report.render_report(analysis_json=analysis_path, output_dir=root / "report", fact_pack=fact_pack)
             rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
             data = json.loads((root / "report" / "final-report-data.json").read_text(encoding="utf-8"))
-            copied_frame = (root / "report" / "assets" / "highlight-frames" / "101" / "01-000s.jpg").read_bytes()
+            copied_frame = (root / "report" / "assets" / "highlight-frames" / "101" / "01-001s.jpg").read_bytes()
 
         self.assertIn("人像画面", rendered)
         self.assertIn("保留近景人物开场", rendered)
         self.assertIn('role="tablist" aria-label="高光画面分类"', rendered)
         self.assertIn('data-highlight-category-tab', rendered)
         self.assertIn('role="tabpanel"', rendered)
-        self.assertIn('class="highlight-frame-button"', rendered)
-        self.assertIn('src="assets/highlight-frames/101/01-000s.jpg"', rendered)
+        self.assertIn('class="highlight-frame-preview highlight-frame-button"', rendered)
+        self.assertIn('data-highlight-frame-card', rendered)
+        self.assertIn('data-highlight-pagination', rendered)
+        self.assertIn('data-jump-material="101"', rendered)
+        self.assertIn('src="assets/highlight-frames/101/01-001s.jpg"', rendered)
         self.assertEqual(copied_frame, b"fake-jpg")
         self.assertIn('aria-label="查看高光帧大图"', rendered)
+        self.assertIn('data-highlight-page-size="10"', rendered)
+        self.assertIn('data-highlight-frame-count="9"', rendered)
+        self.assertIn('data-highlight-page-status', rendered)
+        self.assertIn("1 / 1", rendered)
         self.assertLess(
             rendered.index('class="highlight-analysis-pair"'),
             rendered.index('class="highlight-frame-grid"'),
         )
-        self.assertIn("highlight:101:cover:0", data["highlightFrames"])
+        self.assertLess(
+            rendered.index('class="highlight-frame-grid"'),
+            rendered.index('class="highlight-pagination"'),
+        )
+        self.assertIn("highlight:101:click_peak:1", data["highlightFrames"])
 
     def test_render_report_rejects_highlight_frames_classified_more_than_once(self):
         report = load_module()
@@ -911,6 +990,21 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn('aria-label="查看 101 封面 高光帧"', rendered)
         self.assertNotIn('aria-label="关闭高光帧预览"', rendered)
 
+    def test_render_report_embeds_self_creating_unified_highlight_lightbox(self):
+        report = load_module()
+        fact_pack = {"materialFacts": [{"material_id": "101", "highlightFrames": [{
+            "second": 0, "available": True, "relative_path": "../highlights/101/01-000s.jpg",
+            "is_cover": True, "reasons": [{"type": "cover"}],
+        }]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertIn("createUnifiedHighlightLightbox", rendered)
+        self.assertIn("document.body.append(overlay)", rendered)
+
     def test_render_report_uses_the_shared_background_tokens(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:
@@ -921,6 +1015,69 @@ class YuntuReportTests(unittest.TestCase):
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
         self.assertIn("body{margin:0;background:var(--bg)", rendered)
         self.assertIn("--paper:#fff8ec", rendered)
+
+    def test_shared_style_defines_text_card_and_control_contract(self):
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("--unified-text-card: #f7ead8;", css)
+        self.assertIn(".yuntu-content-card", css)
+        self.assertIn(".brand-tab", css)
+        self.assertIn(".material-deep-tab", css)
+        self.assertIn("background: var(--unified-text-card);", css)
+        self.assertIn("width: min(1280px, calc(100% - 20px));", css)
+        self.assertIn("grid-template-columns: 188px minmax(0, 1fr);", css)
+        self.assertIn("gap: 18px;", css)
+        self.assertIn(".unified-yuntu .audience-data-card", css)
+        self.assertIn("padding: 18px;", css)
+        self.assertIn("white-space: nowrap;", css)
+        self.assertIn(".unified-yuntu .script-drill-layout", css)
+        self.assertIn(".unified-yuntu .script-drill-primary", css)
+        self.assertIn("grid-template-rows: auto 150px auto;", css)
+        self.assertIn("min-height: 300px;", css)
+        self.assertIn(".unified-yuntu .audience-drill-panel", css)
+        self.assertIn("align-self: stretch;", css)
+        self.assertIn(".unified-yuntu .audience-drill-panel .preference-list", css)
+        self.assertIn(".unified-yuntu .audience-chart-crowd .audience-column-chart", css)
+        self.assertIn("min-height: 250px;", css)
+        self.assertIn("height: 170px;", css)
+        self.assertIn(".unified-yuntu .brand-tab[aria-selected=\"true\"]::after", css)
+        self.assertIn(".unified-yuntu .audience-chart-gender .pie-legend", css)
+        self.assertIn("margin-block: auto;", css)
+        self.assertIn("grid-template-columns: repeat(5, minmax(0, 1fr));", css)
+        self.assertIn("grid-template-rows: repeat(2, minmax(0, 1fr));", css)
+        self.assertIn("min-height: var(--highlight-grid-height);", css)
+        self.assertIn("aspect-ratio: 9 / 16;", css)
+        self.assertIn("object-fit: contain;", css)
+        self.assertIn(".script-drill-detail.is-entering", css)
+        self.assertIn(".script-drill-moving-bar", css)
+        self.assertIn(".highlight-frame-card[hidden]", css)
+        self.assertIn(".second-level-section {", css)
+        self.assertIn("padding-top: 24px;", css)
+
+    def test_render_report_omits_highlight_category_heading(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        fact_pack = self.deep_dive_fact_pack()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            for fact in fact_pack["materialFacts"]:
+                for frame in fact["highlightFrames"]:
+                    source_frame = root / frame["relative_path"]
+                    source_frame.parent.mkdir(parents=True, exist_ok=True)
+                    source_frame.write_bytes(b"fake-jpeg")
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack=fact_pack,
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertNotIn('class="highlight-category-head"', rendered)
+        self.assertNotIn('class="highlight-category-count"', rendered)
 
     def test_render_report_removes_summary_dashboard_and_material_nav(self):
         report = load_module()

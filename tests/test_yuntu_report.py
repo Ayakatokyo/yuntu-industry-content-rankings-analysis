@@ -42,10 +42,18 @@ class YuntuReportTests(unittest.TestCase):
     def analysis_json(self):
         return {
             "topMaterialCombination": {
+                "executiveSummary": {
+                    "summary": "综合结论：榜单、人群、卖点和已取得详情共同指向明确的内容机会。",
+                    "material_ids": ["101"],
+                    "evidence": [
+                        {"scope": "ranking"},
+                        {"scope": "detail"},
+                    ],
+                },
                 "overallConclusions": [
                     {
                         "dimension": "data",
-                        "summary": "TOP30 总曝光占比高，头部流量集中但并非单条素材垄断。",
+                        "summary": "TOP1000 总曝光占比高，头部流量集中但并非单条素材垄断。",
                         "material_ids": ["101"],
                         "evidence": [{"hidden": "evidence-sentinel-data"}],
                     },
@@ -213,12 +221,12 @@ class YuntuReportTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(data["status"], "complete")
         for rendered in (markdown, html):
-            self.assertIn("品牌筛选条件下 TOP30 整体分析", rendered)
+            self.assertIn("TOP1000 整体分析", rendered)
             self.assertIn("从数据维度看", rendered)
             self.assertIn("从人群维度看", rendered)
             self.assertIn("从营销卖点维度看", rendered)
             self.assertIn("人群标签是重叠标签，不是真实人群分布，不能相加为 100%。", rendered)
-            self.assertIn("各品牌 TOP30 对比分析", rendered)
+            self.assertIn("各品牌 TOP 对比分析（成功秒级拆解素材）", rendered)
             self.assertIn("万益蓝/WONDERLAB", rendered)
             self.assertIn("五个女博士", rendered)
             self.assertIn("燕之屋", rendered)
@@ -235,8 +243,8 @@ class YuntuReportTests(unittest.TestCase):
             for title in ("榜单竞争格局", "内容表现地图", "内容与人群机会", "竞品内容模式", "秒级创意结构", "机会与实验"):
                 self.assertNotIn(title, rendered)
         self.assertNotIn("一、品牌筛选条件下", markdown)
-        self.assertNotIn("二、各品牌 TOP30", markdown)
-        self.assertIn("---\n\n### 各品牌 TOP30 对比分析", markdown)
+        self.assertNotIn("二、各品牌 TOP", markdown)
+        self.assertIn("---\n\n### 各品牌 TOP 对比分析（成功秒级拆解素材）", markdown)
         self.assertIn("---\n\n### 五个女博士", markdown)
         self.assertIn("---\n\n### 品牌间差异总结", markdown)
         self.assertIn('role="tablist"', html)
@@ -275,6 +283,60 @@ class YuntuReportTests(unittest.TestCase):
                 with self.assertRaisesRegex(report.YuntuReportError, "script_insights"):
                     report._load_html_template()
 
+    def test_render_report_rejects_top_material_combination_without_executive_summary(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        analysis["topMaterialCombination"].pop("executiveSummary")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "executiveSummary"):
+                report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+
+    def test_render_report_shows_top_material_scope_and_executive_summary(self):
+        report = load_module()
+        fact_pack = {
+            "reportScopes": {
+                "ranking": {"source_name": "TOP1000 榜单素材", "sample_count": 1000},
+                "detail": {
+                    "source_name": "成功秒级拆解素材",
+                    "sample_count": 5,
+                    "success_count": 5,
+                    "failed_count": 1,
+                },
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8"
+            )
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack=fact_pack,
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(
+                encoding="utf-8"
+            )
+            markdown = (root / "final-report" / "final-report.md").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertIn('class="top-material-scope"', rendered)
+        self.assertIn("TOP1000 榜单素材：1000 条", rendered)
+        self.assertIn("成功秒级拆解素材：5 条", rendered)
+        self.assertIn("TOP1000 整体分析", rendered)
+        self.assertIn("各品牌 TOP 对比分析（成功秒级拆解素材）", rendered)
+        self.assertNotIn("品牌筛选 TOP30", rendered)
+        self.assertNotIn("各品牌 TOP30", rendered)
+        self.assertNotIn("TOP30", markdown)
+        self.assertIn('<h3>综合结论</h3>', rendered)
+        self.assertIn("综合结论：榜单、人群、卖点和已取得详情共同指向明确的内容机会。", rendered)
+        self.assertIn('class="brand-classification-note">品牌归属：标题匹配归属；对比样本：成功秒级拆解素材</p>', rendered)
+
     def test_render_report_inlines_unified_assets_and_emits_unified_structure(self):
         report = load_module()
         fact_pack = {
@@ -309,7 +371,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("TOP30 素材组合结论", rendered)
         self.assertNotIn("来源：Top1000 榜单数据", rendered)
         self.assertNotIn("基于筛选品牌集合与标题匹配品牌", rendered)
-        self.assertEqual(rendered.count(' yuntu-content-card"'), 3)
+        self.assertEqual(rendered.count(' yuntu-content-card"'), 4)
         self.assertIn(".unified-report .report-shell", rendered)
         self.assertIn("data-unified-report-ready", rendered)
         self.assertNotIn('rel="stylesheet"', rendered)
@@ -986,7 +1048,7 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
         self.assertIn("--paper:#fff8ec", rendered)
-        self.assertIn('aria-label="各品牌 TOP30 分析"', rendered)
+        self.assertIn('aria-label="各品牌 TOP 对比分析（成功秒级拆解素材）"', rendered)
         self.assertNotIn('aria-label="查看 101 封面 高光帧"', rendered)
         self.assertNotIn('aria-label="关闭高光帧预览"', rendered)
 

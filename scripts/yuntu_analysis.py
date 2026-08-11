@@ -6,7 +6,11 @@ from statistics import median
 
 from rpa_io import write_json_atomically
 from yuntu_highlights import ALLOWED_HIGHLIGHT_TRENDS, generate_standard_highlights
-from yuntu_top_materials import build_audience_dashboard, build_top_material_combination
+from yuntu_top_materials import (
+    build_audience_dashboard,
+    build_top_material_combination,
+    select_top_materials,
+)
 
 
 class YuntuAnalysisError(RuntimeError):
@@ -57,6 +61,20 @@ def _candidate_pool(records):
         if (summary := _metric_summary(records, name)) is not None
     }
     return {"count": len(records), "metrics": metrics}
+
+
+def _audience_topn_records(records, *, limit=1000):
+    return [
+        {
+            "material_id": str(record.get("material_id", "")),
+            "rank": record.get("rank"),
+            "people_tags": [
+                tag for tag in record.get("people_tags", [])
+                if isinstance(tag, str) and tag
+            ],
+        }
+        for record in select_top_materials(records, limit=limit)
+    ]
 
 
 def _metric_comparison(record, pool_records):
@@ -417,6 +435,7 @@ def prepare_analysis(*, input_dir, output_dir):
         )
     candidate_pool = _candidate_pool(pool_records)
     audience_dashboard = build_audience_dashboard(pool_records)
+    audience_topn_records = _audience_topn_records(pool_records)
     tag_insights = _tag_insights(pool_records, selected_ids)
     trend_summary = _trend_summary(details)
     fact_pack = {
@@ -428,6 +447,7 @@ def prepare_analysis(*, input_dir, output_dir):
         "candidatePool": candidate_pool,
         "topMaterialCombination": build_top_material_combination(pool_records),
         "audienceDashboard": audience_dashboard,
+        "audienceTopNRecords": audience_topn_records,
         "tagInsights": tag_insights,
         "trendSummary": trend_summary,
         "dataAvailabilitySummary": _availability_summary(material_facts),

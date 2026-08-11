@@ -230,6 +230,18 @@ def _validate_evidence_and_material_ids(item, field):
 def _validate_top_material_combination(value):
     if not isinstance(value, dict):
         raise YuntuReportError("topMaterialCombination must be an object")
+    executive_summary = value.get("executiveSummary")
+    if not isinstance(executive_summary, dict):
+        raise YuntuReportError(
+            "topMaterialCombination.executiveSummary must be an object"
+        )
+    _validate_summary(
+        executive_summary.get("summary"),
+        "topMaterialCombination.executiveSummary summary",
+    )
+    _validate_evidence_and_material_ids(
+        executive_summary, "topMaterialCombination.executiveSummary"
+    )
     overall = value.get("overallConclusions")
     if not isinstance(overall, list) or len(overall) != len(TOP_MATERIAL_DIMENSIONS):
         raise YuntuReportError(
@@ -349,7 +361,7 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
     overall = {
         item["dimension"]: item for item in combination["overallConclusions"]
     }
-    lines.extend(["## 01｜TOP 素材组合结论", "", "### 品牌筛选条件下 TOP30 整体分析", ""])
+    lines.extend(["## 01｜TOP 素材组合结论", "", "### TOP1000 整体分析", ""])
     for dimension in TOP_MATERIAL_DIMENSIONS:
         summary = overall[dimension]["summary"]
         if dimension == "people":
@@ -358,7 +370,7 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
             f"{TOP_MATERIAL_LABELS[dimension]}，{summary}",
             "",
         ])
-    lines.extend(["---", "", "### 各品牌 TOP30 对比分析", ""])
+    lines.extend(["---", "", "### 各品牌 TOP 对比分析（成功秒级拆解素材）", ""])
     brand_conclusions = {item["brand"]: item for item in combination["brandConclusions"]}
     ordered_brands = [
         brand_conclusions[brand]
@@ -868,9 +880,27 @@ def _render_html(analysis, material_frames, fact_pack):
     summary_metrics = fact_pack.get("summaryMetrics", {})
     tag_insights = (fact_pack.get("tagInsights") or {}).get("materialTags", {})
     trend_summary = (fact_pack.get("trendSummary") or {}).get("byTrendName", {})
+    report_scopes = fact_pack.get("reportScopes", {})
+    if not isinstance(report_scopes, dict):
+        report_scopes = {}
 
     def source_label(text):
         return f'<span class="source-label">来源：{esc(text)}</span>'
+
+    def scope_badge(scope_key):
+        scope = report_scopes.get(scope_key, {})
+        if not isinstance(scope, dict):
+            return ""
+        source_name = str(scope.get("source_name") or "").strip()
+        if not source_name:
+            return ""
+        if scope_key == "detail":
+            sample_count = scope.get("sample_count")
+            text = f"{source_name}：{sample_count} 条" if isinstance(sample_count, int) else source_name
+        else:
+            sample_count = scope.get("sample_count")
+            text = f"{source_name}：{sample_count} 条" if isinstance(sample_count, int) else source_name
+        return '<span class="report-scope-badge">' + esc(text) + "</span>"
 
     def insight_cards(items):
         return "".join(
@@ -880,6 +910,17 @@ def _render_html(analysis, material_frames, fact_pack):
         )
 
     def top_material_combination_cards(value):
+        scope_badges = "".join(
+            scope_badge(scope_key)
+            for scope_key in ("ranking", "detail")
+        )
+        scope_summary = (
+            '<div class="top-material-scope" aria-label="01 章数据范围">'
+            + scope_badges
+            + "</div>"
+            if scope_badges
+            else ""
+        )
         overall_by_dimension = {
             item["dimension"]: item for item in value["overallConclusions"]
         }
@@ -921,6 +962,7 @@ def _render_html(analysis, material_frames, fact_pack):
             + ("hidden " if item["brand"] != default_brand else "")
             + f'aria-label="{esc(item["brand"])}，标题匹配归属" '
             + f'data-brand-panel="{esc(item["brand"])}">'
+            + '<p class="brand-classification-note">品牌归属：标题匹配归属；对比样本：成功秒级拆解素材</p>'
             + "".join(
                 '<p><strong>'
                 + TOP_MATERIAL_LABELS[dimension]
@@ -933,11 +975,15 @@ def _render_html(analysis, material_frames, fact_pack):
             for index, item in enumerate(ordered_brands)
         )
         return (
-            '<div class="top-material-overall yuntu-content-card"><h3>品牌筛选条件下 TOP30 整体分析</h3>'
+            scope_summary
+            + '<article class="top-material-executive yuntu-content-card"><h3>综合结论</h3><p>'
+            + esc(_generic_text(value["executiveSummary"]["summary"]))
+            + "</p></article>"
+            + '<div class="top-material-overall yuntu-content-card"><h3>TOP1000 整体分析</h3>'
             + overall
             + "</div>"
-            + '<div class="top-material-brands yuntu-content-card"><h3>各品牌 TOP30 对比分析</h3>'
-            + '<div class="brand-tabs" role="tablist" aria-label="各品牌 TOP30 分析">'
+            + '<div class="top-material-brands yuntu-content-card"><h3>各品牌 TOP 对比分析（成功秒级拆解素材）</h3>'
+            + '<div class="brand-tabs" role="tablist" aria-label="各品牌 TOP 对比分析（成功秒级拆解素材）">'
             + tabs
             + "</div><div class=\"brand-panels\">"
             + panels
@@ -1473,8 +1519,8 @@ def _render_html(analysis, material_frames, fact_pack):
         subtitle=esc(subtitle),
         frame_count=available_frames,
         source_list=source_label("Top1000 榜单数据"),
-        source_detail=source_label("单素材秒级详情"),
-        source_derived=source_label("榜单 + 秒级详情派生"),
+        source_detail=source_label("成功秒级拆解素材"),
+        source_derived=source_label("TOP1000 + 成功秒级拆解素材派生"),
         top_material_combination=top_material_combination,
         audience_insights=audience_insights,
         script_insights=script_insights,

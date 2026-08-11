@@ -140,6 +140,44 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(data["materialFacts"][0]["metricComparison"]["ctr"]["tier"], "observed")
         self.assertEqual(data["dataAvailabilitySummary"]["source_empty"], 2)
 
+    def test_prepare_analysis_emits_report_scopes_for_ranking_and_successful_detail(self):
+        analysis = load_module()
+        records = [
+            {
+                "material_id": "101", "title": "素材一", "rank": 1,
+                "metrics": {"ctr": 0.1}, "people_tags": [], "material_tags": [],
+                "data_availability": {},
+            },
+            {
+                "material_id": "102", "title": "素材二", "rank": 2,
+                "metrics": {"ctr": 0.2}, "people_tags": [], "material_tags": [],
+                "data_availability": {},
+            },
+        ]
+        selected = [
+            {"rank": 1, "material_id": "101", "detailRecordPath": "normalized/detail-records/101.json"},
+        ]
+        details = {
+            "101": {
+                "material_id": "101", "high_points": [], "loss_points": [],
+                "data_availability": {},
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            with mock.patch.object(analysis, "generate_standard_highlights", return_value={"101": []}):
+                status = analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
+            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertEqual(data["reportScopes"]["ranking"]["source_name"], "TOP1000 榜单素材")
+        self.assertEqual(set(data["reportScopes"]), {"ranking", "detail"})
+        self.assertEqual(data["reportScopes"]["ranking"]["sample_count"], 2)
+        self.assertEqual(data["reportScopes"]["detail"]["sample_count"], 1)
+        self.assertEqual(data["reportScopes"]["detail"]["success_count"], 1)
+        self.assertEqual(data["reportScopes"]["detail"]["failed_count"], 1)
+
     def test_prepare_analysis_automatically_generates_standard_highlight_frames(self):
         analysis = load_module()
         records = [
@@ -258,7 +296,16 @@ class YuntuAnalysisTests(unittest.TestCase):
                 "people_tags": ["24-30", "女"],
                 "material_tags": ["成分配方原料_铁元素"],
                 "data_availability": {},
-            }
+            },
+            {
+                "material_id": "2",
+                "title": "万益蓝 益生菌素材",
+                "rank": 2,
+                "metrics": {"show_cnt": 300, "ctr": 0.3},
+                "people_tags": ["36-40"],
+                "material_tags": [],
+                "data_availability": {},
+            },
         ]
         selected = [
             {
@@ -296,6 +343,10 @@ class YuntuAnalysisTests(unittest.TestCase):
             ],
             "1",
         )
+        self.assertEqual(
+            set(data["topMaterialCombination"]["brands"]),
+            {"五个女博士"},
+        )
         self.assertIn("topMaterialCombination", prompt)
         self.assertIn("标题匹配归属", prompt)
         self.assertIn("brandComparisonConclusion", prompt)
@@ -303,6 +354,8 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("dataSummary", prompt)
         self.assertIn("peopleSummary", prompt)
         self.assertIn("marketingSummary", prompt)
+        self.assertIn("成功秒级拆解素材集合", prompt)
+        self.assertNotIn("品牌筛选 TOP30", prompt)
         self.assertIn(
             "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。",
             prompt,

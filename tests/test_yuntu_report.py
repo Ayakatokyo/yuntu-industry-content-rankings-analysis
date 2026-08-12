@@ -163,6 +163,15 @@ class YuntuReportTests(unittest.TestCase):
                 "material_id": material_id,
                 "rank": rank,
                 "title": f"测试素材 {material_id}",
+                "people_tags": ["新锐白领", "都市女性"],
+                "material_tags": ["睡前场景", "胶原蛋白肽"],
+                "listDataAvailability": {
+                    "people_tags": {"available": True, "missing_reason": ""},
+                    "material_tags": {"available": True, "missing_reason": ""},
+                },
+                "detailDataAvailability": {
+                    "script_text": {"available": False, "missing_reason": "source_empty"},
+                },
                 "highlightFrames": [
                     {"frame_ref": f"highlight:{material_id}:cover:0", "second": 0, "frame_type": "cover", "available": True, "relative_path": f"highlights/{material_id}/01-000s.jpg"},
                     {"frame_ref": f"highlight:{material_id}:click_peak:2", "second": 2, "frame_type": "click_peak", "peak_rank": 1, "click_value": 0.8, "available": True, "relative_path": f"highlights/{material_id}/02-002s.jpg"},
@@ -767,8 +776,38 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-second-level-point', rendered)
         self.assertIn('data-second-level-curve', rendered)
         self.assertIn("second-level-tooltip timeline-tooltip", rendered)
-        self.assertIn('smoothPath(coords)', rendered)
+        self.assertIn('linearPath(coords)', rendered)
+        self.assertNotIn('smoothPath(coords)', rendered)
         self.assertNotIn('class="second-level-chart"', rendered)
+
+    def test_render_report_renders_deep_dive_inner_tabs_tags_and_frame_selection(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["materialFacts"][1]["listDataAvailability"]["people_tags"] = {
+            "available": False, "missing_reason": "source_empty"
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(self.deep_dive_analysis(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=fact_pack)
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('class="material-detail-tabs"', rendered)
+        self.assertIn('data-material-detail-tab="visual"', rendered)
+        self.assertIn('data-material-detail-tab="timeline"', rendered)
+        self.assertIn('data-material-detail-tab="script"', rendered)
+        self.assertIn('核心人群标签', rendered)
+        self.assertIn('新锐白领', rendered)
+        self.assertIn('营销卖点标签', rendered)
+        self.assertIn('睡前场景', rendered)
+        self.assertIn('class="deep-frame-selection-controls"', rendered)
+        self.assertIn('data-deep-frame-select-all', rendered)
+        self.assertIn('data-deep-frame-clear', rendered)
+        self.assertIn('data-deep-frame-checkbox', rendered)
+        self.assertIn('data-deep-frame-observation', rendered)
+        self.assertIn('脚本数据：未接入', rendered)
+        self.assertIn('核心人群标签</dt><dd>未返回</dd>', rendered)
 
     def test_render_report_rejects_invalid_material_deep_dive_frame_and_second(self):
         report = load_module()

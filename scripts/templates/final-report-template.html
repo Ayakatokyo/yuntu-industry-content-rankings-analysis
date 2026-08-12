@@ -622,22 +622,12 @@
           return Number.isInteger(number) ? String(number) : number.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
         }
 
-        function smoothPath(coords) {
+        function linearPath(coords) {
           if (!coords.length) return '';
           if (coords.length === 1) return 'M' + coords[0].x.toFixed(2) + ' ' + coords[0].y.toFixed(2);
           var d = 'M' + coords[0].x.toFixed(2) + ' ' + coords[0].y.toFixed(2);
           for (var i = 0; i < coords.length - 1; i += 1) {
-            var p0 = coords[Math.max(0, i - 1)];
-            var p1 = coords[i];
-            var p2 = coords[i + 1];
-            var p3 = coords[Math.min(coords.length - 1, i + 2)];
-            var cp1x = p1.x + (p2.x - p0.x) / 6;
-            var cp1y = p1.y + (p2.y - p0.y) / 6;
-            var cp2x = p2.x - (p3.x - p1.x) / 6;
-            var cp2y = p2.y - (p3.y - p1.y) / 6;
-            d += ' C' + cp1x.toFixed(2) + ' ' + cp1y.toFixed(2) + ','
-              + cp2x.toFixed(2) + ' ' + cp2y.toFixed(2) + ','
-              + p2.x.toFixed(2) + ' ' + p2.y.toFixed(2);
+            d += ' L' + coords[i + 1].x.toFixed(2) + ' ' + coords[i + 1].y.toFixed(2);
           }
           return d;
         }
@@ -685,7 +675,7 @@
             });
           });
           var coords = points.map(function (point) { return { x: x(point.second), y: y(point.value), point: point }; });
-          var curve = svgElement('path', { class: 'second-level-line timeline-line', d: smoothPath(coords), 'data-second-level-curve': '' });
+          var curve = svgElement('path', { class: 'second-level-line timeline-line', d: linearPath(coords), 'data-second-level-curve': '' });
           svg.append(curve);
           points.forEach(function (point) {
             var cx = x(point.second);
@@ -728,6 +718,41 @@
         });
         range.addEventListener('input', function () { if (active) render(active); });
         render(metrics.find(function (metric) { return metric.available; }) || metrics[0] || { trend_name: '秒级拆解', available: false });
+      });
+
+      document.querySelectorAll('.material-deep-panel').forEach(function (panel) {
+        var tabs = panel.querySelectorAll('[data-material-detail-tab]');
+        var detailPanels = panel.querySelectorAll('.material-detail-panel');
+        function selectDetailTab(tab) {
+          var target = tab.getAttribute('data-material-detail-target');
+          tabs.forEach(function (item) {
+            var selected = item === tab;
+            item.setAttribute('aria-selected', String(selected));
+            item.tabIndex = selected ? 0 : -1;
+          });
+          detailPanels.forEach(function (item) { item.hidden = item.id !== target; });
+        }
+        tabs.forEach(function (tab) { tab.addEventListener('click', function () { selectDetailTab(tab); }); });
+
+        var checkboxes = panel.querySelectorAll('[data-deep-frame-checkbox]');
+        var observations = panel.querySelectorAll('[data-deep-frame-observation]');
+        function syncFrameObservations() {
+          checkboxes.forEach(function (checkbox) {
+            var card = checkbox.closest('[data-deep-frame-card]');
+            var frameRef = checkbox.getAttribute('data-frame-ref');
+            var observation = Array.prototype.find.call(observations, function (item) {
+              return item.getAttribute('data-frame-ref') === frameRef;
+            });
+            if (card) card.classList.toggle('is-selected', checkbox.checked);
+            if (observation) observation.hidden = !checkbox.checked;
+          });
+        }
+        checkboxes.forEach(function (checkbox) { checkbox.addEventListener('change', syncFrameObservations); });
+        var selectAll = panel.querySelector('[data-deep-frame-select-all]');
+        var clear = panel.querySelector('[data-deep-frame-clear]');
+        if (selectAll) selectAll.addEventListener('click', function () { checkboxes.forEach(function (checkbox) { checkbox.checked = true; }); syncFrameObservations(); });
+        if (clear) clear.addEventListener('click', function () { checkboxes.forEach(function (checkbox) { checkbox.checked = false; }); syncFrameObservations(); });
+        syncFrameObservations();
       });
     }());
   </script>

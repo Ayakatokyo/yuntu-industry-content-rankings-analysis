@@ -236,6 +236,54 @@ class YuntuHighlightTests(unittest.TestCase):
         self.assertFalse(result["101"][0]["available"])
         self.assertEqual(result["101"][0]["failure_reason"], "missing_video_url")
 
+    def test_standard_highlights_reuse_existing_frames_when_video_download_fails(self):
+        highlights = load_module()
+
+        def failing_downloader(_url, _destination):
+            raise highlights.HighlightFrameError("expired")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing = root / "highlights" / "101" / "01-000s.jpg"
+            existing.parent.mkdir(parents=True)
+            existing.write_bytes(b"jpeg")
+
+            result = highlights.generate_standard_highlights(
+                [{"material_id": "101", "video_url": "https://video.example/101.mp4", "trend_series": []}],
+                root,
+                downloader=failing_downloader,
+            )
+
+        self.assertTrue(result["101"][0]["available"])
+        self.assertEqual(result["101"][0]["relative_path"], "highlights/101/01-000s.jpg")
+        self.assertEqual(result["101"][0]["frame_source"], "reused_local_extracted_frame")
+
+    def test_generate_highlights_reuses_existing_frame_when_extraction_fails(self):
+        highlights = load_module()
+
+        def downloader(_url, destination):
+            Path(destination).write_bytes(b"video")
+
+        def failing_extractor(_video_path, _second, _destination, *, ffmpeg_bin=None):
+            raise highlights.HighlightFrameError("cannot seek")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing = root / "highlights" / "101" / "01-000s.jpg"
+            existing.parent.mkdir(parents=True)
+            existing.write_bytes(b"jpeg")
+
+            result = highlights.generate_highlights(
+                [{"material_id": "101", "video_url": "https://video.example/101.mp4", "trend_series": []}],
+                ["点击指数"],
+                root,
+                downloader=downloader,
+                frame_extractor=failing_extractor,
+            )
+
+        self.assertTrue(result["101"][0]["available"])
+        self.assertEqual(result["101"][0]["frame_source"], "reused_local_extracted_frame")
+
     def test_download_video_rejects_response_larger_than_limit(self):
         highlights = load_module()
 

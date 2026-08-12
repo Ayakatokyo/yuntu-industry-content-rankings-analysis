@@ -342,7 +342,13 @@ def _write_json_atomically(payload, destination):
 
 
 def _frame_record(
-    candidate, *, material_id, available, relative_path=None, failure_reason=None
+    candidate,
+    *,
+    material_id,
+    available,
+    relative_path=None,
+    failure_reason=None,
+    frame_source=None,
 ):
     frame = {**candidate, "available": available}
     frame_type = frame.get("frame_type") or (
@@ -354,22 +360,58 @@ def _frame_record(
         frame["relative_path"] = relative_path
     if failure_reason is not None:
         frame["failure_reason"] = failure_reason
+    if frame_source is not None:
+        frame["frame_source"] = frame_source
     return frame
+
+
+def _highlight_filename(index, candidate):
+    return f"{index:02d}-{candidate['second']:03d}s.jpg"
+
+
+def _reused_frame_record(candidate, *, material_id, root, index):
+    target = root / "highlights" / material_id / _highlight_filename(index, candidate)
+    if not target.is_file() or target.stat().st_size == 0:
+        return None
+    return _frame_record(
+        candidate,
+        material_id=material_id,
+        available=True,
+        relative_path=str(target.relative_to(root)),
+        frame_source="reused_local_extracted_frame",
+    )
+
+
+def _failed_frames_with_local_reuse(candidates, *, material_id, root, failure_reason):
+    frames = []
+    for index, candidate in enumerate(candidates, start=1):
+        frames.append(
+            _reused_frame_record(
+                candidate,
+                material_id=material_id,
+                root=root,
+                index=index,
+            )
+            or _frame_record(
+                candidate,
+                material_id=material_id,
+                available=False,
+                failure_reason=failure_reason,
+            )
+        )
+    return frames
 
 
 def _material_frames(detail, candidates, root, downloader, frame_extractor, ffmpeg_bin):
     material_id = str(detail.get("material_id") or "")
     video_url = detail.get("video_url")
     if not isinstance(video_url, str) or not video_url.strip():
-        return [
-            _frame_record(
-                candidate,
-                material_id=material_id,
-                available=False,
-                failure_reason="missing_video_url",
-            )
-            for candidate in candidates
-        ]
+        return _failed_frames_with_local_reuse(
+            candidates,
+            material_id=material_id,
+            root=root,
+            failure_reason="missing_video_url",
+        )
 
     material_root = root / "highlights" / material_id
     try:
@@ -379,7 +421,7 @@ def _material_frames(detail, candidates, root, downloader, frame_extractor, ffmp
             material_root.mkdir(parents=True, exist_ok=True)
             frames = []
             for index, candidate in enumerate(candidates, start=1):
-                filename = f"{index:02d}-{candidate['second']:03d}s.jpg"
+                filename = _highlight_filename(index, candidate)
                 target = material_root / filename
                 relative_path = str(target.relative_to(root))
                 try:
@@ -393,9 +435,14 @@ def _material_frames(detail, candidates, root, downloader, frame_extractor, ffmp
                         )
                     )
                 except Exception:
-                    target.unlink(missing_ok=True)
                     frames.append(
-                        _frame_record(
+                        _reused_frame_record(
+                            candidate,
+                            material_id=material_id,
+                            root=root,
+                            index=index,
+                        )
+                        or _frame_record(
                             candidate,
                             material_id=material_id,
                             available=False,
@@ -404,15 +451,12 @@ def _material_frames(detail, candidates, root, downloader, frame_extractor, ffmp
                     )
             return frames
     except Exception:
-        return [
-            _frame_record(
-                candidate,
-                material_id=material_id,
-                available=False,
-                failure_reason="download_failed",
-            )
-            for candidate in candidates
-        ]
+        return _failed_frames_with_local_reuse(
+            candidates,
+            material_id=material_id,
+            root=root,
+            failure_reason="download_failed",
+        )
 
 
 def generate_highlights(

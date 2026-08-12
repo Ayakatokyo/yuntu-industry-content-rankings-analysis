@@ -159,13 +159,14 @@
         if (!panel) return;
         var cards = Array.prototype.slice.call(panel.querySelectorAll('[data-highlight-frame-card]'));
         var pagination = panel.querySelector('[data-highlight-pagination]');
-        if (!pagination || cards.length <= 10) {
+        var pageSize = Number(panel.getAttribute('data-highlight-page-size') || '12');
+        if (!Number.isInteger(pageSize) || pageSize < 1) pageSize = 12;
+        if (!pagination || cards.length <= pageSize) {
           cards.forEach(function (card) { card.hidden = false; });
-          if (pagination) pagination.hidden = cards.length <= 10;
+          if (pagination) pagination.hidden = cards.length <= pageSize;
           return;
         }
         pagination.hidden = false;
-        var pageSize = 10;
         var pageCount = Math.ceil(cards.length / pageSize);
         var currentPage = Number(panel.getAttribute('data-highlight-current-page') || '1');
         if (typeof nextPage === 'number') currentPage = nextPage;
@@ -321,9 +322,7 @@
             slices.push({ label: bucket.label, count: bucket.materialCount, share: Number((bucket.chartShare * 100).toFixed(1)), start: cursor * 3.6, end: next * 3.6 });
             cursor = next;
           });
-          var legendBuckets = key === 'age' ? dimension.buckets.slice().sort(function (left, right) {
-            return Number.parseInt(left.label, 10) - Number.parseInt(right.label, 10) || String(left.label).localeCompare(String(right.label));
-          }) : visualBuckets;
+          var legendBuckets = visualBuckets;
           legendBuckets.forEach(function (bucket) {
             var item = document.createElement('li');
             item.className = 'legend-item';

@@ -479,7 +479,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('style="background:conic-gradient(#9b6a37 0.0000%', html)
         age_chart = html[html.index('class="chart-card audience-chart audience-chart-age"'):html.index('class="chart-card audience-chart audience-chart-gender"')]
         self.assertLess(age_chart.index('&quot;24-30&quot;'), age_chart.index('&quot;18-19&quot;'))
-        self.assertLess(age_chart.index('title="18-19：'), age_chart.index('title="24-30：'))
+        self.assertLess(age_chart.index('title="24-30：'), age_chart.index('title="18-19：'))
         self.assertIn('class="chart-card audience-chart audience-chart-crowd"', html)
         self.assertLess(
             html.index('class="chart-card audience-chart audience-chart-crowd"'),
@@ -498,7 +498,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('computeAudienceDimension', html)
         self.assertIn('renderAudienceTopN', html)
         self.assertIn("var visualBuckets = key === 'age'", html)
-        self.assertIn("var legendBuckets = key === 'age'", html)
+        self.assertIn('var legendBuckets = visualBuckets;', html)
         self.assertIn("renderAudienceGroupDrill(item.closest('article')", html)
         self.assertIn('class="legend-label"><i class="legend-swatch"', html)
         self.assertIn('class="legend-count">2 条</span>', html)
@@ -687,7 +687,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-collapsible-toggle', rendered)
         self.assertIn('class="collapsible-toggle-action">收起数据</span>', rendered)
         self.assertEqual(rendered.count('class="second-level-chart"'), 0)
-        self.assertIn("点击 Top1 峰值帧｜2s｜点击指数 0.80", rendered)
+        self.assertIn("点击 Top1 波峰画面", rendered)
         self.assertIn('data-jump-material="101"', rendered)
         self.assertIn('class="highlight-source-link"', rendered)
         self.assertIn("## 05｜单素材深度分析", markdown)
@@ -815,11 +815,7 @@ class YuntuReportTests(unittest.TestCase):
             },
             {
                 "category": "text_overlay",
-                "frame_refs": [
-                    "highlight:101:click_peak:2",
-                    "highlight:102:cover:0",
-                    "highlight:102:click_peak:2",
-                ],
+                "frame_refs": ["highlight:101:click_peak:2", "highlight:102:cover:0", "highlight:102:click_peak:2"],
                 "common_patterns": ["画面含可见文字信息。"],
                 "derivative_directions": [],
             },
@@ -915,7 +911,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('src="assets/highlight-frames/101/01-001s.jpg"', rendered)
         self.assertEqual(copied_frame, b"fake-jpg")
         self.assertIn('aria-label="查看高光帧大图"', rendered)
-        self.assertIn('data-highlight-page-size="10"', rendered)
+        self.assertIn('data-highlight-page-size="12"', rendered)
         self.assertIn('data-highlight-frame-count="9"', rendered)
         self.assertIn('data-highlight-page-status', rendered)
         self.assertIn("1 / 1", rendered)
@@ -929,19 +925,183 @@ class YuntuReportTests(unittest.TestCase):
         )
         self.assertIn("highlight:101:click_peak:1", data["highlightFrames"])
 
+    def test_render_report_copies_highlight_assets_from_explicit_source_root(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        fact_pack = self.deep_dive_fact_pack()
+        analysis["highlightDashboard"]["groups"][0]["frame_refs"] = [
+            frame["frame_ref"]
+            for fact in fact_pack["materialFacts"]
+            for frame in fact["highlightFrames"]
+        ]
+        analysis["highlightDashboard"]["groups"][0]["derivative_directions"] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "source-batch"
+            for fact in fact_pack["materialFacts"]:
+                for frame in fact["highlightFrames"]:
+                    source_frame = source_root / frame["relative_path"]
+                    source_frame.parent.mkdir(parents=True, exist_ok=True)
+                    source_frame.write_bytes(b"explicit-source-jpeg")
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "separate-output" / "final-report",
+                fact_pack=fact_pack,
+                highlight_asset_root=source_root,
+            )
+            copied = (
+                root / "separate-output" / "final-report" / "assets" / "highlight-frames"
+                / "101" / "01-000s.jpg"
+            ).read_bytes()
+
+        self.assertEqual(copied, b"explicit-source-jpeg")
+
+    def test_render_report_copies_highlight_assets_from_prior_report_in_source_root(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        fact_pack = self.deep_dive_fact_pack()
+        analysis["highlightDashboard"]["groups"][0]["frame_refs"] = [
+            frame["frame_ref"]
+            for fact in fact_pack["materialFacts"]
+            for frame in fact["highlightFrames"]
+        ]
+        analysis["highlightDashboard"]["groups"][0]["derivative_directions"] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "source-batch"
+            source_frame = (
+                source_root / "final-report" / "assets" / "highlight-frames" / "101"
+                / "01-000s.jpg"
+            )
+            source_frame.parent.mkdir(parents=True, exist_ok=True)
+            source_frame.write_bytes(b"prior-report-jpeg")
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "separate-output" / "final-report",
+                fact_pack=fact_pack,
+                highlight_asset_root=source_root,
+            )
+            copied = (
+                root / "separate-output" / "final-report" / "assets" / "highlight-frames"
+                / "101" / "01-000s.jpg"
+            ).read_bytes()
+
+        self.assertEqual(copied, b"prior-report-jpeg")
+
+    def test_render_report_classifies_cover_and_click_peak_frames_in_highlight_dashboard(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"]["groups"][0]["frame_refs"] = [
+            "highlight:101:cover:0",
+            "highlight:101:click_peak:2",
+            "highlight:102:cover:0",
+            "highlight:102:click_peak:2",
+        ]
+        analysis["highlightDashboard"]["groups"][0]["derivative_directions"] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            for fact in self.deep_dive_fact_pack()["materialFacts"]:
+                for frame in fact["highlightFrames"]:
+                    source_frame = root / frame["relative_path"]
+                    source_frame.parent.mkdir(parents=True, exist_ok=True)
+                    source_frame.write_bytes(b"fake-jpeg")
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack=self.deep_dive_fact_pack(),
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(
+                encoding="utf-8"
+            )
+
+        highlight_section = rendered.split('id="highlight-insights"', 1)[1].split(
+            'id="material-deep-dive"', 1
+        )[0]
+        self.assertIn("点击 Top1 波峰画面", highlight_section)
+        self.assertIn("封面画面", highlight_section)
+
+    def test_render_report_uses_twelve_card_highlight_pages_and_peak_card_copy(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        frame_refs = [f"highlight:101:click_peak:{second}" for second in range(1, 14)]
+        analysis["highlightDashboard"] = {
+            "groups": [{
+                "category": "portrait",
+                "frame_refs": frame_refs,
+                "common_patterns": ["人像主体稳定。"],
+                "derivative_directions": [],
+            }]
+        }
+        fact_pack = {
+            "materialFacts": [{
+                "material_id": "101",
+                "rank": 1,
+                "title": "完整素材名称.mp4",
+                "highlightFrames": [
+                    {
+                        "frame_ref": frame_ref,
+                        "second": index,
+                        "frame_type": "click_peak",
+                        "peak_rank": index,
+                        "click_value": 20 - index,
+                        "available": True,
+                        "relative_path": f"highlights/101/{index:02d}-{index:03d}s.jpg",
+                    }
+                    for index, frame_ref in enumerate(frame_refs, start=1)
+                ],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(1, 14):
+                source_frame = root / "highlights" / "101" / f"{index:02d}-{index:03d}s.jpg"
+                source_frame.parent.mkdir(parents=True, exist_ok=True)
+                source_frame.write_bytes(b"fake-jpeg")
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "report", fact_pack=fact_pack)
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-highlight-page-size="12"', rendered)
+        self.assertIn('data-highlight-frame-count="13"', rendered)
+        self.assertIn("1 / 2", rendered)
+        self.assertIn("完整素材名称", rendered)
+        self.assertNotIn("完整素材名称.mp4", rendered)
+        self.assertIn("点击 Top1 波峰画面", rendered)
+        self.assertIn("1s · 点击指数 19", rendered)
+
+    def test_unified_report_uses_six_by_two_overview_grid_without_changing_deep_dive_grid(self):
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("grid-template-columns: repeat(6, minmax(0, 1fr));", css)
+        self.assertIn("grid-template-rows: repeat(2, minmax(0, 1fr));", css)
+        report_source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn(".deep-frame-grid.fixed-six", report_source)
+        self.assertIn("grid-template-columns:repeat(3,minmax(0,1fr))", report_source)
+
     def test_render_report_rejects_highlight_frames_classified_more_than_once(self):
         report = load_module()
         analysis = self.analysis_json()
         analysis.update(self.highlight_dashboard())
         analysis["highlightDashboard"]["groups"].append({
             "category": "other",
-            "frame_refs": ["highlight:101:cover:0"],
+            "frame_refs": ["highlight:101:click_peak:2"],
             "common_patterns": ["其他画面。"],
             "derivative_directions": [],
         })
         fact_pack = {"materialFacts": [{"material_id": "101", "highlightFrames": [{
-            "frame_ref": "highlight:101:cover:0", "second": 0, "frame_type": "cover",
-            "available": True, "relative_path": "highlights/101/01-000s.jpg",
+            "frame_ref": "highlight:101:click_peak:2", "second": 2, "frame_type": "click_peak",
+            "available": True, "relative_path": "highlights/101/02-002s.jpg",
         }]}]}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "analysis.json"
@@ -949,7 +1109,7 @@ class YuntuReportTests(unittest.TestCase):
             with self.assertRaisesRegex(report.YuntuReportError, "exactly once"):
                 report.render_report(analysis_json=path, output_dir=Path(directory) / "report", fact_pack=fact_pack)
 
-    def test_render_report_requires_dashboard_for_standard_highlight_frames(self):
+    def test_render_report_requires_dashboard_when_cover_frame_is_available(self):
         report = load_module()
         fact_pack = {"materialFacts": [{"material_id": "101", "highlightFrames": [{
             "frame_ref": "highlight:101:cover:0", "second": 0, "frame_type": "cover",
@@ -1126,7 +1286,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn(".unified-yuntu .brand-tab[aria-selected=\"true\"]::after", css)
         self.assertIn(".unified-yuntu .audience-chart-gender .pie-legend", css)
         self.assertIn("margin-block: auto;", css)
-        self.assertIn("grid-template-columns: repeat(5, minmax(0, 1fr));", css)
+        self.assertIn("grid-template-columns: repeat(6, minmax(0, 1fr));", css)
         self.assertIn("grid-template-rows: repeat(2, minmax(0, 1fr));", css)
         self.assertIn("min-height: var(--highlight-grid-height);", css)
         self.assertIn("aspect-ratio: 9 / 16;", css)

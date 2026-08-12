@@ -746,6 +746,7 @@ def _parser():
     report_parser.add_argument("--output-dir", required=True)
     report_parser.add_argument("--fact-pack-json")
     report_parser.add_argument("--analysis-provenance")
+    report_parser.add_argument("--highlight-asset-root")
     report_parser.add_argument("--allow-programmatic-fallback", action="store_true")
     retry_parser = commands.add_parser(
         "retry-failed", help="Retry rejected detail fetches from an existing batch"
@@ -878,6 +879,7 @@ def main(argv=None):
                 output_dir=args.output_dir,
                 fact_pack=fact_pack,
                 analysis_provenance=provenance,
+                highlight_asset_root=args.highlight_asset_root or fact_pack_path.parent.parent,
             )
         if args.command == "retry-failed":
             status = retry_failed_batch_analysis(

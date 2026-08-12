@@ -437,10 +437,10 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
         "",
         "## 04｜高光画面洞察",
         "",
-        "每条素材保留第 0 秒封面帧，并从点击指数局部峰值中按点击值降序、秒数升序取最多 5 帧。",
+        "每条素材保留封面画面，并从点击指数局部峰值中按点击值降序、秒数升序取最多 5 帧。",
         "",
     ])
-    successful_frames = _available_highlight_frames(fact_pack or {})
+    successful_frames = _overview_highlight_frames(fact_pack or {})
     dashboard = analysis.get("highlightDashboard")
     if not successful_frames:
         reason = _highlight_failure_reasons(fact_pack or {})
@@ -455,7 +455,7 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
                 lines.extend([f"- {pattern}", ""])
             for frame_ref in group["frame_refs"]:
                 frame = frames_by_ref[frame_ref]
-                frame_label = "封面帧" if frame["frame_type"] == "cover" else f"点击 Top{frame.get('peak_rank')} 峰值帧"
+                frame_label = "封面画面" if frame["frame_type"] == "cover" else f"点击 Top{frame.get('peak_rank')} 波峰画面"
                 value = "-" if frame.get("click_value") is None else str(frame["click_value"])
                 lines.append(
                     f"- #{frame.get('rank', '-')}｜{frame.get('title', frame['material_id'])}｜{frame_label}｜{frame.get('second')}s｜点击指数 {value}"
@@ -528,6 +528,11 @@ def _available_highlight_frames(fact_pack):
     return frames
 
 
+def _overview_highlight_frames(fact_pack):
+    """Return all successful overview frames, including the classified cover frame."""
+    return _available_highlight_frames(fact_pack)
+
+
 def _has_standard_highlight_contract(fact_pack):
     material_facts = fact_pack.get("materialFacts", []) if isinstance(fact_pack, dict) else []
     successful_frames = [
@@ -557,7 +562,7 @@ def _highlight_failure_reasons(fact_pack):
 
 
 def _validate_highlight_dashboard(analysis, fact_pack):
-    successful_frames = _available_highlight_frames(fact_pack)
+    successful_frames = _overview_highlight_frames(fact_pack)
     dashboard = analysis.get("highlightDashboard")
     if not successful_frames:
         return
@@ -834,21 +839,27 @@ def _report_frame_asset_path(frame):
     return f"assets/highlight-frames/{_frame_material_id(frame)}/{filename}"
 
 
-def _copy_highlight_assets(fact_pack, output_dir):
+def _copy_highlight_assets(fact_pack, output_dir, source_root=None):
     output_dir = Path(output_dir)
-    source_root = Path(output_dir).parent
+    source_root = Path(source_root) if source_root is not None else output_dir.parent
     for frame in _available_highlight_frames(fact_pack):
         target_rel = _report_frame_asset_path(frame)
         source_rel = str(frame.get("relative_path", "")).replace("\\", "/")
         if not target_rel or not source_rel:
             continue
         source_path = Path(source_rel)
+        candidates = [source_path]
         if not source_path.is_absolute():
             if source_rel.startswith("../"):
-                source_path = output_dir / source_rel
+                candidates = [output_dir / source_rel]
             else:
-                source_path = source_root / source_rel.lstrip("/")
-        if not source_path.exists():
+                # Historical batches may retain extracted frames only in a prior report.
+                candidates = [
+                    source_root / source_rel.lstrip("/"),
+                    source_root / "final-report" / target_rel,
+                ]
+        source_path = next((path for path in candidates if path.is_file()), None)
+        if source_path is None:
             continue
         target_path = output_dir / target_rel
         if source_path.resolve() == target_path.resolve():
@@ -1060,14 +1071,7 @@ def _render_html(analysis, material_frames, fact_pack):
                 stops.append(f"{color} {cursor:.4f}% {next_cursor:.4f}%")
                 slices.append({"label": item_label, "count": count, "materialShare": round(material_share * 100, 1), "share": round(chart_share * 100, 1), "start": cursor * 3.6, "end": next_cursor * 3.6})
                 cursor = next_cursor
-            legend_items = (
-                sorted(
-                    visual_items,
-                    key=lambda item: (int(re.match(r"\\d+", str(item[0])).group()) if re.match(r"\\d+", str(item[0])) else float("inf"), str(item[0])),
-                )
-                if key == "age"
-                else visual_items
-            )
+            legend_items = visual_items
             for item_label, count, material_share, chart_share in legend_items:
                 legend.append(
                     '<li class="legend-item" title="' + esc(item_label) + '：命中素材数：' + esc(count) + '条 占比：' + f"{chart_share * 100:.1f}%" + '">'
@@ -1247,11 +1251,14 @@ def _render_html(analysis, material_frames, fact_pack):
 
     def highlight_frame_label(frame):
         if frame.get("frame_type") == "cover":
-            return "封面帧"
-        return f"点击 Top{frame.get('peak_rank')} 峰值帧"
+            return "封面画面"
+        return f"点击 Top{frame.get('peak_rank')} 波峰画面"
+
+    def highlight_material_title(frame):
+        return str(frame.get("title", frame["material_id"])).removesuffix(".mp4")
 
     def highlight_insights_cards():
-        successful_frames = _available_highlight_frames(fact_pack)
+        successful_frames = _overview_highlight_frames(fact_pack)
         if not successful_frames:
             reason = _highlight_failure_reasons(fact_pack)
             detail = f"（{esc(reason)}）" if reason else ""
@@ -1291,8 +1298,9 @@ def _render_html(analysis, material_frames, fact_pack):
                 click_text = f"点击指数 {_format_index_value(click_value)}"
                 material_id = str(frame.get("material_id", ""))
                 source_label = f"查看素材：#{frame.get('rank', '-')}"
+                material_title = highlight_material_title(frame)
                 caption = (
-                    f"#{esc(frame.get('rank', '-'))} · {esc(frame.get('title', frame['material_id']))} · "
+                    f"#{esc(frame.get('rank', '-'))} · {esc(material_title)} · "
                     f"{highlight_frame_label(frame)} · {esc(frame.get('second'))}s · {click_text}"
                 )
                 frame_cards.append(
@@ -1302,7 +1310,8 @@ def _render_html(analysis, material_frames, fact_pack):
                     + f'data-highlight-caption="{html.escape(caption, quote=True)}" '
                     + 'aria-label="查看高光帧大图">'
                     + f'<img loading="lazy" src="{html.escape(image_src(frame), quote=True)}" alt="{esc(caption)}"></button></figure>'
-                    + '<div class="highlight-frame-meta"><small>' + esc(highlight_frame_label(frame))
+                    + '<div class="highlight-frame-meta"><strong>' + esc(material_title)
+                    + '</strong><small>' + esc(highlight_frame_label(frame))
                     + '</small><span>' + esc(frame.get("second")) + 's · ' + esc(click_text)
                     + '</span><button class="highlight-source-link" type="button" data-jump-material="'
                     + esc(material_id) + '">' + esc(source_label) + '</button></div></article>'
@@ -1312,12 +1321,12 @@ def _render_html(analysis, material_frames, fact_pack):
                 f'<article class="highlight-direction"><h4>{esc(direction["title"])}</h4><p>{esc(direction["body"])}</p></article>'
                 for direction in group["derivative_directions"]
             )
-            page_count = max(1, math.ceil(len(frame_refs) / 10))
+            page_count = max(1, math.ceil(len(frame_refs) / 12))
             panels.append(
                 '<article class="highlight-category highlight-category-panel" role="tabpanel" id="'
                 + esc(panel_id) + '" aria-labelledby="' + esc(tab_id) + '"'
                 + (" hidden" if not selected else "")
-                + ' data-highlight-page-size="10" data-highlight-frame-count="' + esc(len(frame_refs)) + '"><div class="highlight-analysis-pair"><div class="highlight-summary"><h4>共性洞察</h4><ul>'
+                + ' data-highlight-page-size="12" data-highlight-frame-count="' + esc(len(frame_refs)) + '"><div class="highlight-analysis-pair"><div class="highlight-summary"><h4>共性洞察</h4><ul>'
                 + patterns
                 + '</ul></div><div class="highlight-directions">'
                 + directions
@@ -1330,7 +1339,7 @@ def _render_html(analysis, material_frames, fact_pack):
                 + "</div></article>"
             )
         return (
-            '<p class="data-note">每条素材保留第 0 秒封面帧，并从点击指数局部峰值中按点击值降序、秒数升序取最多 5 帧。</p>'
+            '<p class="data-note">每条素材保留封面画面，并从点击指数局部峰值中按点击值降序、秒数升序取最多 5 帧。</p>'
             + '<div class="highlight-dashboard-tabs" role="tablist" aria-label="高光画面分类">'
             + "".join(tabs)
             + '</div><div class="highlight-dashboard-panels">'
@@ -1559,7 +1568,14 @@ def _render_html(analysis, material_frames, fact_pack):
     return rendered
 
 
-def render_report(*, analysis_json, output_dir, fact_pack=None, analysis_provenance=None):
+def render_report(
+    *,
+    analysis_json,
+    output_dir,
+    fact_pack=None,
+    analysis_provenance=None,
+    highlight_asset_root=None,
+):
     analysis = _load_analysis(analysis_json)
     fact_pack = fact_pack or {}
     _validate_highlight_dashboard(analysis, fact_pack)
@@ -1569,7 +1585,7 @@ def render_report(*, analysis_json, output_dir, fact_pack=None, analysis_provena
     if analysis_provenance is not None:
         data["analysisProvenance"] = analysis_provenance
     data["highlightFrames"] = {
-        frame["frame_ref"]: frame for frame in _available_highlight_frames(fact_pack)
+        frame["frame_ref"]: frame for frame in _overview_highlight_frames(fact_pack)
     }
     audience_dashboard = fact_pack.get("audienceDashboard") if isinstance(fact_pack, dict) else None
     markdown = _render_markdown(analysis, audience_dashboard, fact_pack)
@@ -1578,7 +1594,7 @@ def render_report(*, analysis_json, output_dir, fact_pack=None, analysis_provena
     )
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    _copy_highlight_assets(fact_pack, output)
+    _copy_highlight_assets(fact_pack, output, highlight_asset_root)
     write_json_atomically(data, output / "final-report-data.json")
     (output / "final-report.md").write_text(markdown, encoding="utf-8")
     (output / "final-report.html").write_text(rendered_html, encoding="utf-8")

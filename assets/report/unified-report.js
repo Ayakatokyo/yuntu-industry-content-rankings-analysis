@@ -47,14 +47,15 @@
   function normalizeYuntuHighlightPagination() {
     if (!document.body.classList.contains('unified-yuntu')) return;
 
-    var pageSize = 10;
     function renderPage(panel, requestedPage) {
+      var pageSize = Number(panel.getAttribute('data-highlight-page-size') || '12');
       var cards = Array.from(panel.querySelectorAll('[data-highlight-frame-card]'));
       var grid = panel.querySelector('.highlight-frame-grid');
       var pagination = panel.querySelector('[data-highlight-pagination]');
       if (!grid || !pagination) return;
       if (grid.nextElementSibling !== pagination) grid.after(pagination);
 
+      if (!Number.isInteger(pageSize) || pageSize < 1) pageSize = 12;
       if (cards.length <= pageSize) {
         cards.forEach(function (card) { card.hidden = false; });
         pagination.hidden = true;

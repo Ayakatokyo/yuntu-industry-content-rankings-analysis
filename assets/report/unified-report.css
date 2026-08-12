@@ -723,6 +723,100 @@ body.unified-report {
   white-space: normal;
 }
 
+.unified-yuntu .material-fact-tags {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 10px 14px;
+  margin: 18px 0 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--unified-line);
+  border-bottom: 1px solid var(--unified-line);
+}
+
+.unified-yuntu .material-fact-tags dt {
+  color: var(--unified-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.unified-yuntu .material-fact-tags dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.unified-yuntu .material-fact-tag {
+  border: 1px solid var(--unified-line);
+  border-radius: 5px;
+  background: #fff1dc;
+  color: var(--unified-ink);
+  padding: 2px 7px;
+  font-size: 12px;
+}
+
+.unified-yuntu .material-detail-tabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+  border-bottom: 1px solid var(--unified-line);
+  padding-bottom: 10px;
+}
+
+.unified-yuntu .material-detail-tabs button,
+.unified-yuntu .deep-frame-selection-controls button {
+  min-height: 36px;
+  border: 1px solid var(--unified-line);
+  border-radius: 6px;
+  background: var(--unified-paper);
+  color: var(--unified-ink);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.unified-yuntu .material-detail-tabs button[aria-selected="true"] {
+  border-color: var(--unified-ink);
+  background: var(--unified-ink);
+  color: #fff;
+  font-weight: 800;
+}
+
+.unified-yuntu .material-detail-panel {
+  margin-top: 18px;
+}
+
+.unified-yuntu .deep-frame-selection-controls {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.unified-yuntu .deep-frame-select-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 10px 0;
+  color: var(--unified-muted);
+  font-size: 12px;
+}
+
+.unified-yuntu .deep-frame-card.is-selected {
+  border-color: var(--unified-accent-dark);
+  box-shadow: 0 0 0 2px rgba(142, 85, 40, .18);
+}
+
+.unified-yuntu .deep-frame-observations li[hidden] {
+  display: none;
+}
+
+@media (max-width: 680px) {
+  .unified-yuntu .material-fact-tags {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+
 .unified-report .tab-list button {
   flex: 0 0 auto;
   min-height: 52px;

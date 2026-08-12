@@ -1396,6 +1396,17 @@ def _render_html(analysis, material_frames, fact_pack):
         ordered_ids = [material_id for material_id in _selected_material_ids(fact_pack) if material_id in dives_by_id]
         default_id = ordered_ids[0] if ordered_ids else str(deep_dives[0].get("material_id"))
         tabs, panels = [], []
+
+        def source_tags(fact, field, label):
+            availability = (fact.get("listDataAvailability") or {}).get(field, {})
+            values = fact.get(field, [])
+            if not availability.get("available") or not isinstance(values, list) or not values:
+                return '<dt>' + esc(label) + '</dt><dd>未返回</dd>'
+            return '<dt>' + esc(label) + '</dt><dd>' + "".join(
+                '<span class="material-fact-tag">' + esc(value) + '</span>'
+                for value in values if isinstance(value, str) and value
+            ) + '</dd>'
+
         for index, material_id in enumerate(ordered_ids):
             fact = facts.get(material_id, {})
             dive = dives_by_id[material_id]
@@ -1421,7 +1432,8 @@ def _render_html(analysis, material_frames, fact_pack):
                 if frame.get("click_value") is not None:
                     caption += f"｜点击指数 {_format_index_value(frame['click_value'])}"
                 frame_cards.append(
-                    '<figure class="deep-frame-card"><button class="highlight-frame-button" type="button" data-highlight-src="'
+                    '<figure class="deep-frame-card" data-deep-frame-card><label class="deep-frame-select-label"><input type="checkbox" data-deep-frame-checkbox data-frame-ref="'
+                    + esc(frame.get("frame_ref")) + '" checked aria-label="选择 ' + esc(caption) + '">选择</label><button class="highlight-frame-button" type="button" data-highlight-src="'
                     + html.escape(image_src(frame), quote=True) + '" data-highlight-caption="'
                     + html.escape(caption, quote=True) + '" aria-label="查看 ' + esc(caption) + '"><img loading="lazy" src="'
                     + html.escape(image_src(frame), quote=True) + '" alt="' + esc(title + " " + caption) + '"></button><figcaption>'
@@ -1440,7 +1452,7 @@ def _render_html(analysis, material_frames, fact_pack):
             if failed_reasons:
                 frame_coverage += "；" + "；".join(failed_reasons)
             frame_observations = "".join(
-                '<li><strong>' + esc(deep_frame_label(frame)) + "｜" + esc(frame.get("second")) + "s：</strong>"
+                '<li data-deep-frame-observation data-frame-ref="' + esc(frame.get("frame_ref")) + '"><strong>' + esc(deep_frame_label(frame)) + "｜" + esc(frame.get("second")) + "s：</strong>"
                 + esc(observations.get(frame.get("frame_ref"), "")) + "</li>"
                 for frame in frames
             ) or "<li>暂无可用于观察的高光帧。</li>"
@@ -1453,11 +1465,19 @@ def _render_html(analysis, material_frames, fact_pack):
                 '<article class="material-deep-panel material-card" role="tabpanel" id="material-deep-panel-' + str(index)
                 + '" aria-labelledby="material-deep-tab-' + str(index) + '"' + ("" if selected_tab else " hidden") + '><header class="material-deep-header material-head"><span>#'
                 + esc(fact.get("rank", "-")) + '</span><h3>' + esc(title) + '</h3><p class="material-deep-id">素材 ID：' + esc(material_id) + '</p></header><ul class="material-deep-metrics">'
-                + metric_summary + '</ul><div class="deep-visual-strip"><div class="deep-frame-grid fixed-six">'
+                + metric_summary + '</ul><dl class="material-fact-tags">'
+                + source_tags(fact, "people_tags", "核心人群标签")
+                + source_tags(fact, "material_tags", "营销卖点标签")
+                + '</dl><div class="material-detail-tabs" role="tablist" aria-label="' + esc(title) + '分析视图">'
+                + '<button type="button" role="tab" aria-selected="true" data-material-detail-tab="visual" data-material-detail-target="material-detail-visual-' + str(index) + '">高光帧观察</button>'
+                + '<button type="button" role="tab" aria-selected="false" tabindex="-1" data-material-detail-tab="timeline" data-material-detail-target="material-detail-timeline-' + str(index) + '">秒级拆解</button>'
+                + '<button type="button" role="tab" aria-selected="false" tabindex="-1" data-material-detail-tab="script" data-material-detail-target="material-detail-script-' + str(index) + '">脚本分析</button></div>'
+                + '<div class="material-detail-panel" id="material-detail-visual-' + str(index) + '" role="tabpanel"><div class="deep-visual-strip"><div class="deep-frame-selection-controls">'
+                + '<button type="button" data-deep-frame-select-all>全选</button><button type="button" data-deep-frame-clear>清空</button></div><div class="deep-frame-grid fixed-six">'
                 + "".join(frame_cards) + '</div><p class="deep-frame-coverage">' + esc(frame_coverage)
-                + '</p></div><div class="deep-frame-observations"><h4>高光帧观察</h4><ul>' + frame_observations
-                + '</ul></div><div class="second-level-section">' + second_level_timeline(metrics, index)
-                + '</div></article>'
+                + '</p></div><div class="deep-frame-observations"><h4>高光帧观察</h4><ul data-deep-frame-observations>' + frame_observations
+                + '</ul></div></div><div class="material-detail-panel" id="material-detail-timeline-' + str(index) + '" role="tabpanel" hidden><div class="second-level-section">' + second_level_timeline(metrics, index)
+                + '</div></div><div class="material-detail-panel data-state" id="material-detail-script-' + str(index) + '" role="tabpanel" hidden><span>脚本数据：未接入</span><p>当前未提供脚本正文与时间戳段落，暂不输出内容公式、话术结论和帧-话术对应关系。</p></div></article>'
             )
         return '<div class="material-deep-layout side-tabs"><div class="material-deep-tab-list" role="tablist" aria-label="单素材深度分析">' + "".join(tabs) + '</div><div class="material-deep-panels">' + "".join(panels) + "</div></div>"
 

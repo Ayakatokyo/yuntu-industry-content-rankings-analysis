@@ -459,6 +459,118 @@ def _material_frames(detail, candidates, root, downloader, frame_extractor, ffmp
         )
 
 
+def load_highlights_manifest(output_dir):
+    """Load standard highlight frames keyed by material ID when locally valid."""
+    path = Path(output_dir) / "highlights-manifest.json"
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    materials = payload.get("materials") if isinstance(payload, dict) else None
+    if not isinstance(materials, list):
+        return {}
+    return {
+        str(item.get("material_id")): item.get("frames", [])
+        for item in materials
+        if isinstance(item, dict)
+        and isinstance(item.get("material_id"), (str, int))
+        and isinstance(item.get("frames"), list)
+    }
+
+
+def write_highlights_manifest(output_dir, frames_by_material):
+    """Atomically publish complete frame records from the scheduler thread."""
+    materials = [
+        {"material_id": material_id, "frames": frames}
+        for material_id, frames in sorted(frames_by_material.items())
+    ]
+    _write_json_atomically(
+        {
+            "schemaVersion": 2,
+            "standard": "cover_plus_click_top5",
+            "materials": materials,
+        },
+        Path(output_dir) / "highlights-manifest.json",
+    )
+
+
+def _reusable_standard_frames(detail, root):
+    material_id = str(detail.get("material_id") or "")
+    candidates = select_standard_highlight_candidates(detail)
+    frames = load_highlights_manifest(root).get(material_id)
+    if not isinstance(frames, list) or len(frames) != len(candidates):
+        return None
+
+    by_key = {}
+    for frame in frames:
+        if not isinstance(frame, dict):
+            return None
+        key = (frame.get("frame_type"), frame.get("second"))
+        if key in by_key:
+            return None
+        by_key[key] = frame
+
+    reusable = []
+    root_path = Path(root).resolve()
+    for candidate in candidates:
+        frame = by_key.get((candidate["frame_type"], candidate["second"]))
+        relative_path = frame.get("relative_path") if isinstance(frame, dict) else None
+        if not frame or not frame.get("available") or not isinstance(relative_path, str):
+            return None
+        path = (root_path / relative_path).resolve()
+        try:
+            path.relative_to(root_path)
+        except ValueError:
+            return None
+        if not path.is_file() or not path.stat().st_size:
+            return None
+        reusable.append(
+            _frame_record(
+                candidate,
+                material_id=material_id,
+                available=True,
+                relative_path=relative_path,
+                frame_source="reused_local_extracted_frame",
+            )
+        )
+    return reusable
+
+
+def details_missing_standard_highlights(details, output_dir):
+    """Return only details without a complete reusable local standard frame set."""
+    root = Path(output_dir)
+    return [
+        detail
+        for detail in details
+        if isinstance(detail, dict) and _reusable_standard_frames(detail, root) is None
+    ]
+
+
+def generate_standard_highlights_for_detail(
+    detail,
+    output_dir,
+    *,
+    downloader=download_video,
+    frame_extractor=extract_frame,
+    ffmpeg_bin=None,
+):
+    """Generate or reuse the report's standard highlighter set for one material."""
+    root = Path(output_dir)
+    reusable = _reusable_standard_frames(detail, root)
+    if reusable is not None:
+        return reusable
+    return _material_frames(
+        detail,
+        select_standard_highlight_candidates(detail),
+        root,
+        downloader,
+        frame_extractor,
+        ffmpeg_bin,
+    )
+
+
 def generate_highlights(
     details,
     trend_names,
@@ -510,29 +622,15 @@ def generate_standard_highlights(
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
     results = {}
-    materials = []
     for detail in details:
         material_id = str(detail.get("material_id") or "")
-        frames = _material_frames(
+        frames = generate_standard_highlights_for_detail(
             detail,
-            select_standard_highlight_candidates(detail),
             root,
-            downloader,
-            frame_extractor,
-            ffmpeg_bin,
+            downloader=downloader,
+            frame_extractor=frame_extractor,
+            ffmpeg_bin=ffmpeg_bin,
         )
         results[material_id] = frames
-        materials.append(
-            {
-                "material_id": material_id,
-                "video_url": detail.get("video_url")
-                if isinstance(detail.get("video_url"), str)
-                else "",
-                "frames": frames,
-            }
-        )
-    _write_json_atomically(
-        {"schemaVersion": 2, "standard": "cover_plus_click_top5", "materials": materials},
-        root / "highlights-manifest.json",
-    )
+    write_highlights_manifest(root, results)
     return results

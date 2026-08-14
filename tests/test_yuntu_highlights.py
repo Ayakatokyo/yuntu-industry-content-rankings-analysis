@@ -258,6 +258,73 @@ class YuntuHighlightTests(unittest.TestCase):
         self.assertEqual(result["101"][0]["relative_path"], "highlights/101/01-000s.jpg")
         self.assertEqual(result["101"][0]["frame_source"], "reused_local_extracted_frame")
 
+    def test_single_material_standard_highlights_reuses_complete_manifest(self):
+        highlights = load_module()
+        detail = {
+            "material_id": "101",
+            "video_url": "https://video.example/101.mp4",
+            "trend_series": [],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = root / "highlights" / "101" / "01-000s.jpg"
+            image.parent.mkdir(parents=True)
+            image.write_bytes(b"jpeg")
+            highlights.write_highlights_manifest(
+                root,
+                {
+                    "101": [
+                        {
+                            "frame_ref": "highlight:101:cover:0",
+                            "second": 0,
+                            "is_cover": True,
+                            "frame_type": "cover",
+                            "peak_rank": None,
+                            "click_value": None,
+                            "reasons": [{"type": "cover"}],
+                            "available": True,
+                            "relative_path": "highlights/101/01-000s.jpg",
+                        }
+                    ]
+                },
+            )
+            frames = highlights.generate_standard_highlights_for_detail(
+                detail,
+                root,
+                downloader=lambda *_args: self.fail("unexpected video download"),
+                frame_extractor=lambda *_args, **_kwargs: self.fail("unexpected frame extraction"),
+            )
+
+        self.assertTrue(frames[0]["available"])
+        self.assertEqual(frames[0]["frame_source"], "reused_local_extracted_frame")
+
+    def test_details_missing_standard_highlights_detects_missing_frame_file(self):
+        highlights = load_module()
+        details = [
+            {"material_id": "101", "trend_series": []},
+            {"material_id": "202", "trend_series": []},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            highlights.write_highlights_manifest(
+                root,
+                {
+                    "101": [
+                        {
+                            "frame_ref": "highlight:101:cover:0",
+                            "second": 0,
+                            "is_cover": True,
+                            "frame_type": "cover",
+                            "available": True,
+                            "relative_path": "highlights/101/missing.jpg",
+                        }
+                    ]
+                },
+            )
+            missing = highlights.details_missing_standard_highlights(details, root)
+
+        self.assertEqual([item["material_id"] for item in missing], ["101", "202"])
+
     def test_generate_highlights_reuses_existing_frame_when_extraction_fails(self):
         highlights = load_module()
 

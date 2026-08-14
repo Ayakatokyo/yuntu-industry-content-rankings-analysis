@@ -166,7 +166,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_input(root, records, selected, details)
-            with mock.patch.object(analysis, "generate_standard_highlights", return_value={"101": []}):
+            with mock.patch.object(analysis, "generate_standard_highlights_for_detail", return_value=[]):
                 status = analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
             data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
 
@@ -189,7 +189,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_input(root, records, selected, details)
-            with mock.patch.object(analysis, "generate_standard_highlights", return_value={"1": frames}) as generate:
+            with mock.patch.object(analysis, "generate_standard_highlights_for_detail", return_value=frames) as generate:
                 analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
             data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
 
@@ -228,7 +228,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             root = Path(directory)
             self._write_input(root, records, selected, details)
             with mock.patch.object(
-                analysis, "generate_standard_highlights", return_value={"1": frames}
+                analysis, "generate_standard_highlights_for_detail", return_value=frames
             ):
                 analysis.prepare_analysis(
                     input_dir=root, output_dir=root / "diagnostic-analysis"
@@ -274,7 +274,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             root = Path(directory)
             self._write_input(root, records, selected, details)
             frames = [{"second": 0, "frame_type": "cover", "available": False, "failure_reason": "missing_video_url"}]
-            with mock.patch.object(analysis, "generate_standard_highlights", return_value={"1": frames}) as generate:
+            with mock.patch.object(analysis, "generate_standard_highlights_for_detail", return_value=frames) as generate:
                 analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
             data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
 
@@ -284,6 +284,33 @@ class YuntuAnalysisTests(unittest.TestCase):
             data["materialFacts"][0]["highlightFrameAvailability"],
             {"available": False, "missing_reason": "missing_video_url"},
         )
+
+    def test_prepare_analysis_reuses_complete_streamed_highlights_without_regeneration(self):
+        analysis = load_module()
+        records = [
+            {"material_id": "1", "title": "素材", "metrics": {}, "people_tags": [], "material_tags": [], "data_availability": {}},
+        ]
+        selected = [{"rank": 1, "material_id": "1", "detailRecordPath": "normalized/detail-records/1.json"}]
+        details = {"1": {"material_id": "1", "trend_series": [], "high_points": [], "loss_points": [], "data_availability": {}}}
+        frames = [{
+            "frame_ref": "highlight:1:cover:0", "second": 0, "is_cover": True,
+            "frame_type": "cover", "peak_rank": None, "click_value": None,
+            "reasons": [{"type": "cover"}], "available": True,
+            "relative_path": "highlights/1/01-000s.jpg",
+        }]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            image = root / "highlights" / "1" / "01-000s.jpg"
+            image.parent.mkdir(parents=True)
+            image.write_bytes(b"jpeg")
+            analysis.write_highlights_manifest(root, {"1": frames})
+            with mock.patch.object(analysis, "generate_standard_highlights_for_detail") as generate:
+                analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
+            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+
+        generate.assert_not_called()
+        self.assertEqual(data["materialFacts"][0]["highlightFrames"], frames)
 
     def test_prepare_analysis_writes_top_material_combination_and_prompt_contract(self):
         analysis = load_module()

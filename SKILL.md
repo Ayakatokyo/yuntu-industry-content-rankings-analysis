@@ -38,7 +38,7 @@ metadata:
 `rpa.conn.juliang.yt.industry.content.rankings.list`，再从列表响应中按顺序选取
 `material_id`，逐个调用 `rpa.conn.juliang.yt.industry.content.rankings.detail`。
 列表连接器完成后必须先完成结构化落盘：`normalized/list-records.json` 保存素材本身的标题、身份、发布时间、指标、标签和列表筛选上下文；`normalized/detail-request-params.json` 保存下一步详情连接器所需的 `material_id` 与详情日期参数。详情连接器只消费后者，分析事实包消费前者和成功详情记录。
-详情阶段中断后，只能以完全相同的运行契约续跑。契约包含 `shop_id`、全部列表筛选、详情日期、`targetTopN` 与 `candidateTopN`；参数不一致时，脚本会在调用 RPA 前拒绝该目录，必须新建输出目录。旧目录缺少可验证的 `run-summary.json` 时同样拒绝，不得把历史 CSV 当作本次列表。
+`fetch` 是长任务：详情 RPA 单次调用可能超过 300 秒，必须使用平台提供的异步/长任务会话执行，并通过 `status` 定期观察落盘进度；不得在 300 秒同步窗口中等待完整批次。详情阶段中断后，只能以完全相同的运行契约续跑。契约包含 `shop_id`、全部列表筛选、详情日期、`targetTopN` 与 `candidateTopN`；参数不一致时，脚本会在调用 RPA 前拒绝该目录，必须新建输出目录。旧目录缺少可验证的 `run-summary.json` 时同样拒绝，不得把历史 CSV 当作本次列表。
 
 ## 运行环境要求
 
@@ -56,7 +56,7 @@ metadata:
 
 详情日期使用 `--detail-date-range-type`（`LAST_7_DAYS`、`LAST_30_DAYS` 或 `CUSTOM`），但必须与榜单时间范围一致；详情自定义日期必须同时提供 `--detail-custom-start-date` 和 `--detail-custom-end-date`，且结束日期不得早于开始日期。
 
-`--top-n` 必须为正整数，默认值为 `10`，兼容旧用法。新增批次口径中，`--target-top-n` 表示最终希望分析成功的素材数量；`--candidate-top-n` 表示从榜单中保留的候选池上限，默认可按目标数量的 3 倍理解。`material_id` 始终从列表响应中选择，不能作为详情覆盖参数提供。
+`--top-n` 必须为正整数，默认值为 `10`，兼容旧用法。新增批次口径中，`--target-top-n` 表示最终希望分析成功的素材数量；`--candidate-top-n` 表示从榜单中保留的候选池上限，未显式指定时为目标数量加 2，用于避免无故拉取过多详情。`material_id` 始终从列表响应中选择，不能作为详情覆盖参数提供。
 
 列表筛选标志为 `--industry`、`--time-range-type`、`--custom-start-date`、`--custom-end-date`、`--ages`、`--genders`、`--crowd-groups`、`--brand-scope-type`、`--brands` 和 `--ranking-limit-type`。
 
@@ -145,11 +145,21 @@ python <skill-root>/scripts/rpa_connector.py retry-failed \
   --output-dir "RPA数据汇总/yuntu-rankings-analysis"
 ```
 
+仅在用户确认可能重复请求后，重试因进程中断而未完成本地落盘的详情：
+
+```bash
+python <skill-root>/scripts/rpa_connector.py retry-unresolved \
+  --shop-id "<shop_id>" \
+  --output-dir "RPA数据汇总/yuntu-rankings-analysis"
+```
+
 ## RPA 批次门禁与状态
 
 真实 RPA 运行前，先执行 `list-accounts` 并确认目标账号与 `shop_id` 对应。每次业务条件变化必须使用新的输出目录，目录名至少带日期和 TopN，例如 `yuntu-rankings-analysis-20260730-20260805-top5`。指定品牌时，必须成对传入 `--brand-scope-type SPECIFIED_BRANDS` 与单个逗号分隔的 `--brands '品牌1,品牌2,品牌3'`；不得把多个品牌拆成多个 shell 参数。
 
-`run-summary.json` 保存运行 ID、参数指纹、不可变契约、列表/详情阶段和互不混用的计数。`batch-manifest.json` 保存候选、提交、入选、拒绝和取消素材。命令运行中，`status --output-dir` 必须同时反读 `run-summary.json`、`batch-manifest.json`、`normalized/list-records.json`、`normalized/detail-request-params.json` 与 `normalized/detail-records/`；manifest 仍为 `running` 但详情文件已落盘时，应报告“详情已持久化、状态待回写”，不得重跑或覆盖目录。
+`run-summary.json` 保存运行 ID、参数指纹、不可变契约、列表/详情阶段和互不混用的计数。`batch-manifest.json` 保存候选、提交、入选、拒绝、`unresolvedMaterials` 和取消素材。命令运行中，`status --output-dir` 必须同时反读 `run-summary.json`、`batch-manifest.json`、`normalized/list-records.json`、`normalized/detail-request-params.json` 与 `normalized/detail-records/`；manifest 仍为 `running` 但详情文件已落盘时，应报告“详情已持久化、状态待回写”，不得重跑或覆盖目录。
+
+常规续跑会从 `normalized/detail-records/` 恢复已持久化详情，且不重复提交这些素材。已提交但因进程终止而没有本地详情文件的项目会写入 `unresolvedMaterials`；这不代表 RPA 失败，也不能自动补拉。先用 `status` 核对证据，只有用户确认接受可能重复请求后才能运行 `retry-unresolved`。
 
 列表规范化后，脚本会校验首条 `list_context` 的行业、自定义日期、品牌范围、指定品牌和榜单限制是否与本次请求相符。校验失败立即停止，状态为 `list_context_mismatch`，不得调用详情、生成事实包或报告。报告前必须确认 `status == success`、`selectedCount == targetTopN`、`rejectedCount == 0`；否则按部分完成交付并说明缺口。
 
@@ -169,7 +179,7 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 - `normalized/detail-request-params.json`：传入详情 RPA 的素材 ID 与日期参数。
 - `normalized/detail-records/<material_id>.json`：规范化详情 records。
 - `normalized/top-materials-rpa-ready.json`：最终可分析素材列表。
-- `batch-manifest.json`：候选、提交、入选、失败、取消素材及路径和耗时。
+- `batch-manifest.json`：候选、提交、入选、失败、未确认、取消素材及路径和耗时。
 - `run-summary.json`：不可变运行契约、参数指纹、状态阶段、计数和已核实产物。
 
 分析阶段只读取 `normalized/` 和 `diagnostic-analysis/`，不直接读取原始 CSV、RPA response 或临时 `fileUrl`。CSV 单元格同时兼容标准 JSON 和安全的 Python 字面量；RPA 导出的字段边缘控制字符与控制字符空行会被清理，不会被误识别为素材。无法安全解析的嵌套字段保留原文本，并在规范化产物中标记缺失原因。
@@ -228,6 +238,6 @@ HTML 报告使用深棕、暖金、米白的离线视觉系统。报告正文只
 
 若列表请求失败或没有有效素材 ID，命令会写入清单并以非零状态退出，且不会开始详情请求。详情请求失败会被记录，后续选中素材仍会继续；只要任一详情失败，命令就以非零状态退出，同时成功的详情 JSON 文件仍可使用。
 
-`retry-failed` 只重试 `batch-manifest.json` 中的 `rejectedMaterials`，不会重跑列表请求，也不会重复请求已经成功落盘的详情。
+`retry-failed` 只重试 `batch-manifest.json` 中的 `rejectedMaterials`，不会重跑列表请求，也不会重复请求已经成功落盘的详情。`retry-unresolved` 只重试 `unresolvedMaterials`，必须先获得用户确认，因为中断时 RPA 后台可能已经完成但响应未被本地进程写盘。
 
 `prepare-analysis` 会在本地下载可用视频并提取标准高光帧；`render-report` 本身不下载视频、不提取帧、不调用外部模型，也不生成新的业务判断。

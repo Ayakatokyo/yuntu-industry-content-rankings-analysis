@@ -183,6 +183,311 @@ class YuntuBatchTests(unittest.TestCase):
         self.assertEqual(len(invoker.list_calls), 0)
         self.assertEqual(len(invoker.detail_calls), 1)
 
+    def test_fetch_batch_resume_skips_persisted_detail(self):
+        batch = load_batch()
+        invoker = FakeInvoker(
+            {"success": False},
+            [
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "materialId": "202",
+                            "dateRangeType": "LAST_7_DAYS",
+                            "trends": [],
+                        }
+                    ],
+                }
+            ],
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "raw-csv").mkdir(parents=True)
+            (root / "normalized" / "detail-records").mkdir(parents=True)
+            (root / "raw-csv" / "list.csv").write_text(
+                "material_id\x01title\x01object_index\x01people_tag_entry\x01material_tag_entry\x01page_industry\n"
+                '101\x01A\x01{"ctr":0.7}\x01[]\x01[]\x01食品饮料\n'
+                '202\x01B\x01{"ctr":0.4}\x01[]\x01[]\x01食品饮料\n',
+                encoding="utf-8",
+            )
+            (root / "normalized" / "detail-records" / "101.json").write_text(
+                json.dumps(
+                    {
+                        "material_id": "101",
+                        "date_range": {"type": "LAST_7_DAYS"},
+                        "trend_series": [],
+                        "high_points": [],
+                        "loss_points": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            contract = batch.run_state.collection_contract(
+                shop_id="shop-42",
+                list_params={"industry": "食品饮料"},
+                detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                target_top_n=2,
+                candidate_top_n=2,
+            )
+            batch.run_state.save_run_state(
+                batch.run_state.new_collection_summary(contract), root / "run-summary.json"
+            )
+            (root / "batch-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 2,
+                        "status": "running",
+                        "filters": {"industry": "食品饮料"},
+                        "detailDateRange": {"date_range_type": "LAST_7_DAYS"},
+                        "targetTopN": 2,
+                        "candidateTopN": 2,
+                        "submittedMaterials": [{"rank": 1, "material_id": "101"}],
+                        "selectedMaterials": [],
+                        "rejectedMaterials": [],
+                        "cancelledMaterials": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            status = batch.fetch_batch(
+                shop_id="shop-42",
+                list_params={"industry": "食品饮料"},
+                detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                target_top_n=2,
+                candidate_top_n=2,
+                output_dir=root,
+                invoker=invoker,
+            )
+            manifest = json.loads(
+                (root / "batch-manifest.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(len(invoker.list_calls), 0)
+        self.assertEqual(
+            [params["material_id"] for _, params in invoker.detail_calls], ["202"]
+        )
+        self.assertEqual(
+            [item["material_id"] for item in manifest["selectedMaterials"]],
+            ["101", "202"],
+        )
+
+    def test_fetch_batch_marks_unpersisted_submission_unresolved_without_retrying(self):
+        batch = load_batch()
+        invoker = FakeInvoker(
+            {"success": False},
+            [
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "materialId": "202",
+                            "dateRangeType": "LAST_7_DAYS",
+                            "trends": [],
+                        }
+                    ],
+                }
+            ],
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "raw-csv").mkdir(parents=True)
+            (root / "raw-csv" / "list.csv").write_text(
+                "material_id\x01title\x01object_index\x01people_tag_entry\x01material_tag_entry\x01page_industry\n"
+                '101\x01A\x01{"ctr":0.7}\x01[]\x01[]\x01食品饮料\n'
+                '202\x01B\x01{"ctr":0.4}\x01[]\x01[]\x01食品饮料\n',
+                encoding="utf-8",
+            )
+            contract = batch.run_state.collection_contract(
+                shop_id="shop-42",
+                list_params={"industry": "食品饮料"},
+                detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                target_top_n=1,
+                candidate_top_n=2,
+            )
+            batch.run_state.save_run_state(
+                batch.run_state.new_collection_summary(contract), root / "run-summary.json"
+            )
+            (root / "batch-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 2,
+                        "status": "running",
+                        "filters": {"industry": "食品饮料"},
+                        "detailDateRange": {"date_range_type": "LAST_7_DAYS"},
+                        "targetTopN": 1,
+                        "candidateTopN": 2,
+                        "submittedMaterials": [{"rank": 1, "material_id": "101"}],
+                        "selectedMaterials": [],
+                        "rejectedMaterials": [],
+                        "cancelledMaterials": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            status = batch.fetch_batch(
+                shop_id="shop-42",
+                list_params={"industry": "食品饮料"},
+                detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                target_top_n=1,
+                candidate_top_n=2,
+                output_dir=root,
+                invoker=invoker,
+            )
+            manifest = json.loads(
+                (root / "batch-manifest.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            [params["material_id"] for _, params in invoker.detail_calls], ["202"]
+        )
+        self.assertEqual(
+            [item["material_id"] for item in manifest["unresolvedMaterials"]],
+            ["101"],
+        )
+        self.assertEqual(
+            manifest["unresolvedMaterials"][0]["reason"],
+            "interrupted_before_persistence",
+        )
+
+    def test_retry_unresolved_batch_retries_only_unresolved_materials(self):
+        batch = load_batch()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "normalized").mkdir(parents=True)
+            (root / "normalized" / "list-records.json").write_text(
+                json.dumps(
+                    [
+                        {"material_id": "101", "rank": 1},
+                        {"material_id": "202", "rank": 2},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            contract = batch.run_state.collection_contract(
+                shop_id="shop-42",
+                list_params={"industry": "食品饮料"},
+                detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                target_top_n=1,
+                candidate_top_n=2,
+            )
+            batch.run_state.save_run_state(
+                batch.run_state.new_collection_summary(contract), root / "run-summary.json"
+            )
+            (root / "batch-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 2,
+                        "status": "partial",
+                        "filters": {"industry": "食品饮料"},
+                        "detailDateRange": {"date_range_type": "LAST_7_DAYS"},
+                        "targetTopN": 1,
+                        "candidateTopN": 2,
+                        "candidateMaterials": [
+                            {"rank": 1, "material_id": "101"},
+                            {"rank": 2, "material_id": "202"},
+                        ],
+                        "submittedMaterials": [{"rank": 1, "material_id": "101"}],
+                        "selectedMaterials": [],
+                        "rejectedMaterials": [],
+                        "unresolvedMaterials": [
+                            {
+                                "rank": 1,
+                                "material_id": "101",
+                                "reason": "interrupted_before_persistence",
+                            }
+                        ],
+                        "cancelledMaterials": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            invoker = FakeInvoker(
+                None,
+                [
+                    {
+                        "success": True,
+                        "data": [
+                            {
+                                "materialId": "101",
+                                "dateRangeType": "LAST_7_DAYS",
+                                "trends": [],
+                            }
+                        ],
+                    }
+                ],
+            )
+
+            status = batch.retry_unresolved_batch(
+                shop_id="shop-42", output_dir=root, invoker=invoker
+            )
+            manifest = json.loads(
+                (root / "batch-manifest.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            [params["material_id"] for _, params in invoker.detail_calls], ["101"]
+        )
+        self.assertEqual(manifest["unresolvedMaterials"], [])
+        self.assertEqual(
+            [item["material_id"] for item in manifest["selectedMaterials"]], ["101"]
+        )
+
+    def test_retry_failed_batch_keeps_partial_status_when_unresolved_remain(self):
+        batch = load_batch()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "normalized").mkdir(parents=True)
+            (root / "normalized" / "list-records.json").write_text(
+                json.dumps([{"material_id": "101", "rank": 1}]), encoding="utf-8"
+            )
+            contract = batch.run_state.collection_contract(
+                shop_id="shop-42",
+                list_params={"industry": "食品饮料"},
+                detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                target_top_n=1,
+                candidate_top_n=1,
+            )
+            batch.run_state.save_run_state(
+                batch.run_state.new_collection_summary(contract), root / "run-summary.json"
+            )
+            (root / "batch-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": "partial",
+                        "detailDateRange": {"date_range_type": "LAST_7_DAYS"},
+                        "targetTopN": 1,
+                        "selectedMaterials": [{"rank": 1, "material_id": "101"}],
+                        "rejectedMaterials": [],
+                        "unresolvedMaterials": [
+                            {"rank": 2, "material_id": "202", "reason": "interrupted_before_persistence"}
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            status = batch.retry_failed_batch(
+                shop_id="shop-42",
+                output_dir=root,
+                invoker=FakeInvoker(None, []),
+            )
+            manifest = json.loads(
+                (root / "batch-manifest.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(manifest["status"], "partial")
+
     def test_fetch_batch_rejects_unverifiable_existing_list_before_any_rpa_call(self):
         batch = load_batch()
         invoker = FakeInvoker({"success": False}, [])

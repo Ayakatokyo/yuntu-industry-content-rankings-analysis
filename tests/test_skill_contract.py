@@ -88,6 +88,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
             "prepare-analysis",
             "render-report",
             "retry-failed",
+            "retry-unresolved",
         ):
             self.assertIn(f"{command} {subcommand}", skill)
 
@@ -119,6 +120,20 @@ class AnalysisSkillContractTests(unittest.TestCase):
         )
         self.assertEqual(root_help.returncode, 0, root_help.stderr)
         self.assertIn("retry-failed", root_help.stdout)
+        self.assertIn("retry-unresolved", root_help.stdout)
+
+    def test_documents_long_task_recovery_and_explicit_unresolved_retry(self):
+        skill = self.read_skill()
+
+        for phrase in (
+            "长任务",
+            "异步",
+            "300 秒",
+            "unresolvedMaterials",
+            "retry-unresolved",
+            "不重复提交",
+        ):
+            self.assertIn(phrase, skill)
 
     def test_documents_default_output_and_failure_boundaries(self):
         skill = self.read_skill()

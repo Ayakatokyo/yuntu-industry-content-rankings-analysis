@@ -421,7 +421,7 @@ def _prompt_text():
 
 `highlightDashboard` 只使用事实包中 `available=true` 的 highlightFrames。实际查看每张 JPEG 后，将每张成功帧且仅一次归入 portrait、product、scene、text_overlay、other 中的一个主视觉分类，分类顺序固定为 portrait、product、scene、text_overlay、other。每个非空分类包含 frame_refs、common_patterns 和 derivative_directions；方向只能引用本分类的 frame_refs。没有成功帧时不得编造视觉洞察。高光帧为封面帧和点击指数局部峰值。只能描述该帧处于点击指数峰值秒点；不得说该画面导致点击、转化或指标提升，也不能声称其对应某句脚本话术或真实点击次数。
 
-`materialDeepDives` 必须与入选素材一一对应。每项包含 material_id、frame_observations、second_level_observations、visual_summary、data_summary、audience_summary、marketing_summary、replication_advice、risk_notes、opening_judgment、visual_rhythm、peak_frame_reading、second_level_reading、audience_fit、xiaoxian_dun_reference、do_not_copy。13 个摘要字段每项至少 80 个中文字符，并以该素材的画面、指标、标签或趋势秒点形成彼此不同的判断；不要复述图表已显示的数值。`frame_observations` 必须将该素材每一张 `available=true` 的 highlightFrames 恰好引用一次，每项只含 frame_ref 和至少 40 个中文字符的可观察 observation；不得引用其他素材或失败帧。所有摘要只使用事实包和实际可见画面，不得生成脚本、内容公式、真实互动量、转化或因果结论。`second_level_observations` 只使用 `点赞指数`、`流失指数`、`点击指数`、`互动指数`、`评论指数`，每项含 trend_name、至少 60 个中文字符的 summary、evidence_seconds；evidence_seconds 只能填写该素材对应趋势 `points` 中实际存在的秒数。`do_not_copy` 必须说明不宜照搬的画面、表达或未验证健康宣称。该部分在报告中叫“秒级拆解”，不叫“互动时序分析”。
+`materialDeepDives` 仅用于支撑 05｜单素材深度分析中的高光帧观察与秒级拆解。每项包含 material_id、frame_observations、second_level_observations；不得输出或生成额外的单素材 AI 二次分析摘要字段。`frame_observations` 必须将该素材每一张 `available=true` 的 highlightFrames 恰好引用一次，每项只含 frame_ref 和至少 40 个中文字符的可观察 observation；不得引用其他素材或失败帧。观察只能描述事实包和实际可见画面，不得生成脚本、内容公式、真实互动量、转化或因果结论。`second_level_observations` 只使用 `点赞指数`、`流失指数`、`点击指数`、`互动指数`、`评论指数`，每项含 trend_name、至少 60 个中文字符的 summary、evidence_seconds；evidence_seconds 只能填写该素材对应趋势 `points` 中实际存在的秒数。该部分在报告中叫“秒级拆解”，不叫“互动时序分析”。
 """
 
 

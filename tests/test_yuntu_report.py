@@ -106,9 +106,9 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("当前对话模型", skill)
         self.assertIn("scene", skill)
         self.assertIn("text_overlay", skill)
-        self.assertIn("replication_advice", skill)
+        self.assertIn("不再生成或渲染单素材 AI 二次分析摘要字段", skill)
         self.assertIn("audienceInsights", skill)
-        self.assertIn("do_not_copy", skill)
+        self.assertIn("只要求逐帧观察和秒级观察", skill)
 
     def analysis_json(self):
         return {
@@ -348,26 +348,6 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("成功指标：play_3s_rate", markdown)
         self.assertNotIn("附：秒级趋势洞察", markdown)
         self.assertIn("<html", html)
-
-    def test_render_report_rejects_shallow_ai_deep_dive(self):
-        report = load_module()
-        analysis = self.deep_dive_analysis()
-        analysis["materialDeepDives"][0]["visual_summary"] = "该素材用于观察。"
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            analysis_path = root / "analysis.json"
-            analysis_path.write_text(
-                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
-            )
-            with self.assertRaisesRegex(
-                report.YuntuReportError,
-                "materialDeepDives visual_summary.*quality minimum",
-            ):
-                report.render_report(
-                    analysis_json=analysis_path,
-                    output_dir=root / "final-report",
-                    fact_pack=self.deep_dive_fact_pack(),
-                )
 
     def test_report_template_requires_each_current_section_placeholder(self):
         report = load_module()
@@ -796,13 +776,11 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('class="highlight-source-link"', rendered)
         self.assertIn("## 05｜单素材深度分析", markdown)
         self.assertIn("秒级拆解", markdown)
-        self.assertIn("AI 二次分析", rendered)
-        for label, field in report.DEEP_DIVE_FIELD_LABELS:
-            self.assertIn(label, rendered)
-            self.assertIn(self.deep_dive_analysis()["materialDeepDives"][0][field], rendered)
-        self.assertIn("#### 数据总结", markdown)
-        self.assertIn("#### 复用建议", markdown)
-        self.assertIn("#### 不建议照搬", markdown)
+        self.assertNotIn("AI 二次分析", rendered)
+        self.assertNotIn("画面总结", rendered)
+        self.assertNotIn("#### 数据总结", markdown)
+        self.assertNotIn("#### 复用建议", markdown)
+        self.assertNotIn("#### 不建议照搬", markdown)
         self.assertNotIn("可结合画面主体、字幕和产品露出查看节奏分布", rendered)
         self.assertNotIn("未输出观察。", markdown)
 
@@ -923,20 +901,30 @@ class YuntuReportTests(unittest.TestCase):
                 with self.assertRaisesRegex(report.YuntuReportError, error):
                     report.render_report(analysis_json=path, output_dir=Path(directory) / "report", fact_pack=self.deep_dive_fact_pack())
 
-    def test_render_report_rejects_deep_dive_without_ai_summary_fields(self):
+    def test_render_report_omits_ai_secondary_analysis_from_deep_dive(self):
         report = load_module()
         analysis = self.deep_dive_analysis()
-        del analysis["materialDeepDives"][0]["replication_advice"]
+        summary_fields = (
+            "visual_summary", "data_summary", "audience_summary", "marketing_summary",
+            "replication_advice", "risk_notes", "opening_judgment", "visual_rhythm",
+            "peak_frame_reading", "second_level_reading", "audience_fit",
+            "xiaoxian_dun_reference", "do_not_copy",
+        )
+        for dive in analysis["materialDeepDives"]:
+            for field in summary_fields:
+                del dive[field]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             path = root / "analysis.json"
             path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(report.YuntuReportError, "replication_advice"):
-                report.render_report(
-                    analysis_json=path,
-                    output_dir=root / "report",
-                    fact_pack=self.deep_dive_fact_pack(),
-                )
+            report.render_report(
+                analysis_json=path,
+                output_dir=root / "report",
+                fact_pack=self.deep_dive_fact_pack(),
+            )
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertNotIn("AI 二次分析", rendered)
+        self.assertNotIn("画面总结", rendered)
 
     def test_render_report_accepts_scene_and_text_overlay_highlight_groups(self):
         report = load_module()

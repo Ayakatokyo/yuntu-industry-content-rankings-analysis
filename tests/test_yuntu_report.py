@@ -185,7 +185,7 @@ class YuntuReportTests(unittest.TestCase):
             },
             "rankingOverview": [{"summary": "竞品出现价格利益点。", "material_ids": ["101"], "evidence": [{"metric": "ctr", "value": 0.7}]}],
             "audienceInsights": [{
-                "summary": "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。新锐白领标签在已返回素材中更常出现。",
+                "summary": "新锐白领标签在已返回素材中更常出现，可作为后续素材分层观察线索。",
                 "material_ids": ["101"],
                 "evidence": [{"tag": "新锐白领"}],
             }],
@@ -265,23 +265,23 @@ class YuntuReportTests(unittest.TestCase):
             {
                 "material_id": material_id,
                 "frame_observations": [
-                    {"frame_ref": f"highlight:{material_id}:cover:0", "observation": "人物近景作为开场主体。"},
-                    {"frame_ref": f"highlight:{material_id}:click_peak:2", "observation": "产品与人物共同处于画面中心。"},
+                    {"frame_ref": f"highlight:{material_id}:cover:0", "observation": "人物近景作为开场主体，产品包装在前景可辨识，先建立生活化使用场景。"},
+                    {"frame_ref": f"highlight:{material_id}:click_peak:2", "observation": "产品与人物共同处于画面中心，镜头保持近景构图，使用动作和包装信息同步可见。"},
                 ],
-                "visual_summary": "画面围绕人物与产品的近距离展示展开。",
-                "data_summary": "该素材使用已返回的榜单指标作为展示事实。",
-                "audience_summary": "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。",
-                "marketing_summary": "产品展示标签与画面中的产品主体共同出现。",
-                "replication_advice": "可测试近景产品主体与清晰包装展示的组合。",
-                "risk_notes": "画面结论仅限已提取帧，健康相关表达需业务与合规复核。",
-                "opening_judgment": "前 3 秒以稳定主体承接注意力，仅描述可见画面。",
-                "visual_rhythm": "已提取帧中的主体与景别有可见变化。",
-                "peak_frame_reading": "点击峰值秒点展示产品与人物同框的画面。",
-                "second_level_reading": "五类指数只按已返回秒级点位作描述。",
-                "audience_fit": "人群标签与画面主题的匹配仅为待验证判断。",
-                "xiaoxian_dun_reference": "小仙炖可测试产品主体和日常场景的组合。",
-                "do_not_copy": "不直接照搬健康功效或特定人群承诺。",
-                "second_level_observations": [{"trend_name": "点击指数", "summary": "第 2 秒为已返回的高点秒数。", "evidence_seconds": [2]}],
+                "visual_summary": "画面以人物近景和可辨识的产品包装构成双主体，生活化空间降低了产品理解门槛，适合观察场景与包装的并置方式。",
+                "data_summary": "榜单指标与候选池基准共同提供表现参照，后续应结合曝光、点击和短时播放指标判断该画面组合是否值得保留。",
+                "audience_summary": "新锐白领与都市女性标签在已返回素材中出现，可优先测试日常状态管理的信息入口，并按实际定向结果验证差异。",
+                "marketing_summary": "产品展示标签与可见包装共同出现，画面先让用户识别产品主体，再承接场景信息，适合继续测试信息层级的取舍。",
+                "replication_advice": "可测试近景产品主体、清晰包装展示与单一日常场景的组合，并分别比较人物先出场和产品先出场两种开场版本。",
+                "risk_notes": "画面判断基于已提取帧，不把峰值同时性作为效果证明；健康相关表达和特定人群指向仍需业务与合规复核。",
+                "opening_judgment": "前 3 秒以稳定人物主体承接注意力，同时保留产品露出；下一轮可测试更早出现包装是否改善产品识别。",
+                "visual_rhythm": "已提取帧从人物近景过渡到产品同框，景别变化不大但信息焦点稳定，适合以单变量测试强化前段节奏。",
+                "peak_frame_reading": "点击峰值秒点中人物与产品同框，说明该画面组合值得保留为候选版本，但需要与其他开场变量分组验证。",
+                "second_level_reading": "五类指数只使用已返回秒级点位描述，点击高点与前段画面同时出现，可作为后续分镜测试的观察锚点。",
+                "audience_fit": "人群标签与日常场景主题存在可测试的匹配线索，不能视为真实分布；应在投放定向与素材版本交叉下验证。",
+                "xiaoxian_dun_reference": "小仙炖可测试产品主体和日常场景的组合，以清晰包装和单一利益点降低理解成本，并以短时播放与点击共同复盘。",
+                "do_not_copy": "不直接照搬竞品的健康功效、特定人群承诺或未验证状态暗示；仅借鉴人物、产品与日常场景的视觉组织方式。",
+                "second_level_observations": [{"trend_name": "点击指数", "summary": "第 2 秒为已返回的点击高点秒数，前段产品与人物同框可作为下一轮开场变量的对照锚点。", "evidence_seconds": [2]}],
             }
             for material_id in ("101", "102")
         ]
@@ -305,7 +305,7 @@ class YuntuReportTests(unittest.TestCase):
             self.assertIn("从数据维度看", rendered)
             self.assertIn("从人群维度看", rendered)
             self.assertIn("从营销卖点维度看", rendered)
-            self.assertIn("人群标签是重叠标签，不是真实人群分布，不能相加为 100%。", rendered)
+            self.assertNotIn("人群标签是重叠标签，不是真实人群分布，不能相加为 100%。", rendered)
             self.assertIn("各品牌 TOP 对比分析（成功秒级拆解素材）", rendered)
             self.assertIn("万益蓝/WONDERLAB", rendered)
             self.assertIn("五个女博士", rendered)
@@ -348,6 +348,26 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("成功指标：play_3s_rate", markdown)
         self.assertNotIn("附：秒级趋势洞察", markdown)
         self.assertIn("<html", html)
+
+    def test_render_report_rejects_shallow_ai_deep_dive(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["materialDeepDives"][0]["visual_summary"] = "该素材用于观察。"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                report.YuntuReportError,
+                "materialDeepDives visual_summary.*quality minimum",
+            ):
+                report.render_report(
+                    analysis_json=analysis_path,
+                    output_dir=root / "final-report",
+                    fact_pack=self.deep_dive_fact_pack(),
+                )
 
     def test_report_template_requires_each_current_section_placeholder(self):
         report = load_module()
@@ -776,11 +796,13 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('class="highlight-source-link"', rendered)
         self.assertIn("## 05｜单素材深度分析", markdown)
         self.assertIn("秒级拆解", markdown)
-        self.assertNotIn("可测试近景产品主体与清晰包装展示的组合。", rendered)
-        self.assertNotIn("健康相关表达需业务与合规复核。", rendered)
-        self.assertNotIn("#### 数据总结", markdown)
-        self.assertNotIn("#### 复用建议", markdown)
-        self.assertNotIn("#### 不建议照搬", markdown)
+        self.assertIn("AI 二次分析", rendered)
+        for label, field in report.DEEP_DIVE_FIELD_LABELS:
+            self.assertIn(label, rendered)
+            self.assertIn(self.deep_dive_analysis()["materialDeepDives"][0][field], rendered)
+        self.assertIn("#### 数据总结", markdown)
+        self.assertIn("#### 复用建议", markdown)
+        self.assertIn("#### 不建议照搬", markdown)
         self.assertNotIn("可结合画面主体、字幕和产品露出查看节奏分布", rendered)
         self.assertNotIn("未输出观察。", markdown)
 

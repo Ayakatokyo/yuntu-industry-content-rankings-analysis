@@ -205,7 +205,7 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 
 人群标签同时给出素材数量占比和曝光加权覆盖率。标签可以重叠，因此曝光加权覆盖率不可相加为 100%，也不得写成真实人群比例。CPM 未由 RPA 提供时必须显示不可用，禁止从曝光或其他指标推算。卖点与指标只能描述共现，不得声称因果；某标签的有/无标签比较任一侧样本少于 3 条时写“数据不足以判断”。
 
-`audienceInsights` 的每项必须带有 `summary`、`evidence` 及 `material_id` 或 `material_ids`，并明确“人群标签是重叠标签，不是真实人群分布，不能相加为 100%。”前五章中每项必须带有 `summary`、`evidence` 及 `material_id` 或 `material_ids`。实验矩阵每项必须包含 `priority`、`hypothesis`、`creative_variable`、`target_audience`、`success_metric`、`control`、`review_action` 和 `evidence`；evidence 至少引用一个真实素材 ID、指标、`frame_ref` 或已返回的秒级点。涉及滋补、孕期、功效或健康人群的方向只能作为需业务和合规确认的测试假设。
+`audienceInsights` 的每项必须带有 `summary`、`evidence` 及 `material_id` 或 `material_ids`。人群标签重叠、不可相加等数据口径只保留在结构化事实包和 evidence，不进入用户可见正文；正文应使用具体标签、素材和内容方向形成业务洞察。前五章中每项必须带有 `summary`、`evidence` 及 `material_id` 或 `material_ids`。实验矩阵每项必须包含 `priority`、`hypothesis`、`creative_variable`、`target_audience`、`success_metric`、`control`、`review_action` 和 `evidence`；evidence 至少引用一个真实素材 ID、指标、`frame_ref` 或已返回的秒级点。涉及滋补、孕期、功效或健康人群的方向只能作为需业务和合规确认的测试假设。
 
 `render-report` 会拒绝缺少章节、证据、素材引用或实验字段的 JSON；CLI 会先拒绝缺少、不匹配或非模型来源的分析回执。它只将已验证的模型洞察渲染为 Markdown/HTML，不新增业务判断。当前用户可见报告交付五个板块：`01｜TOP 素材组合结论`、`02｜人群洞察`、`03｜脚本洞察`、`04｜高光画面洞察` 与 `05｜单素材深度分析`。
 
@@ -214,6 +214,8 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 `04｜高光画面洞察` 只消费成功落盘的高光 JPEG。模型在实际查看每张图片后，必须通过 `highlightDashboard` 将每张成功帧且仅一次归入 `portrait`、`product`、`scene`、`text_overlay`、`other` 五类主视觉之一，分类顺序固定；每个非空分类包含帧引用、可观察的共同画面特征和仅引用本类帧的裂变方向。失败帧不得被分类；没有成功帧时不编造视觉洞察。高光帧只能表述为处于点击指数峰值秒点，不能被宣称对应某句脚本、真实点击次数、转化表现或因果关系。渲染器会校验报告占位符、目录锚点、分类完整性与最终 HTML。
 
 `05｜单素材深度分析` 为每个入选素材提供可键盘操作的页签，默认显示榜单排名最高的素材。它展示按秒数排序的成功高光帧、逐帧画面观察、画面总结，以及固定顺序的 `点赞指数`、`流失指数`、`点击指数`、`互动指数`、`评论指数` 五项“秒级拆解”小图。`0s` 同时命中点击峰值时仅展示一张封面帧卡片，但保留封面与点击峰值的双重入选原因和峰值信息。新事实包中的 `materialDeepDives` 必须与入选素材一一对应；每张成功帧仅观察一次，指标观察的秒数必须存在于对应趋势。每项必须由模型生成 `visual_summary`、`data_summary`、`audience_summary`、`marketing_summary`、`replication_advice`、`risk_notes`、`opening_judgment`、`visual_rhythm`、`peak_frame_reading`、`second_level_reading`、`audience_fit`、`xiaoxian_dun_reference` 和 `do_not_copy`。该部分不得输出脚本、话术、真实互动次数、转化或因果结论；没有新事实包契约的历史报告可重渲染为无数据状态。
+
+AI 二次分析采用“事实锚点 -> 业务判断 -> 下一步验证”结构。组合、人群、素材对比、秒级诊断、竞品模式和机会地图的每条正文至少 80 个中文字符；每条单素材摘要至少 80 个中文字符，逐帧观察至少 40 个中文字符，秒级观察至少 60 个中文字符。HTML 会完整展示 13 个单素材摘要字段；短句、重复文本、“事实包返回”等处理过程话术和已知占位语会被渲染门禁拒绝。实验矩阵至少四条，分别覆盖放量、改写、验证和风险控制。
 
 HTML 报告使用深棕、暖金、米白的离线视觉系统。报告正文只展示结论与必要关键数字，结构化 `evidence` 保留在 `final-report-data.json`，不进入用户可读报告正文，也不展示为可展开区域。高光帧预览必须支持点击、键盘焦点和 Escape 关闭；失败帧不输出损坏图片，素材诊断继续保留。
 

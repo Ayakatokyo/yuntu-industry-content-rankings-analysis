@@ -1420,6 +1420,20 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn(".second-level-section {", css)
         self.assertIn("padding-top: 24px;", css)
 
+    def test_unified_report_mobile_navigation_does_not_force_page_overflow(self):
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("@media (max-width: 760px)", css)
+        self.assertIn(".unified-report .report-nav", css)
+        self.assertIn("flex-wrap: wrap;", css)
+        self.assertIn(".unified-report .report-nav a", css)
+        self.assertIn("white-space: normal;", css)
+        self.assertIn("@media (max-width: 720px)", css)
+        self.assertIn(".unified-yuntu .material-deep-layout.side-tabs", css)
+        self.assertIn("grid-template-columns: 1fr;", css)
+
     def test_render_report_omits_highlight_category_heading(self):
         report = load_module()
         analysis = self.deep_dive_analysis()

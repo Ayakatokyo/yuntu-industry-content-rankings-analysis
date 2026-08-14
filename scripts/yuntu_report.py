@@ -130,38 +130,7 @@ HIGHLIGHT_CATEGORY_LABELS = {
 }
 HIGHLIGHT_CATEGORY_ORDER = tuple(HIGHLIGHT_CATEGORY_LABELS)
 SECOND_LEVEL_TRENDS = ("点赞指数", "流失指数", "点击指数", "互动指数", "评论指数")
-DEEP_DIVE_SUMMARY_FIELDS = (
-    "visual_summary",
-    "data_summary",
-    "audience_summary",
-    "marketing_summary",
-    "replication_advice",
-    "risk_notes",
-    "opening_judgment",
-    "visual_rhythm",
-    "peak_frame_reading",
-    "second_level_reading",
-    "audience_fit",
-    "xiaoxian_dun_reference",
-    "do_not_copy",
-)
-DEEP_DIVE_FIELD_LABELS = (
-    ("画面总结", "visual_summary"),
-    ("数据总结", "data_summary"),
-    ("人群总结", "audience_summary"),
-    ("营销总结", "marketing_summary"),
-    ("复用建议", "replication_advice"),
-    ("风险提示", "risk_notes"),
-    ("开场判断", "opening_judgment"),
-    ("画面节奏", "visual_rhythm"),
-    ("峰值帧解读", "peak_frame_reading"),
-    ("秒级关系", "second_level_reading"),
-    ("人群匹配", "audience_fit"),
-    ("小仙炖借鉴", "xiaoxian_dun_reference"),
-    ("不建议照搬", "do_not_copy"),
-)
 AI_TEXT_MINIMUMS = {
-    "deep_dive": 40,
     "frame_observation": 24,
     "second_level": 28,
 }
@@ -505,9 +474,6 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
                     lines.extend([f"- {trend_name}：不可用（{metric.get('missing_reason') or '数据不足'}）", ""])
                 else:
                     lines.extend([f"- {trend_name}：见 HTML 交互图表。", ""])
-            lines.extend(["#### AI 二次分析", ""])
-            for label, field in DEEP_DIVE_FIELD_LABELS:
-                lines.extend([f"#### {label}", "", dive[field], ""])
     return "\n".join(lines)
 
 
@@ -695,16 +661,6 @@ def _validate_material_deep_dives(analysis, fact_pack):
         if material_id not in selected_ids or material_id in dives_by_id:
             raise YuntuReportError("materialDeepDives material_id must be selected and unique")
         dives_by_id[material_id] = dive
-        summary_texts = []
-        for field in DEEP_DIVE_SUMMARY_FIELDS:
-            text = dive.get(field)
-            _validate_ai_text(text, f"materialDeepDives {field}", "deep_dive")
-            summary_texts.append(text.strip())
-        if len(summary_texts) != len(set(summary_texts)):
-            raise YuntuReportError(
-                "materialDeepDives AI summary fields must not repeat text"
-            )
-
         frames = [
             frame for frame in facts[material_id].get("highlightFrames", [])
             if isinstance(frame, dict) and frame.get("available")
@@ -1089,7 +1045,6 @@ def _render_html(analysis, material_frames, fact_pack):
         format_metric=_format_metric,
         metric_labels=METRIC_LABELS,
         second_level_trends=SECOND_LEVEL_TRENDS,
-        deep_dive_field_labels=DEEP_DIVE_FIELD_LABELS,
     )
 
     landscape = insight_cards(analysis.get("rankingOverview", []))

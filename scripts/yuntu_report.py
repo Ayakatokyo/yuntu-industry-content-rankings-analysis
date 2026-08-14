@@ -48,9 +48,12 @@ def _load_html_template():
         "$style",
         "$unified_style",
         "$unified_script",
+        "$top_material_scope",
+        "$highlight_scope",
+        "$material_deep_dive_scope",
         *(f"${name}" for name, _section_id, _title in CURRENT_REPORT_SECTIONS),
     ):
-        if source.count(placeholder) != 1:
+        if len(re.findall(re.escape(placeholder) + r"(?![A-Za-z0-9_])", source)) != 1:
             raise YuntuReportError(
                 f"report template must contain exactly one {placeholder}"
             )
@@ -920,6 +923,12 @@ def _render_html(analysis, material_frames, fact_pack):
             text = f"{source_name}：{sample_count} 条" if isinstance(sample_count, int) else source_name
         return '<span class="report-scope-badge">' + esc(text) + "</span>"
 
+    def section_scope(section_number, *scope_keys):
+        badges = "".join(scope_badge(scope_key) for scope_key in scope_keys)
+        if not badges:
+            return ""
+        return '<div class="report-scope-badges" aria-label="' + section_number + ' 章数据范围">' + badges + "</div>"
+
     def insight_cards(items):
         return "".join(
             f'<article class="insight-row"><p>{esc(_generic_text(item.get("summary", "")))}</p>'
@@ -1064,7 +1073,6 @@ def _render_html(analysis, material_frames, fact_pack):
         analysis["topMaterialCombination"],
         esc=esc,
         generic_text=_generic_text,
-        scope_badge=scope_badge,
         dimension_labels=TOP_MATERIAL_LABELS,
         dimensions=TOP_MATERIAL_DIMENSIONS,
         brand_summary_fields=BRAND_SUMMARY_FIELDS,
@@ -1083,6 +1091,7 @@ def _render_html(analysis, material_frames, fact_pack):
         html_module=html,
         json_module=json,
         math_module=math,
+        scope=section_scope("02", "ranking"),
     )
     performance = insight_cards(analysis.get("materialComparison", []))
     opportunities = insight_cards(analysis.get("xiaoxianDunOpportunityMap", []))
@@ -1156,6 +1165,9 @@ def _render_html(analysis, material_frames, fact_pack):
         source_list=source_label("Top1000 榜单数据"),
         source_detail=source_label("成功秒级拆解素材"),
         source_derived=source_label("TOP1000 + 成功秒级拆解素材派生"),
+        top_material_scope=section_scope("01", "ranking", "detail"),
+        highlight_scope=section_scope("04", "detail"),
+        material_deep_dive_scope=section_scope("05", "detail"),
         top_material_combination=top_material_combination,
         audience_insights=audience_insights,
         script_insights=script_insights,

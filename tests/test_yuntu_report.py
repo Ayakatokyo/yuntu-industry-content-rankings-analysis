@@ -374,10 +374,10 @@ class YuntuReportTests(unittest.TestCase):
             with self.assertRaisesRegex(report.YuntuReportError, "executiveSummary"):
                 report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
 
-    def test_render_report_shows_top_material_scope_and_executive_summary(self):
+    def test_render_report_renders_section_scope_labels_without_deep_frame_coverage(self):
         report = load_module()
-        fact_pack = {
-            "reportScopes": {
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["reportScopes"] = {
                 "ranking": {"source_name": "TOP1000 榜单素材", "sample_count": 1000},
                 "detail": {
                     "source_name": "成功秒级拆解素材",
@@ -385,13 +385,12 @@ class YuntuReportTests(unittest.TestCase):
                     "success_count": 5,
                     "failed_count": 1,
                 },
-            }
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             analysis_path = root / "analysis.json"
             analysis_path.write_text(
-                json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8"
+                json.dumps(self.deep_dive_analysis(), ensure_ascii=False), encoding="utf-8"
             )
             report.render_report(
                 analysis_json=analysis_path,
@@ -405,9 +404,14 @@ class YuntuReportTests(unittest.TestCase):
                 encoding="utf-8"
             )
 
-        self.assertIn('class="top-material-scope"', rendered)
+        self.assertIn('aria-label="01 章数据范围"', rendered)
+        self.assertIn('aria-label="02 章数据范围"', rendered)
+        self.assertIn('aria-label="04 章数据范围"', rendered)
+        self.assertIn('aria-label="05 章数据范围"', rendered)
+        self.assertNotIn('aria-label="03 章数据范围"', rendered)
         self.assertIn("TOP1000 榜单素材：1000 条", rendered)
         self.assertIn("成功秒级拆解素材：5 条", rendered)
+        self.assertNotIn("高光帧可用：", rendered)
         self.assertIn("TOP1000 整体分析", rendered)
         self.assertIn("各品牌 TOP 对比分析（成功秒级拆解素材）", rendered)
         self.assertNotIn("品牌筛选 TOP30", rendered)
@@ -827,7 +831,6 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=fact_pack)
             rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
 
-        self.assertIn("高光帧可用：0/2", rendered)
         self.assertIn("视频链接已过期", rendered)
         self.assertIn("暂无可用于观察的高光帧。", rendered)
 

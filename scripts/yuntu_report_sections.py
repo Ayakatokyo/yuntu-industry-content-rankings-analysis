@@ -14,21 +14,12 @@ def render_top_material_combination(
     *,
     esc,
     generic_text,
-    scope_badge,
     dimension_labels,
     dimensions,
     brand_summary_fields,
     brand_order,
     people_overlap_notice,
 ):
-    scope_badges = "".join(scope_badge(scope_key) for scope_key in ("ranking", "detail"))
-    scope_summary = (
-        '<div class="top-material-scope" aria-label="01 章数据范围">'
-        + scope_badges
-        + "</div>"
-        if scope_badges
-        else ""
-    )
     overall_by_dimension = {
         item["dimension"]: item for item in value["overallConclusions"]
     }
@@ -81,8 +72,7 @@ def render_top_material_combination(
         for index, item in enumerate(ordered_brands)
     )
     return (
-        scope_summary
-        + '<article class="top-material-executive yuntu-content-card"><h3>综合结论</h3><p>'
+        '<article class="top-material-executive yuntu-content-card"><h3>综合结论</h3><p>'
         + esc(generic_text(value["executiveSummary"]["summary"]))
         + "</p></article>"
         + '<div class="top-material-overall yuntu-content-card"><h3>TOP1000 整体分析</h3>'
@@ -113,6 +103,7 @@ def render_audience_insights(
     html_module,
     json_module,
     math_module,
+    scope,
 ):
     def audience_dimension_chart(key, dimension):
         label = dimension_labels[key]
@@ -190,7 +181,7 @@ def render_audience_insights(
     ai_insights = insight_cards(analysis["audienceInsights"])
     if not isinstance(value, dict):
         return ('<section class="section" id="audience-insights"><header class="section-header">'
-                '<h2>02｜人群洞察</h2></header>' + ai_insights + '<p class="data-note">暂无人群汇总数据。</p></section>')
+                '<h2>02｜人群洞察</h2>' + scope + '</header>' + ai_insights + '<p class="data-note">暂无人群汇总数据。</p></section>')
     dimensions = value.get("dimensions", {})
     if not isinstance(dimensions, dict):
         return ""
@@ -214,7 +205,7 @@ def render_audience_insights(
     if topn_records_json:
         dashboard_attrs += ' data-audience-records="' + topn_records_json + '"'
     return ('<section class="section" id="audience-insights"><header class="section-header">'
-        '<h2>02｜人群洞察</h2></header><div class="audience-ai-insights">' + ai_insights
+        '<h2>02｜人群洞察</h2>' + scope + '</header><div class="audience-ai-insights">' + ai_insights
         + '</div><div' + dashboard_attrs + '><div class="audience-data-card raw-fact-card">'
         + '<div class="collapsible-head"><button class="collapsible-toggle" type="button" data-collapsible-toggle data-collapsible-expanded-label="收起人群汇总数据" data-collapsible-collapsed-label="展开人群汇总数据" aria-expanded="true" aria-controls="audience-dashboard-body"><span class="collapsible-toggle-action">收起人群汇总数据</span></button></div>'
         + '<div class="collapsible-body" id="audience-dashboard-body">' + topn_controls
@@ -337,10 +328,11 @@ def render_material_deep_dive(
             reason = frame.get("failure_reason") or frame.get("missing_reason") or frame.get("reason")
             if reason and str(reason) not in failed_reasons:
                 failed_reasons.append(str(reason))
-        frame_coverage = "高光帧可用：" + str(len(frames)) + "/" + str(len(all_frames))
-        if failed_reasons:
-            frame_coverage += "；" + "；".join(failed_reasons)
+        frame_state = ""
+        if not frames:
+            reason_text = "；".join(failed_reasons)
+            frame_state = '<p class="data-note">暂无可用于观察的高光帧。' + (esc(reason_text) if reason_text else "") + "</p>"
         frame_observations = "".join('<li data-deep-frame-observation data-frame-ref="' + esc(frame.get("frame_ref")) + '"><strong>' + esc(deep_frame_label(frame)) + "｜" + esc(frame.get("second")) + "s：</strong>" + esc(observations.get(frame.get("frame_ref"), "")) + "</li>" for frame in frames) or "<li>暂无可用于观察的高光帧。</li>"
         metric_summary = "".join('<li><span>' + esc(metric_labels[key]) + '</span><b>' + esc(format_metric(fact.get("metrics", {}).get(key), key)) + "</b></li>" for key in ("show_cnt", "ctr", "cvr", "play_3s_rate", "interact_rate") if key in fact.get("metrics", {}))
-        panels.append('<article class="material-deep-panel material-card" role="tabpanel" id="material-deep-panel-' + str(index) + '" aria-labelledby="material-deep-tab-' + str(index) + '"' + ("" if selected_tab else " hidden") + '><header class="material-deep-header material-head"><span>#' + esc(fact.get("rank", "-")) + '</span><h3>' + esc(title) + '</h3><p class="material-deep-id">素材 ID：' + esc(material_id) + '</p></header><ul class="material-deep-metrics">' + metric_summary + '</ul><dl class="material-fact-tags">' + source_tags(fact, "people_tags", "核心人群标签") + source_tags(fact, "material_tags", "营销卖点标签") + '</dl><div class="material-detail-tabs" role="tablist" aria-label="' + esc(title) + '分析视图">' + '<button type="button" role="tab" aria-selected="true" data-material-detail-tab="visual" data-material-detail-target="material-detail-visual-' + str(index) + '">高光帧观察</button>' + '<button type="button" role="tab" aria-selected="false" tabindex="-1" data-material-detail-tab="timeline" data-material-detail-target="material-detail-timeline-' + str(index) + '">秒级拆解</button>' + '<button type="button" role="tab" aria-selected="false" tabindex="-1" data-material-detail-tab="script" data-material-detail-target="material-detail-script-' + str(index) + '">脚本分析</button></div>' + '<div class="material-detail-panel" id="material-detail-visual-' + str(index) + '" role="tabpanel"><div class="deep-visual-strip"><div class="deep-frame-selection-controls">' + '<button type="button" data-deep-frame-select-all>全选</button><button type="button" data-deep-frame-clear>清空</button></div><div class="deep-frame-grid fixed-six">' + "".join(frame_cards) + '</div><p class="deep-frame-coverage">' + esc(frame_coverage) + '</p></div><div class="deep-frame-observations"><h4>高光帧观察</h4><ul data-deep-frame-observations>' + frame_observations + '</ul></div></div><div class="material-detail-panel" id="material-detail-timeline-' + str(index) + '" role="tabpanel" hidden><div class="second-level-section">' + second_level_timeline(metrics, index) + '</div></div><div class="material-detail-panel data-state" id="material-detail-script-' + str(index) + '" role="tabpanel" hidden><span>脚本数据：未接入</span><p>当前未提供脚本正文与时间戳段落，暂不输出内容公式、话术结论和帧-话术对应关系。</p></div></article>')
+        panels.append('<article class="material-deep-panel material-card" role="tabpanel" id="material-deep-panel-' + str(index) + '" aria-labelledby="material-deep-tab-' + str(index) + '"' + ("" if selected_tab else " hidden") + '><header class="material-deep-header material-head"><span>#' + esc(fact.get("rank", "-")) + '</span><h3>' + esc(title) + '</h3><p class="material-deep-id">素材 ID：' + esc(material_id) + '</p></header><ul class="material-deep-metrics">' + metric_summary + '</ul><dl class="material-fact-tags">' + source_tags(fact, "people_tags", "核心人群标签") + source_tags(fact, "material_tags", "营销卖点标签") + '</dl><div class="material-detail-tabs" role="tablist" aria-label="' + esc(title) + '分析视图">' + '<button type="button" role="tab" aria-selected="true" data-material-detail-tab="visual" data-material-detail-target="material-detail-visual-' + str(index) + '">高光帧观察</button>' + '<button type="button" role="tab" aria-selected="false" tabindex="-1" data-material-detail-tab="timeline" data-material-detail-target="material-detail-timeline-' + str(index) + '">秒级拆解</button>' + '<button type="button" role="tab" aria-selected="false" tabindex="-1" data-material-detail-tab="script" data-material-detail-target="material-detail-script-' + str(index) + '">脚本分析</button></div>' + '<div class="material-detail-panel" id="material-detail-visual-' + str(index) + '" role="tabpanel"><div class="deep-visual-strip"><div class="deep-frame-selection-controls">' + '<button type="button" data-deep-frame-select-all>全选</button><button type="button" data-deep-frame-clear>清空</button></div><div class="deep-frame-grid fixed-six">' + "".join(frame_cards) + '</div>' + frame_state + '</div><div class="deep-frame-observations"><h4>高光帧观察</h4><ul data-deep-frame-observations>' + frame_observations + '</ul></div></div><div class="material-detail-panel" id="material-detail-timeline-' + str(index) + '" role="tabpanel" hidden><div class="second-level-section">' + second_level_timeline(metrics, index) + '</div></div><div class="material-detail-panel data-state" id="material-detail-script-' + str(index) + '" role="tabpanel" hidden><span>脚本数据：未接入</span><p>当前未提供脚本正文与时间戳段落，暂不输出内容公式、话术结论和帧-话术对应关系。</p></div></article>')
     return '<div class="material-deep-layout side-tabs"><div class="material-deep-tab-list" role="tablist" aria-label="单素材深度分析">' + "".join(tabs) + '</div><div class="material-deep-panels">' + "".join(panels) + "</div></div>"

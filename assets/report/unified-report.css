@@ -1169,10 +1169,14 @@ body.unified-report {
   text-align: center;
 }
 
-.unified-yuntu .top-material-scope {
+.unified-yuntu .top-material-scope,
+.unified-yuntu .report-scope-badges {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.unified-yuntu .top-material-scope {
   margin: 0 0 16px;
 }
 

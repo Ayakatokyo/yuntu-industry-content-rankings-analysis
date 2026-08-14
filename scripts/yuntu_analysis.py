@@ -5,7 +5,13 @@ from pathlib import Path
 from statistics import median
 
 from rpa_io import write_json_atomically
-from yuntu_highlights import ALLOWED_HIGHLIGHT_TRENDS, generate_standard_highlights
+from yuntu_highlights import (
+    ALLOWED_HIGHLIGHT_TRENDS,
+    details_missing_standard_highlights,
+    generate_standard_highlights_for_detail,
+    load_highlights_manifest,
+    write_highlights_manifest,
+)
 from yuntu_top_materials import (
     build_audience_dashboard,
     build_top_material_combination,
@@ -458,7 +464,13 @@ def prepare_analysis(*, input_dir, output_dir):
                 "detailDataAvailability": detail.get("data_availability", {}),
             }
         )
-    highlights = generate_standard_highlights(details, root)
+    highlights = load_highlights_manifest(root)
+    for detail in details_missing_standard_highlights(details, root):
+        highlights[str(detail["material_id"])] = generate_standard_highlights_for_detail(
+            detail, root
+        )
+    if details:
+        write_highlights_manifest(root, highlights)
     for fact in material_facts:
         frames = highlights.get(str(fact["material_id"]), [])
         fact["highlightFrames"] = frames

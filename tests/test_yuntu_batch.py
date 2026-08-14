@@ -2,6 +2,8 @@ import importlib.util
 import json
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -23,7 +25,11 @@ def load_batch():
 class FakeInvoker:
     def __init__(self, list_result, detail_results):
         self.list_result = list_result
-        self.detail_results = list(detail_results)
+        self.detail_results = (
+            dict(detail_results)
+            if isinstance(detail_results, dict)
+            else list(detail_results)
+        )
         self.list_calls = []
         self.detail_calls = []
 
@@ -33,6 +39,8 @@ class FakeInvoker:
 
     def invoke_detail(self, shop_id, detail_params):
         self.detail_calls.append((shop_id, detail_params))
+        if isinstance(self.detail_results, dict):
+            return self.detail_results[detail_params["material_id"]]
         return self.detail_results.pop(0)
 
 
@@ -47,6 +55,55 @@ class FakeDownloader:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(self.contents_by_url[file_url], encoding="utf-8")
         return target
+
+
+class ConcurrentInvoker:
+    def __init__(self, material_ids, detail_handler):
+        self.material_ids = material_ids
+        self.detail_handler = detail_handler
+        self.list_calls = []
+        self.detail_calls = []
+        self.detail_started = []
+        self._lock = threading.Lock()
+        self._active = 0
+        self.max_active = 0
+
+    def invoke_list(self, shop_id, list_params):
+        self.list_calls.append((shop_id, list_params))
+        return {
+            "success": True,
+            "data": [
+                {
+                    "material_id": material_id,
+                    "title": f"素材-{material_id}",
+                    "object_index": {},
+                    "people_tag_entry": [],
+                    "material_tag_entry": [],
+                    "page_industry": "食品饮料",
+                }
+                for material_id in self.material_ids
+            ],
+        }
+
+    def invoke_detail(self, shop_id, detail_params):
+        material_id = detail_params["material_id"]
+        with self._lock:
+            self.detail_calls.append((shop_id, detail_params))
+            self.detail_started.append(material_id)
+            self._active += 1
+            self.max_active = max(self.max_active, self._active)
+        try:
+            return self.detail_handler(material_id)
+        finally:
+            with self._lock:
+                self._active -= 1
+
+
+def detail_result(material_id):
+    return {
+        "success": True,
+        "data": [{"materialId": material_id, "dateRangeType": "LAST_7_DAYS", "trends": []}],
+    }
 
 
 class YuntuBatchTests(unittest.TestCase):
@@ -64,14 +121,152 @@ class YuntuBatchTests(unittest.TestCase):
             },
         }
 
+    def test_fetch_batch_runs_three_detail_rpas_concurrently(self):
+        batch = load_batch()
+
+        def slow_detail(material_id):
+            time.sleep(0.08)
+            return detail_result(material_id)
+
+        invoker = ConcurrentInvoker(["101", "202", "303"], slow_detail)
+        with tempfile.TemporaryDirectory() as directory:
+            status = batch.fetch_batch(
+                shop_id="shop-42",
+                list_params={"industry": "食品饮料"},
+                detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                target_top_n=3,
+                candidate_top_n=3,
+                output_dir=directory,
+                invoker=invoker,
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(invoker.max_active, 3)
+
+    def test_fetch_batch_starts_highlights_before_other_wave_details_finish(self):
+        batch = load_batch()
+        highlights_started = threading.Event()
+        release_details = threading.Event()
+
+        def detail_handler(material_id):
+            if material_id in {"202", "303"}:
+                release_details.wait(timeout=1)
+            return detail_result(material_id)
+
+        def highlighter(detail, _root):
+            if detail["material_id"] == "101":
+                highlights_started.set()
+            return []
+
+        batch.generate_standard_highlights_for_detail = highlighter
+        invoker = ConcurrentInvoker(["101", "202", "303"], detail_handler)
+        result = []
+        with tempfile.TemporaryDirectory() as directory:
+            runner = threading.Thread(
+                target=lambda: result.append(
+                    batch.fetch_batch(
+                        shop_id="shop-42",
+                        list_params={"industry": "食品饮料"},
+                        detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                        target_top_n=3,
+                        candidate_top_n=3,
+                        output_dir=directory,
+                        invoker=invoker,
+                    )
+                )
+            )
+            runner.start()
+            try:
+                self.assertTrue(highlights_started.wait(timeout=0.3))
+            finally:
+                release_details.set()
+                runner.join(timeout=2)
+
+        self.assertFalse(runner.is_alive())
+        self.assertEqual(result, [0])
+
+    def test_fetch_batch_waits_for_wave_highlights_before_next_wave(self):
+        batch = load_batch()
+        first_highlight_started = threading.Event()
+        release_highlight = threading.Event()
+
+        def highlighter(detail, _root):
+            if detail["material_id"] == "101":
+                first_highlight_started.set()
+                release_highlight.wait(timeout=1)
+            return []
+
+        batch.generate_standard_highlights_for_detail = highlighter
+        invoker = ConcurrentInvoker(["101", "202", "303", "404"], detail_result)
+        result = []
+        with tempfile.TemporaryDirectory() as directory:
+            runner = threading.Thread(
+                target=lambda: result.append(
+                    batch.fetch_batch(
+                        shop_id="shop-42",
+                        list_params={"industry": "食品饮料"},
+                        detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                        target_top_n=4,
+                        candidate_top_n=4,
+                        output_dir=directory,
+                        invoker=invoker,
+                    )
+                )
+            )
+            runner.start()
+            try:
+                self.assertTrue(first_highlight_started.wait(timeout=1))
+                self.assertNotIn("404", invoker.detail_started)
+            finally:
+                release_highlight.set()
+                runner.join(timeout=2)
+
+        self.assertFalse(runner.is_alive())
+        self.assertEqual(result, [0])
+
+    def test_highlight_failure_does_not_request_an_extra_detail(self):
+        batch = load_batch()
+
+        def failing_highlighter(detail, _root):
+            if detail["material_id"] == "101":
+                raise RuntimeError("ffmpeg unavailable")
+            return []
+
+        batch.generate_standard_highlights_for_detail = failing_highlighter
+        invoker = ConcurrentInvoker(["101", "202", "303", "404"], detail_result)
+        with tempfile.TemporaryDirectory() as directory:
+            status = batch.fetch_batch(
+                shop_id="shop-42",
+                list_params={"industry": "食品饮料"},
+                detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                target_top_n=3,
+                candidate_top_n=4,
+                output_dir=directory,
+                invoker=invoker,
+            )
+            manifest = json.loads(
+                (Path(directory) / "batch-manifest.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 0)
+        self.assertNotIn("404", invoker.detail_started)
+        self.assertEqual(
+            next(
+                item["postprocessStatus"]
+                for item in manifest["selectedMaterials"]
+                if item["material_id"] == "101"
+            ),
+            "failed",
+        )
+
     def test_fetch_batch_downloads_csv_normalizes_and_writes_manifest(self):
         batch = load_batch()
         invoker = FakeInvoker(
             self.files_result("https://files.example/list.csv"),
-            [
-                self.files_result("https://files.example/101.csv"),
-                self.files_result("https://files.example/202.csv"),
-            ],
+            {
+                "101": self.files_result("https://files.example/101.csv"),
+                "202": self.files_result("https://files.example/202.csv"),
+            },
         )
         downloader = FakeDownloader(
             {
@@ -695,9 +890,9 @@ class YuntuBatchTests(unittest.TestCase):
                     {"material_id": "303"},
                 ],
             },
-            [
-                {"success": False},
-                {
+            {
+                "101": {"success": False},
+                "202": {
                     "success": True,
                     "data": [
                         {
@@ -707,7 +902,7 @@ class YuntuBatchTests(unittest.TestCase):
                         }
                     ],
                 },
-                {
+                "303": {
                     "success": True,
                     "data": [
                         {
@@ -717,7 +912,7 @@ class YuntuBatchTests(unittest.TestCase):
                         }
                     ],
                 },
-            ],
+            },
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
             status = batch.fetch_batch(
@@ -757,11 +952,11 @@ class YuntuBatchTests(unittest.TestCase):
                     {"material_id": "202", "selectionGroupId": "brand-b:feed", "brandId": "brand-b", "touchpointCode": "feed"},
                 ],
             },
-            [
-                {"success": False},
-                {"success": True, "data": [{"materialId": "201", "selectionGroupId": "brand-b:feed", "brandId": "brand-b", "touchpointCode": "feed", "trends": []}]},
-                {"success": True, "data": [{"materialId": "102", "selectionGroupId": "brand-a:feed", "brandId": "brand-a", "touchpointCode": "feed", "trends": []}]},
-            ],
+            {
+                "101": {"success": False},
+                "201": {"success": True, "data": [{"materialId": "201", "selectionGroupId": "brand-b:feed", "brandId": "brand-b", "touchpointCode": "feed", "trends": []}]},
+                "102": {"success": True, "data": [{"materialId": "102", "selectionGroupId": "brand-a:feed", "brandId": "brand-a", "touchpointCode": "feed", "trends": []}]},
+            },
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -778,7 +973,7 @@ class YuntuBatchTests(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertEqual(
-            [call[1]["material_id"] for call in invoker.detail_calls], ["101", "201", "102"]
+            [item["material_id"] for item in manifest["submittedMaterials"]], ["101", "201", "102"]
         )
         self.assertEqual(
             {item["selectionGroupId"] for item in manifest["selectedMaterials"]},

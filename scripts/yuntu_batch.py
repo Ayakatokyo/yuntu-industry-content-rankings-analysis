@@ -1,5 +1,6 @@
 """Batch fetch orchestration for Yuntu rankings analysis."""
 
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import json
 from pathlib import Path
 import time
@@ -11,11 +12,21 @@ from rpa_io import (
     write_json_atomically,
 )
 from yuntu_normalizer import normalize_detail_records, normalize_list_records
+from yuntu_highlights import (
+    details_missing_standard_highlights,
+    generate_standard_highlights_for_detail,
+    load_highlights_manifest,
+    write_highlights_manifest,
+)
 import yuntu_run_state as run_state
 
 
 class YuntuBatchError(RuntimeError):
     """Raised when a Yuntu batch cannot be started."""
+
+
+DETAIL_WAVE_CONCURRENCY = 3
+HIGHLIGHT_CONCURRENCY = 3
 
 
 class ConnectorInvoker:
@@ -458,6 +469,84 @@ def _refresh_ready_materials(root, manifest):
     )
 
 
+def _invoke_detail_result(*, item, shop_id, detail_date_params, invoker):
+    """Run only the gateway call in a worker; the scheduler owns all writes."""
+    started = time.monotonic()
+    try:
+        return {
+            "item": item,
+            "result": invoker.invoke_detail(
+                shop_id, _detail_request(item, detail_date_params)
+            ),
+            "started": started,
+            "error": None,
+        }
+    except Exception as exc:
+        return {"item": item, "result": None, "started": started, "error": exc}
+
+
+def _generate_highlight_result(detail, root):
+    """Run a material's video download and frame extraction in a worker."""
+    started = time.monotonic()
+    try:
+        return {
+            "material_id": detail["material_id"],
+            "frames": generate_standard_highlights_for_detail(detail, root),
+            "duration": _elapsed(started),
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "material_id": detail["material_id"],
+            "frames": [],
+            "duration": _elapsed(started),
+            "error": exc,
+        }
+
+
+def _next_detail_wave(
+    candidates,
+    next_index,
+    *,
+    selected_ids,
+    rejected_ids,
+    unresolved_ids,
+    selected_by_group,
+    target_top_n,
+    manifest,
+):
+    """Select the next bounded wave while preserving original candidate order."""
+    wave = []
+    known_ids = selected_ids | rejected_ids | unresolved_ids
+    while next_index < len(candidates) and len(wave) < DETAIL_WAVE_CONCURRENCY:
+        item = candidates[next_index]
+        next_index += 1
+        material_id = item["material_id"]
+        group_id = item["selectionGroupId"]
+        if material_id in known_ids:
+            continue
+        if selected_by_group.get(group_id, 0) >= target_top_n:
+            manifest["cancelledMaterials"].append(
+                {**_manifest_material(item), "reason": "target_satisfied"}
+            )
+            known_ids.add(material_id)
+            continue
+        wave.append(item)
+        known_ids.add(material_id)
+    return wave, next_index
+
+
+def _selected_entry(manifest, material_id):
+    return next(
+        (
+            item
+            for item in manifest["selectedMaterials"]
+            if item.get("material_id") == material_id
+        ),
+        None,
+    )
+
+
 def fetch_batch(
     *,
     shop_id,
@@ -581,6 +670,11 @@ def fetch_batch(
     had_rejection = bool(manifest["rejectedMaterials"])
     selected_by_group = {}
     selected_ids = _selected_ids(manifest)
+    rejected_ids = {
+        item.get("material_id")
+        for item in manifest["rejectedMaterials"]
+        if isinstance(item, dict) and isinstance(item.get("material_id"), str)
+    }
     unresolved_ids = {
         item.get("material_id")
         for item in manifest["unresolvedMaterials"]
@@ -589,74 +683,165 @@ def fetch_batch(
     for selected in manifest["selectedMaterials"]:
         group_id = selected.get("selectionGroupId", "default")
         selected_by_group[group_id] = selected_by_group.get(group_id, 0) + 1
-    for item in candidates:
-        rank = item["rank"]
-        material_id = item["material_id"]
-        group_id = item["selectionGroupId"]
-        if material_id in selected_ids or material_id in unresolved_ids:
-            continue
-        if selected_by_group.get(group_id, 0) >= target_top_n:
-            manifest["cancelledMaterials"].append(
-                {**_manifest_material(item), "reason": "target_satisfied"}
-            )
-            continue
-        detail_started = time.monotonic()
-        manifest["submittedMaterials"].append(_manifest_material(item))
+    frames_by_material = load_highlights_manifest(root)
+    pending_details = {}
+    pending_highlights = {}
+    next_index = 0
+
+    def checkpoint():
+        write_highlights_manifest(root, frames_by_material)
+        detail_stage = summary["stages"]["details"]
+        detail_stage["postprocessSubmittedCount"] = sum(
+            item.get("postprocessStatus") in {"running", "succeeded", "failed", "reused"}
+            for item in manifest["selectedMaterials"]
+        )
+        detail_stage["postprocessSucceededCount"] = sum(
+            item.get("postprocessStatus") in {"succeeded", "reused"}
+            for item in manifest["selectedMaterials"]
+        )
+        detail_stage["postprocessFailedCount"] = sum(
+            item.get("postprocessStatus") == "failed"
+            for item in manifest["selectedMaterials"]
+        )
         _sync_stage_counts(summary, manifest, root)
         write_json_atomically(manifest, manifest_path)
         _save_summary(root, summary)
+
+    def submit_highlight(executor, detail):
+        material_id = detail["material_id"]
+        entry = _selected_entry(manifest, material_id)
+        if entry is not None:
+            entry["postprocessStatus"] = "running"
+        future = executor.submit(_generate_highlight_result, detail, root)
+        pending_highlights[future] = material_id
+
+    # Resume never repeats a persisted detail. Missing frames are a separate job.
+    restored_details = []
+    for selected in manifest["selectedMaterials"]:
+        path = selected.get("detailRecordPath")
+        if not isinstance(path, str):
+            continue
         try:
-            raw_detail, detail_source = _materialize_records(
-                invoker.invoke_detail(
-                    shop_id, _detail_request(item, detail_date_params)
-                ),
-                csv_path=root / "raw-csv" / "details" / f"{material_id}.csv",
-                json_path=root / "raw-json" / "details" / f"{material_id}.json",
-                downloader=downloader,
-            )
-            detail_record = normalize_detail_records(
-                raw_detail,
-                material_id=material_id,
-                source_path=_relative(root, detail_source),
-                expected_selection_group=(
-                    item["selectionGroup"] if group_id != "default" else None
-                ),
-            )
-            detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
-            write_json_atomically(detail_record, detail_output)
-            _record_artifact(
-                summary,
-                root,
-                f"detailRecord:{material_id}",
-                detail_output,
-                "normalized_detail",
-            )
-            manifest["selectedMaterials"].append(
-                {
-                    **_manifest_material(item),
-                    "listRecordPath": "normalized/list-records.json",
-                    "detailRecordPath": _relative(root, detail_output),
-                    "rawDetailPath": _relative(root, detail_source),
-                    "timingsSec": {"detailFetchSec": _elapsed(detail_started)},
-                }
-            )
-            selected_ids.add(material_id)
-            selected_by_group[group_id] = selected_by_group.get(group_id, 0) + 1
+            restored_details.append(_load_json(root / path))
+        except (OSError, ValueError):
+            continue
 
-        except Exception as exc:
-            had_rejection = True
-            manifest["rejectedMaterials"].append(
-                {
-                    **_manifest_material(item),
-                    "reason": exc.__class__.__name__,
-                    "error": str(exc),
-                    "timingsSec": {"detailFetchSec": _elapsed(detail_started)},
-                }
-            )
-        _sync_stage_counts(summary, manifest, root)
-        write_json_atomically(manifest, manifest_path)
-        _save_summary(root, summary)
+    with ThreadPoolExecutor(max_workers=DETAIL_WAVE_CONCURRENCY) as detail_executor, ThreadPoolExecutor(
+        max_workers=HIGHLIGHT_CONCURRENCY
+    ) as highlight_executor:
+        for detail in details_missing_standard_highlights(restored_details, root):
+            submit_highlight(highlight_executor, detail)
 
+        while True:
+            if not pending_details and not pending_highlights:
+                wave, next_index = _next_detail_wave(
+                    candidates,
+                    next_index,
+                    selected_ids=selected_ids,
+                    rejected_ids=rejected_ids,
+                    unresolved_ids=unresolved_ids,
+                    selected_by_group=selected_by_group,
+                    target_top_n=target_top_n,
+                    manifest=manifest,
+                )
+                if not wave:
+                    break
+                for item in wave:
+                    manifest["submittedMaterials"].append(_manifest_material(item))
+                    future = detail_executor.submit(
+                        _invoke_detail_result,
+                        item=item,
+                        shop_id=shop_id,
+                        detail_date_params=detail_date_params,
+                        invoker=invoker,
+                    )
+                    pending_details[future] = item["material_id"]
+                checkpoint()
+
+            done, _ = wait(
+                set(pending_details) | set(pending_highlights),
+                return_when=FIRST_COMPLETED,
+            )
+            for future in done:
+                if future in pending_details:
+                    result = future.result()
+                    pending_details.pop(future)
+                    item = result["item"]
+                    material_id = item["material_id"]
+                    try:
+                        if result["error"] is not None:
+                            raise result["error"]
+                        raw_detail, detail_source = _materialize_records(
+                            result["result"],
+                            csv_path=root / "raw-csv" / "details" / f"{material_id}.csv",
+                            json_path=root / "raw-json" / "details" / f"{material_id}.json",
+                            downloader=downloader,
+                        )
+                        detail_record = normalize_detail_records(
+                            raw_detail,
+                            material_id=material_id,
+                            source_path=_relative(root, detail_source),
+                            expected_selection_group=(
+                                item["selectionGroup"]
+                                if item["selectionGroupId"] != "default"
+                                else None
+                            ),
+                        )
+                        detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
+                        write_json_atomically(detail_record, detail_output)
+                        _record_artifact(
+                            summary,
+                            root,
+                            f"detailRecord:{material_id}",
+                            detail_output,
+                            "normalized_detail",
+                        )
+                        manifest["selectedMaterials"].append(
+                            {
+                                **_manifest_material(item),
+                                "listRecordPath": "normalized/list-records.json",
+                                "detailRecordPath": _relative(root, detail_output),
+                                "rawDetailPath": _relative(root, detail_source),
+                                "timingsSec": {"detailFetchSec": _elapsed(result["started"])},
+                                "postprocessStatus": "pending",
+                            }
+                        )
+                        selected_ids.add(material_id)
+                        selected_by_group[item["selectionGroupId"]] = (
+                            selected_by_group.get(item["selectionGroupId"], 0) + 1
+                        )
+                        submit_highlight(highlight_executor, detail_record)
+                    except Exception as exc:
+                        had_rejection = True
+                        rejected_ids.add(material_id)
+                        manifest["rejectedMaterials"].append(
+                            {
+                                **_manifest_material(item),
+                                "reason": exc.__class__.__name__,
+                                "error": str(exc),
+                                "timingsSec": {"detailFetchSec": _elapsed(result["started"])},
+                            }
+                        )
+                else:
+                    result = future.result()
+                    pending_highlights.pop(future)
+                    material_id = result["material_id"]
+                    entry = _selected_entry(manifest, material_id)
+                    if entry is not None:
+                        entry["postprocessTimingsSec"] = {
+                            "highlightSec": result["duration"]
+                        }
+                        if result["error"] is None:
+                            entry["postprocessStatus"] = "succeeded"
+                            frames_by_material[material_id] = result["frames"]
+                        else:
+                            entry["postprocessStatus"] = "failed"
+                            entry["postprocessError"] = str(result["error"])
+            checkpoint()
+
+    manifest["selectedMaterials"] = sorted(
+        manifest["selectedMaterials"], key=lambda item: item.get("rank", 0)
+    )
     ready_materials = [
         list_by_id[item["material_id"]] for item in manifest["selectedMaterials"]
     ]

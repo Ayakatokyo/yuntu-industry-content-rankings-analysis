@@ -36,9 +36,9 @@ metadata:
 
 一次 `fetch` 执行只允许调用一次列表连接器：先调用
 `rpa.conn.juliang.yt.industry.content.rankings.list`，再从列表响应中按顺序选取
-`material_id`，逐个调用 `rpa.conn.juliang.yt.industry.content.rankings.detail`。
+`material_id`，按固定波次调用 `rpa.conn.juliang.yt.industry.content.rankings.detail`。
 列表连接器完成后必须先完成结构化落盘：`normalized/list-records.json` 保存素材本身的标题、身份、发布时间、指标、标签和列表筛选上下文；`normalized/detail-request-params.json` 保存下一步详情连接器所需的 `material_id` 与详情日期参数。详情连接器只消费后者，分析事实包消费前者和成功详情记录。
-`fetch` 是长任务：详情 RPA 单次调用可能超过 300 秒，必须使用平台提供的异步/长任务会话执行，并通过 `status` 定期观察落盘进度；不得在 300 秒同步窗口中等待完整批次。详情阶段中断后，只能以完全相同的运行契约续跑。契约包含 `shop_id`、全部列表筛选、详情日期、`targetTopN` 与 `candidateTopN`；参数不一致时，脚本会在调用 RPA 前拒绝该目录，必须新建输出目录。旧目录缺少可验证的 `run-summary.json` 时同样拒绝，不得把历史 CSV 当作本次列表。
+`fetch` 是长任务：详情 RPA 单次调用可能超过 300 秒，必须使用平台提供的异步/长任务会话执行，并通过 `status` 定期观察落盘进度；不得在 300 秒同步窗口中等待完整批次。详情阶段固定每波最多并行 3 个素材；某条详情持久化后立即在独立后处理线程中下载视频并提取标准高光帧，但下一波详情只能在本波全部详情和高光帧任务均进入终态后启动。高光帧失败只记录具体失败原因，不会重发详情 RPA 或触发额外补位。详情阶段中断后，只能以完全相同的运行契约续跑。契约包含 `shop_id`、全部列表筛选、详情日期、`targetTopN` 与 `candidateTopN`；参数不一致时，脚本会在调用 RPA 前拒绝该目录，必须新建输出目录。旧目录缺少可验证的 `run-summary.json` 时同样拒绝，不得把历史 CSV 当作本次列表。
 
 ## 运行环境要求
 
@@ -112,7 +112,7 @@ python <skill-root>/scripts/rpa_connector.py prepare-analysis \
   --output-dir "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis"
 ```
 
-`prepare-analysis` 会自动为每条成功详情素材生成标准高光帧，无需也不支持额外的趋势选择参数。每条素材固定截取 `0s` 封面帧，并从“点击指数”完整序列中按局部峰值的点击值降序、秒数升序选取最多 5 帧。连续相等的平台只取最早秒数；峰值不足 5 个时保留实际数量，不用其他指标或高点区间补足。帧写入 `highlights/<material_id>/`，清单为 `highlights-manifest.json`。
+详情 RPA 成功持久化后会立即为该素材生成标准高光帧；`prepare-analysis` 优先复用 `highlights-manifest.json` 中完整的本地帧集，只为中断后缺失或不完整的素材补处理，无需也不支持额外的趋势选择参数。每条素材固定截取 `0s` 封面帧，并从“点击指数”完整序列中按局部峰值的点击值降序、秒数升序选取最多 5 帧。连续相等的平台只取最早秒数；峰值不足 5 个时保留实际数量，不用其他指标或高点区间补足。帧写入 `highlights/<material_id>/`，清单为 `highlights-manifest.json`。
 
 视频下载、FFmpeg 或单帧截图失败只记录具体失败原因，不阻断事实包或最终报告；HTML 只展示成功 JPEG，不输出损坏图片。这里的“点击指数”不是实际点击次数，局部峰值也不能用于推断转化因果。
 
@@ -240,4 +240,4 @@ HTML 报告使用深棕、暖金、米白的离线视觉系统。报告正文只
 
 `retry-failed` 只重试 `batch-manifest.json` 中的 `rejectedMaterials`，不会重跑列表请求，也不会重复请求已经成功落盘的详情。`retry-unresolved` 只重试 `unresolvedMaterials`，必须先获得用户确认，因为中断时 RPA 后台可能已经完成但响应未被本地进程写盘。
 
-`prepare-analysis` 会在本地下载可用视频并提取标准高光帧；`render-report` 本身不下载视频、不提取帧、不调用外部模型，也不生成新的业务判断。
+`fetch` 会在详情 RPA 波次中并行完成可用视频的标准高光帧处理；`prepare-analysis` 仅复用或补处理缺失帧；`render-report` 本身不下载视频、不提取帧、不调用外部模型，也不生成新的业务判断。

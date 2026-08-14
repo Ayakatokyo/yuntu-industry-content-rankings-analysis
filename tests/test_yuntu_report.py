@@ -22,6 +22,77 @@ def load_module():
 
 
 class YuntuReportTests(unittest.TestCase):
+    def test_progressive_section_renderers_are_explicitly_orchestrated(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+
+        component = (ROOT / "scripts" / "yuntu_report_sections.py").read_text(encoding="utf-8")
+        self.assertIn("def render_top_material_combination(", component)
+        self.assertIn("def render_audience_insights(", component)
+        self.assertIn("def render_highlight_insights(", component)
+        self.assertIn("def render_material_deep_dive(", component)
+        render_html = source.split("def _render_html", 1)[1].split("def render_report", 1)[0]
+        self.assertIn("render_top_material_combination(", render_html)
+        self.assertIn("render_audience_insights(", render_html)
+        self.assertIn("render_script_insights(", render_html)
+        self.assertIn("render_highlight_insights(", render_html)
+        self.assertIn("render_material_deep_dive(", render_html)
+
+    def test_script_insights_renderer_has_a_component_owner(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        component_path = ROOT / "scripts" / "yuntu_report_sections.py"
+
+        self.assertTrue(component_path.exists())
+        self.assertIn("from yuntu_report_sections import", source)
+        self.assertNotIn("def render_script_insights():", source)
+        component = component_path.read_text(encoding="utf-8")
+        self.assertIn("def render_script_insights():", component)
+
+    def test_all_progressive_section_entrypoints_have_component_owner(self):
+        component = (ROOT / "scripts" / "yuntu_report_sections.py").read_text(encoding="utf-8")
+        for name in (
+            "render_top_material_combination",
+            "render_audience_insights",
+            "render_script_insights",
+            "render_highlight_insights",
+            "render_material_deep_dive",
+        ):
+            self.assertIn(f"def {name}(", component)
+
+    def test_top_material_renderer_owns_its_markup(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        component = (ROOT / "scripts" / "yuntu_report_sections.py").read_text(encoding="utf-8")
+
+        self.assertIn('class="top-material-executive yuntu-content-card"', component)
+        self.assertIn('class="brand-tabs"', component)
+        self.assertNotIn('def top_material_combination_cards(value):', source)
+
+    def test_audience_renderer_owns_its_markup(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        component = (ROOT / "scripts" / "yuntu_report_sections.py").read_text(encoding="utf-8")
+
+        self.assertIn('class="audience-dashboard"', component)
+        self.assertIn('data-audience-records=', component)
+        self.assertNotIn('def audience_dashboard_cards(value):', source)
+        self.assertNotIn('def audience_dimension_chart(key, dimension):', source)
+        self.assertNotIn('def _legacy_audience_dashboard_cards(value):', source)
+        self.assertNotIn('def _legacy_audience_dimension_chart(key, dimension):', source)
+
+    def test_visual_sections_have_explicit_component_entrypoints(self):
+        component = (ROOT / "scripts" / "yuntu_report_sections.py").read_text(encoding="utf-8")
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn("def render_highlight_insights(", component)
+        self.assertIn("def render_material_deep_dive(", component)
+        self.assertIn("highlight_insights = render_highlight_insights(", source)
+        self.assertIn("material_deep_dive = render_material_deep_dive(", source)
+
+    def test_visual_section_components_own_their_markup(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        component = (ROOT / "scripts" / "yuntu_report_sections.py").read_text(encoding="utf-8")
+        self.assertIn('class="highlight-frame-card"', component)
+        self.assertIn('class="material-deep-panel material-card"', component)
+        self.assertNotIn("def highlight_insights_cards():", source)
+        self.assertNotIn("def material_deep_dive_cards():", source)
+
     def test_skill_documents_unified_report_delivery_contract(self):
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
 

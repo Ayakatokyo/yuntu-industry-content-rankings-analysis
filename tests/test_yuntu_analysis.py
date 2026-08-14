@@ -383,10 +383,15 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("marketingSummary", prompt)
         self.assertIn("成功秒级拆解素材集合", prompt)
         self.assertNotIn("品牌筛选 TOP30", prompt)
-        self.assertIn(
+        self.assertNotIn(
             "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。",
             prompt,
         )
+        self.assertIn("不进入用户可见正文", prompt)
+        self.assertIn("不得写执行过程", prompt)
+        self.assertIn("事实锚点 -> 业务判断 -> 下一步验证", prompt)
+        self.assertIn("至少 80 个中文字符", prompt)
+        self.assertIn("至少 4 条", prompt)
 
     def test_second_level_breakdown_keeps_five_yuntu_indices_in_fixed_order(self):
         analysis = load_module()

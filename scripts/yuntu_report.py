@@ -121,9 +121,6 @@ AUDIENCE_DIMENSION_LABELS = {
     "gender": "性别",
     "crowd": "八大人群",
 }
-PEOPLE_TAG_OVERLAP_NOTICE = (
-    "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。"
-)
 HIGHLIGHT_CATEGORY_LABELS = {
     "portrait": "人像画面",
     "product": "产品画面",
@@ -163,6 +160,17 @@ DEEP_DIVE_FIELD_LABELS = (
     ("小仙炖借鉴", "xiaoxian_dun_reference"),
     ("不建议照搬", "do_not_copy"),
 )
+AI_TEXT_MINIMUMS = {
+    "deep_dive": 40,
+    "frame_observation": 24,
+    "second_level": 28,
+}
+AI_PLACEHOLDER_TEXT = (
+    "事实包返回",
+    "该素材用于观察",
+    "该指数记录",
+    "该帧为封面或点击指数局部峰值秒点的已提取画面",
+)
 AUDIT_JSON_PATTERN = re.compile(r'(?:\[\s*)?\{\s*"[^"\n]+"\s*:')
 DEEP_DIVE_FORBIDDEN_CLAIM = re.compile(
     r"脚本|话术|内容公式|真实(?:点击|互动|点赞|评论)(?:量|次数)?|转化|因果|导致|提升"
@@ -183,13 +191,6 @@ def _load_analysis(path):
         )
     for field in EVIDENCE_FIELDS:
         _validate_evidence_section(analysis[field], field)
-    if not all(
-        PEOPLE_TAG_OVERLAP_NOTICE in item["summary"]
-        for item in analysis["audienceInsights"]
-    ):
-        raise YuntuReportError(
-            "audienceInsights summaries must state the overlapping-label limitation"
-        )
     _validate_top_material_combination(analysis["topMaterialCombination"])
     _validate_experiments(analysis["experimentMatrix"])
     return analysis
@@ -220,6 +221,14 @@ def _validate_deep_dive_text(value, field):
     _validate_summary(value, field)
     if DEEP_DIVE_FORBIDDEN_CLAIM.search(value):
         raise YuntuReportError(f"{field} must not contain scripts, counts, conversion, or causal claims")
+
+
+def _validate_ai_text(value, field, quality_key):
+    _validate_deep_dive_text(value, field)
+    if len(value.strip()) < AI_TEXT_MINIMUMS[quality_key]:
+        raise YuntuReportError(f"{field} is below the AI quality minimum")
+    if any(token in value for token in AI_PLACEHOLDER_TEXT):
+        raise YuntuReportError(f"{field} contains placeholder text")
 
 
 def _validate_evidence_and_material_ids(item, field):
@@ -374,8 +383,6 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
     lines.extend(["## 01｜TOP 素材组合结论", "", "### TOP1000 整体分析", ""])
     for dimension in TOP_MATERIAL_DIMENSIONS:
         summary = overall[dimension]["summary"]
-        if dimension == "people":
-            summary = f"{summary} {PEOPLE_TAG_OVERLAP_NOTICE}"
         lines.extend([
             f"{TOP_MATERIAL_LABELS[dimension]}，{summary}",
             "",
@@ -498,6 +505,9 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
                     lines.extend([f"- {trend_name}：不可用（{metric.get('missing_reason') or '数据不足'}）", ""])
                 else:
                     lines.extend([f"- {trend_name}：见 HTML 交互图表。", ""])
+            lines.extend(["#### AI 二次分析", ""])
+            for label, field in DEEP_DIVE_FIELD_LABELS:
+                lines.extend([f"#### {label}", "", dive[field], ""])
     return "\n".join(lines)
 
 
@@ -685,9 +695,14 @@ def _validate_material_deep_dives(analysis, fact_pack):
         if material_id not in selected_ids or material_id in dives_by_id:
             raise YuntuReportError("materialDeepDives material_id must be selected and unique")
         dives_by_id[material_id] = dive
+        summary_texts = []
         for field in DEEP_DIVE_SUMMARY_FIELDS:
-            _validate_deep_dive_text(
-                dive.get(field), f"materialDeepDives {field}"
+            text = dive.get(field)
+            _validate_ai_text(text, f"materialDeepDives {field}", "deep_dive")
+            summary_texts.append(text.strip())
+        if len(summary_texts) != len(set(summary_texts)):
+            raise YuntuReportError(
+                "materialDeepDives AI summary fields must not repeat text"
             )
 
         frames = [
@@ -702,7 +717,11 @@ def _validate_material_deep_dives(analysis, fact_pack):
         for observation in observations:
             if not isinstance(observation, dict) or not isinstance(observation.get("frame_ref"), str):
                 raise YuntuReportError("materialDeepDives frame_observations must include frame_ref")
-            _validate_deep_dive_text(observation.get("observation"), "materialDeepDives frame observation")
+            _validate_ai_text(
+                observation.get("observation"),
+                "materialDeepDives frame observation",
+                "frame_observation",
+            )
             observation_refs.append(observation["frame_ref"])
         if len(observation_refs) != len(set(observation_refs)) or set(observation_refs) != known_refs:
             raise YuntuReportError("materialDeepDives must observe each successful frame exactly once")
@@ -727,7 +746,11 @@ def _validate_material_deep_dives(analysis, fact_pack):
             if trend_name not in SECOND_LEVEL_TRENDS or trend_name in seen_trends:
                 raise YuntuReportError("materialDeepDives second_level_observations trend_name is invalid")
             seen_trends.add(trend_name)
-            _validate_deep_dive_text(observation.get("summary"), "materialDeepDives second-level summary")
+            _validate_ai_text(
+                observation.get("summary"),
+                "materialDeepDives second-level summary",
+                "second_level",
+            )
             seconds = observation.get("evidence_seconds")
             if not isinstance(seconds, list) or not all(isinstance(second, int) for second in seconds):
                 raise YuntuReportError("materialDeepDives evidence_seconds must be integer seconds")
@@ -1066,6 +1089,7 @@ def _render_html(analysis, material_frames, fact_pack):
         format_metric=_format_metric,
         metric_labels=METRIC_LABELS,
         second_level_trends=SECOND_LEVEL_TRENDS,
+        deep_dive_field_labels=DEEP_DIVE_FIELD_LABELS,
     )
 
     landscape = insight_cards(analysis.get("rankingOverview", []))
@@ -1077,7 +1101,6 @@ def _render_html(analysis, material_frames, fact_pack):
         dimensions=TOP_MATERIAL_DIMENSIONS,
         brand_summary_fields=BRAND_SUMMARY_FIELDS,
         brand_order=TOP_MATERIAL_BRAND_ORDER,
-        people_overlap_notice=PEOPLE_TAG_OVERLAP_NOTICE,
     )
     audience_insights = render_audience_insights(
         fact_pack.get("audienceDashboard"),

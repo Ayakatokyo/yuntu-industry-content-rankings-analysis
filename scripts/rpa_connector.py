@@ -24,12 +24,14 @@ try:
         collection_status,
         fetch_batch,
         retry_failed_batch,
+        retry_unresolved_batch,
     )
 except ImportError:
     ConnectorInvoker = None
     collection_status = None
     fetch_batch = None
     retry_failed_batch = None
+    retry_unresolved_batch = None
 
 try:
     from yuntu_analysis import prepare_analysis
@@ -673,7 +675,7 @@ def fetch_batch_analysis(
     }
     target_top_n = _validate_top_n(target_top_n)
     candidate_top_n = (
-        target_top_n * 3 if candidate_top_n is None else _validate_top_n(candidate_top_n)
+        target_top_n + 2 if candidate_top_n is None else _validate_top_n(candidate_top_n)
     )
     try:
         return fetch_batch(
@@ -697,6 +699,22 @@ def retry_failed_batch_analysis(shop_id, *, output_dir):
         raise RpaConnectorError("batch retry support is unavailable")
     try:
         return retry_failed_batch(
+            shop_id=shop_id,
+            output_dir=output_dir,
+            invoker=ConnectorInvoker(
+                lambda sid, params: invoke_list(sid, params),
+                lambda sid, params: invoke_detail(sid, params),
+            ),
+        )
+    except Exception as exc:
+        raise RpaConnectorError(str(exc)) from exc
+
+
+def retry_unresolved_batch_analysis(shop_id, *, output_dir):
+    if retry_unresolved_batch is None or ConnectorInvoker is None:
+        raise RpaConnectorError("batch unresolved retry support is unavailable")
+    try:
+        return retry_unresolved_batch(
             shop_id=shop_id,
             output_dir=output_dir,
             invoker=ConnectorInvoker(
@@ -753,6 +771,12 @@ def _parser():
     )
     retry_parser.add_argument("--shop-id", required=True)
     retry_parser.add_argument("--output-dir", required=True)
+    retry_unresolved_parser = commands.add_parser(
+        "retry-unresolved",
+        help="Explicitly retry detail requests interrupted before persistence",
+    )
+    retry_unresolved_parser.add_argument("--shop-id", required=True)
+    retry_unresolved_parser.add_argument("--output-dir", required=True)
     fetch_parser = commands.add_parser("fetch", help="Fetch a list and details")
     fetch_parser.add_argument("--shop-id", required=True)
     fetch_parser.add_argument("--top-n", type=_positive_int_argument, default=10)
@@ -883,6 +907,13 @@ def main(argv=None):
             )
         if args.command == "retry-failed":
             status = retry_failed_batch_analysis(
+                args.shop_id,
+                output_dir=args.output_dir,
+            )
+            print(Path(args.output_dir) / "batch-manifest.json")
+            return status
+        if args.command == "retry-unresolved":
+            status = retry_unresolved_batch_analysis(
                 args.shop_id,
                 output_dir=args.output_dir,
             )

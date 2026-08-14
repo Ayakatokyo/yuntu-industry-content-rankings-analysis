@@ -170,6 +170,7 @@ def _new_manifest(
         "submittedMaterials": [],
         "selectedMaterials": [],
         "rejectedMaterials": [],
+        "unresolvedMaterials": [],
         "cancelledMaterials": [],
         "timingsSec": {},
     }
@@ -177,6 +178,131 @@ def _new_manifest(
 
 def _load_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _open_or_new_manifest(
+    *,
+    manifest_path,
+    list_params,
+    detail_date_params,
+    target_top_n,
+    candidate_top_n,
+    summary,
+):
+    if not manifest_path.is_file():
+        return _new_manifest(
+            list_params=list_params,
+            detail_date_params=detail_date_params,
+            target_top_n=target_top_n,
+            candidate_top_n=candidate_top_n,
+            summary=summary,
+        )
+    try:
+        manifest = _load_json(manifest_path)
+    except (OSError, ValueError) as exc:
+        raise YuntuBatchError("existing batch manifest is unreadable") from exc
+    if (
+        manifest.get("filters") != list_params
+        or manifest.get("detailDateRange") != detail_date_params
+        or manifest.get("targetTopN") != target_top_n
+        or manifest.get("candidateTopN") != candidate_top_n
+    ):
+        raise YuntuBatchError(
+            "output directory belongs to a different collection contract; choose a new output directory"
+        )
+    manifest.update(
+        {
+            "schemaVersion": 2,
+            "runId": summary["runId"],
+            "parameterFingerprint": summary["parameterFingerprint"],
+            "collectionContract": summary["collectionContract"],
+            "status": "running",
+        }
+    )
+    for key in (
+        "candidateMaterials",
+        "selectionGroups",
+        "submittedMaterials",
+        "selectedMaterials",
+        "rejectedMaterials",
+        "unresolvedMaterials",
+        "cancelledMaterials",
+    ):
+        manifest.setdefault(key, [])
+    manifest.setdefault("timingsSec", {})
+    return manifest
+
+
+def _detail_source_path(root, material_id):
+    csv_path = root / "raw-csv" / "details" / f"{material_id}.csv"
+    json_path = root / "raw-json" / "details" / f"{material_id}.json"
+    if csv_path.is_file():
+        return _relative(root, csv_path)
+    if json_path.is_file():
+        return _relative(root, json_path)
+    return None
+
+
+def _restore_persisted_details(root, manifest, candidates):
+    """Rebuild successful manifest entries from durable normalized detail files."""
+    candidate_by_id = {item["material_id"]: item for item in candidates}
+    existing = {
+        item.get("material_id"): item
+        for item in manifest.get("selectedMaterials", [])
+        if isinstance(item, dict) and isinstance(item.get("material_id"), str)
+    }
+    restored = []
+    detail_dir = root / "normalized" / "detail-records"
+    for material_id, item in candidate_by_id.items():
+        detail_path = detail_dir / f"{material_id}.json"
+        if not detail_path.is_file():
+            continue
+        try:
+            detail = _load_json(detail_path)
+        except (OSError, ValueError):
+            continue
+        if detail.get("material_id") != material_id:
+            continue
+        previous = existing.get(material_id, {})
+        restored.append(
+            {
+                **_manifest_material(item),
+                "listRecordPath": "normalized/list-records.json",
+                "detailRecordPath": _relative(root, detail_path),
+                "rawDetailPath": previous.get("rawDetailPath")
+                or _detail_source_path(root, material_id),
+                "timingsSec": previous.get("timingsSec", {}),
+            }
+        )
+    manifest["selectedMaterials"] = sorted(restored, key=lambda entry: entry["rank"])
+
+
+def _mark_unresolved_submissions(manifest, candidates):
+    """Keep interrupted detail requests visible without silently retrying them."""
+    candidate_by_id = {item["material_id"]: item for item in candidates}
+    terminal_ids = _selected_ids(manifest)
+    for key in ("rejectedMaterials", "cancelledMaterials", "unresolvedMaterials"):
+        terminal_ids.update(
+            item.get("material_id")
+            for item in manifest.get(key, [])
+            if isinstance(item, dict) and isinstance(item.get("material_id"), str)
+        )
+    unresolved = list(manifest.get("unresolvedMaterials", []))
+    for submitted in manifest.get("submittedMaterials", []):
+        if not isinstance(submitted, dict):
+            continue
+        material_id = submitted.get("material_id")
+        item = candidate_by_id.get(material_id)
+        if item is None or material_id in terminal_ids:
+            continue
+        unresolved.append(
+            {
+                **_manifest_material(item),
+                "reason": "interrupted_before_persistence",
+            }
+        )
+        terminal_ids.add(material_id)
+    manifest["unresolvedMaterials"] = unresolved
 
 
 def _has_existing_collection_artifacts(root):
@@ -238,6 +364,7 @@ def _sync_stage_counts(summary, manifest, root):
             "detailRecordsPersistedCount": persisted_count,
             "selectedCount": len(manifest.get("selectedMaterials", [])),
             "rejectedCount": len(manifest.get("rejectedMaterials", [])),
+            "unresolvedCount": len(manifest.get("unresolvedMaterials", [])),
             "cancelledCount": len(manifest.get("cancelledMaterials", [])),
         }
     )
@@ -362,7 +489,8 @@ def fetch_batch(
         summary = _open_collection_summary(root, contract)
     except run_state.YuntuRunStateError as exc:
         raise YuntuBatchError(str(exc)) from exc
-    manifest = _new_manifest(
+    manifest = _open_or_new_manifest(
+        manifest_path=manifest_path,
         list_params=list_params,
         detail_date_params=detail_date_params,
         target_top_n=target_top_n,
@@ -435,6 +563,8 @@ def fetch_batch(
         )
         group["candidateCount"] += 1
     manifest["selectionGroups"] = list(groups.values())
+    _restore_persisted_details(root, manifest, candidates)
+    _mark_unresolved_submissions(manifest, candidates)
     detail_requests = [
         _detail_request(item, detail_date_params)
         for item in candidates
@@ -448,12 +578,23 @@ def fetch_batch(
     _save_summary(root, summary)
     list_by_id = {record["material_id"]: record for record in list_records}
 
-    had_rejection = False
+    had_rejection = bool(manifest["rejectedMaterials"])
     selected_by_group = {}
+    selected_ids = _selected_ids(manifest)
+    unresolved_ids = {
+        item.get("material_id")
+        for item in manifest["unresolvedMaterials"]
+        if isinstance(item, dict) and isinstance(item.get("material_id"), str)
+    }
+    for selected in manifest["selectedMaterials"]:
+        group_id = selected.get("selectionGroupId", "default")
+        selected_by_group[group_id] = selected_by_group.get(group_id, 0) + 1
     for item in candidates:
         rank = item["rank"]
         material_id = item["material_id"]
         group_id = item["selectionGroupId"]
+        if material_id in selected_ids or material_id in unresolved_ids:
+            continue
         if selected_by_group.get(group_id, 0) >= target_top_n:
             manifest["cancelledMaterials"].append(
                 {**_manifest_material(item), "reason": "target_satisfied"}
@@ -499,6 +640,7 @@ def fetch_batch(
                     "timingsSec": {"detailFetchSec": _elapsed(detail_started)},
                 }
             )
+            selected_ids.add(material_id)
             selected_by_group[group_id] = selected_by_group.get(group_id, 0) + 1
 
         except Exception as exc:
@@ -584,6 +726,7 @@ def collection_status(*, output_dir):
                 "persistedRecordCount": persisted_details,
                 "selectedCount": len(manifest.get("selectedMaterials", [])),
                 "rejectedCount": len(manifest.get("rejectedMaterials", [])),
+                "unresolvedCount": len(manifest.get("unresolvedMaterials", [])),
                 "cancelledCount": len(manifest.get("cancelledMaterials", [])),
             },
         },
@@ -601,7 +744,7 @@ def collection_status(*, output_dir):
     }
 
 
-def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
+def _retry_batch_items(*, shop_id, output_dir, invoker, item_key, downloader=None):
     if not isinstance(shop_id, str) or not shop_id.strip():
         raise YuntuBatchError("shop_id is required")
     downloader = FileDownloader() if downloader is None else downloader
@@ -633,12 +776,16 @@ def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
     detail_date_params = contract["detailDateRange"]
     if manifest.get("detailDateRange") != detail_date_params:
         raise YuntuBatchError("batch manifest detailDateRange does not match collection contract")
-    rejected = list(manifest.get("rejectedMaterials", []))
-    if not rejected:
+    retry_items = list(manifest.get(item_key, []))
+    if not retry_items:
         _refresh_ready_materials(root, manifest)
         manifest["status"] = (
             "success"
-            if _target_satisfied(manifest)
+            if (
+                not manifest.get("rejectedMaterials")
+                and not manifest.get("unresolvedMaterials")
+                and _target_satisfied(manifest)
+            )
             else manifest.get("status", "partial")
         )
         summary["status"] = manifest["status"]
@@ -649,11 +796,11 @@ def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
         return 0 if manifest["status"] == "success" else 1
 
     selected_ids = _selected_ids(manifest)
-    still_rejected = []
-    for item in rejected:
+    still_retry_items = []
+    for item in retry_items:
         material_id = item.get("material_id")
         if not isinstance(material_id, str) or not material_id.isdigit():
-            still_rejected.append(item)
+            still_retry_items.append(item)
             continue
         rank = item.get("rank")
         detail_started = time.monotonic()
@@ -713,16 +860,20 @@ def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
             updated["error"] = str(exc)
             updated["retryCount"] = retry_count
             updated["timingsSec"] = {"detailFetchSec": _elapsed(detail_started)}
-            still_rejected.append(updated)
+            still_retry_items.append(updated)
 
     manifest["selectedMaterials"] = sorted(
         manifest.get("selectedMaterials", []), key=lambda item: item.get("rank", 0)
     )
-    manifest["rejectedMaterials"] = still_rejected
+    manifest[item_key] = still_retry_items
     _refresh_ready_materials(root, manifest)
     manifest["status"] = (
         "success"
-        if not still_rejected and _target_satisfied(manifest)
+        if (
+            not manifest.get("rejectedMaterials")
+            and not manifest.get("unresolvedMaterials")
+            and _target_satisfied(manifest)
+        )
         else "partial"
     )
     summary["status"] = manifest["status"]
@@ -733,6 +884,26 @@ def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
     write_json_atomically(manifest, manifest_path)
     _save_summary(root, summary)
     return 0 if manifest["status"] == "success" else 1
+
+
+def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
+    return _retry_batch_items(
+        shop_id=shop_id,
+        output_dir=output_dir,
+        invoker=invoker,
+        item_key="rejectedMaterials",
+        downloader=downloader,
+    )
+
+
+def retry_unresolved_batch(*, shop_id, output_dir, invoker, downloader=None):
+    return _retry_batch_items(
+        shop_id=shop_id,
+        output_dir=output_dir,
+        invoker=invoker,
+        item_key="unresolvedMaterials",
+        downloader=downloader,
+    )
 
 
 def _relative(root, path):

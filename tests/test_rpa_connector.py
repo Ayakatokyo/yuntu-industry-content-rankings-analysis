@@ -86,6 +86,40 @@ class RpaConnectorTest(unittest.TestCase):
     def test_connector_script_exists(self):
         self.assertTrue(SCRIPT_PATH.exists(), "analysis connector has not been implemented")
 
+    def test_fetch_batch_uses_target_plus_two_candidates_by_default(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            connector, "fetch_batch", return_value=0
+        ) as fetch_batch:
+            status = connector.fetch_batch_analysis(
+                "shop-42",
+                {"industry": "食品饮料"},
+                {"date_range_type": "LAST_7_DAYS"},
+                target_top_n=5,
+                output_dir=directory,
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(fetch_batch.call_args.kwargs["candidate_top_n"], 7)
+
+    def test_main_dispatches_explicit_unresolved_retry(self):
+        connector = self.connector()
+        with mock.patch.object(
+            connector, "retry_unresolved_batch_analysis", return_value=0
+        ) as retry, mock.patch("sys.stdout", new_callable=io.StringIO):
+            status = connector.main(
+                [
+                    "retry-unresolved",
+                    "--shop-id",
+                    "shop-42",
+                    "--output-dir",
+                    "output",
+                ]
+            )
+
+        self.assertEqual(status, 0)
+        retry.assert_called_once_with("shop-42", output_dir="output")
+
     def test_fixed_gateway_metadata_cannot_be_overridden(self):
         connector = self.connector()
         self.assertEqual(

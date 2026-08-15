@@ -121,7 +121,7 @@ class YuntuBatchTests(unittest.TestCase):
             },
         }
 
-    def test_fetch_batch_runs_three_detail_rpas_concurrently(self):
+    def test_fetch_batch_runs_two_detail_rpas_concurrently(self):
         batch = load_batch()
 
         def slow_detail(material_id):
@@ -141,7 +141,7 @@ class YuntuBatchTests(unittest.TestCase):
             )
 
         self.assertEqual(status, 0)
-        self.assertEqual(invoker.max_active, 3)
+        self.assertEqual(invoker.max_active, 2)
 
     def test_fetch_batch_starts_highlights_before_other_wave_details_finish(self):
         batch = load_batch()

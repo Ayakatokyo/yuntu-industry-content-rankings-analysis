@@ -25,7 +25,7 @@ class YuntuBatchError(RuntimeError):
     """Raised when a Yuntu batch cannot be started."""
 
 
-DETAIL_WAVE_CONCURRENCY = 3
+DETAIL_WAVE_CONCURRENCY = 2
 HIGHLIGHT_CONCURRENCY = 3
 
 
@@ -518,7 +518,29 @@ def _next_detail_wave(
     """Select the next bounded wave while preserving original candidate order."""
     wave = []
     known_ids = selected_ids | rejected_ids | unresolved_ids
-    while next_index < len(candidates) and len(wave) < DETAIL_WAVE_CONCURRENCY:
+    remaining_required = sum(
+        max(
+            group.get("targetTopN", target_top_n)
+            - selected_by_group.get(group["selectionGroupId"], 0),
+            0,
+        )
+        for group in manifest.get("selectionGroups", [])
+    )
+    wave_limit = min(DETAIL_WAVE_CONCURRENCY, remaining_required)
+    if wave_limit == 0:
+        while next_index < len(candidates):
+            item = candidates[next_index]
+            next_index += 1
+            material_id = item["material_id"]
+            group_id = item["selectionGroupId"]
+            if material_id in known_ids:
+                continue
+            if selected_by_group.get(group_id, 0) >= target_top_n:
+                manifest["cancelledMaterials"].append(
+                    {**_manifest_material(item), "reason": "target_satisfied"}
+                )
+        return wave, next_index
+    while next_index < len(candidates) and len(wave) < wave_limit:
         item = candidates[next_index]
         next_index += 1
         material_id = item["material_id"]

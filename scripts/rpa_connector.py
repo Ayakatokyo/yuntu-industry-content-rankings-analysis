@@ -778,7 +778,7 @@ def _parser():
     retry_unresolved_parser.add_argument("--shop-id", required=True)
     retry_unresolved_parser.add_argument("--output-dir", required=True)
     fetch_parser = commands.add_parser(
-        "fetch", help="Fetch a list and details in fixed three-material waves"
+        "fetch", help="Fetch a list and details in fixed two-material waves"
     )
     fetch_parser.add_argument("--shop-id", required=True)
     fetch_parser.add_argument("--top-n", type=_positive_int_argument, default=10)

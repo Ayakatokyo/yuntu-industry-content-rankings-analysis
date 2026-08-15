@@ -247,6 +247,78 @@ def _marketing_summary(records):
     }
 
 
+def build_marketing_dashboard(records, *, limit=1000):
+    """Build TOP material marketing-tag facts for the chapter 02 dashboard."""
+    selected = select_top_materials(records, limit=limit)
+    tag_counts = {}
+    tag_material_ids = {}
+    category_counts = {}
+    category_material_ids = {}
+    labeled_record_ids = set()
+    for record in selected:
+        material_id = record.get("material_id")
+        has_marketing_tag = False
+        for tag in record.get("material_tags", []):
+            if not isinstance(tag, str) or not tag.strip():
+                continue
+            has_marketing_tag = True
+            tag = tag.strip()
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            tag_material_ids.setdefault(tag, set()).add(material_id)
+            category = _marketing_category(tag)
+            category_counts[category] = category_counts.get(category, 0) + 1
+            category_material_ids.setdefault(category, set()).add(material_id)
+        if has_marketing_tag and material_id is not None:
+            labeled_record_ids.add(material_id)
+    sorted_tags = sorted(tag_counts.items(), key=lambda item: (-item[1], item[0]))
+    total_occurrence_count = sum(tag_counts.values())
+    dashboard_categories = []
+    for category, occurrence_count in sorted(
+        category_counts.items(),
+        key=lambda item: (-item[1], item[0]),
+    ):
+        category_tags = [
+            {
+                "tag": tag,
+                "count": count,
+                "materialCount": len(tag_material_ids.get(tag, set())),
+            }
+            for tag, count in sorted(
+                ((tag, count) for tag, count in tag_counts.items() if _marketing_category(tag) == category),
+                key=lambda item: (-item[1], item[0]),
+            )
+        ]
+        dashboard_categories.append(
+            {
+                "category": category,
+                "tagCount": len(category_tags),
+                "occurrenceCount": occurrence_count,
+                "materialCount": len(category_material_ids.get(category, set())),
+                "share": occurrence_count / total_occurrence_count if total_occurrence_count else None,
+                "tags": category_tags,
+                "topTags": category_tags[:8],
+            }
+        )
+    return {
+        "labelMode": "marketing_tag_category_share",
+        "recordCount": len(selected),
+        "labeledRecordCount": len(labeled_record_ids),
+        "unlabeledRecordCount": len(selected) - len(labeled_record_ids),
+        "tagCount": len(tag_counts),
+        "occurrenceCount": total_occurrence_count,
+        "topTags": [
+            {
+                "tag": tag,
+                "count": count,
+                "materialCount": len(tag_material_ids.get(tag, set())),
+                "category": _marketing_category(tag),
+            }
+            for tag, count in sorted_tags[:20]
+        ],
+        "categories": dashboard_categories,
+    }
+
+
 def _tag_metric_comparisons(records):
     tags = sorted({tag for record in records for tag in record.get("material_tags", []) if isinstance(tag, str) and tag})
     comparisons = []

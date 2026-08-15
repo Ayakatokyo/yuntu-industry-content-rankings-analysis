@@ -14,6 +14,7 @@ from yuntu_highlights import (
 )
 from yuntu_top_materials import (
     build_audience_dashboard,
+    build_marketing_dashboard,
     build_top_material_combination,
     select_top_materials,
 )
@@ -346,10 +347,22 @@ def _data_limitations(material_facts):
     )
 
 
+def _chapter02_scope_fact(records, *, label, limit):
+    selected = select_top_materials(records, limit=limit)
+    return {
+        "label": label,
+        "sampleCount": len(selected),
+        "topMaterials": [_ranking_material_fact(record) for record in selected],
+        "audienceDashboard": build_audience_dashboard(selected, limit=len(selected) or 1),
+        "marketingDashboard": build_marketing_dashboard(selected, limit=len(selected) or 1),
+    }
+
+
 def _model_input_sections(
     material_facts,
     pool_records,
     brand_facts,
+    chapter02_ai_facts,
     candidate_pool,
     audience_dashboard,
     tag_insights,
@@ -400,6 +413,7 @@ def _model_input_sections(
             requested_top_n=1000,
         ),
         "brandTopNFacts": brand_facts,
+        "chapter02AiFacts": chapter02_ai_facts,
         "audienceFacts": {
             "labelsMayOverlap": True,
             "notice": "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。",
@@ -455,23 +469,33 @@ def _model_input_sections(
 
 def _prompt_text(*, brand_top_n, filters):
     brands = "、".join(str(brand) for brand in filters.get("brands", []) if brand)
+    scope_labels = "、".join(["all（全量 TOP1000）", *(str(brand) for brand in filters.get("brands", []) if brand)])
+    brand_scope_label = (
+        f"Top {brand_top_n}"
+        if isinstance(brand_top_n, int) and brand_top_n > 0
+        else "全量匹配素材"
+    )
     return f"""# 小仙炖云图行业内容榜单分析任务
 
 读取同目录的 `yuntu-analysis-data.json`，生成 `yuntu-ai-analysis.json`。
 
-本提示词采用固定提示词模板；本次运行参数动态注入，不随机改写分析规则。本次品牌榜单分析数量为 Top {brand_top_n}，品牌范围为：{brands or "未指定品牌"}。
+本提示词采用固定提示词模板；本次运行参数动态注入，不随机改写分析规则。本次品牌榜单分析范围为{brand_scope_label}，品牌范围为：{brands or "未指定品牌"}。
 
-事实包同时提供 `industryTop1000Facts`、`brandTopNFacts`、`rankingFacts`、`audienceFacts`、`marketingFacts`、`secondLevelFacts`、`highlightFrameFacts`、`visualAssets` 与 `dataLimitations`。它们是模型可分析材料：规则只计算事实，模型负责写业务判断。`visualAssets` 是本地图片清单；必须实际查看每张成功 JPEG（`available=true`），原视频 URL 过期时仍使用已落盘的本地帧，不得以 URL 不可用为由跳过画面分析。
+事实包同时提供 `industryTop1000Facts`、`brandTopNFacts`、`chapter02Facts`、`chapter02AiFacts`、`rankingFacts`、`audienceFacts`、`marketingFacts`、`secondLevelFacts`、`highlightFrameFacts`、`visualAssets` 与 `dataLimitations`。它们是模型可分析材料：规则只计算事实，模型负责写业务判断。`chapter02Facts` 仅供报告数据展示，品牌范围为全量匹配素材；`chapter02AiFacts` 才是 02 章 AI 二次分析范围，品牌范围与用户输入的 Top N 一致。`visualAssets` 是本地图片清单；必须实际查看每张成功 JPEG（`available=true`），原视频 URL 过期时仍使用已落盘的本地帧，不得以 URL 不可用为由跳过画面分析。
 
-输出必须是 JSON 对象，包含：topMaterialCombination、rankingOverview、audienceInsights、materialComparison、materialDiagnoses、competitorPatterns、xiaoxianDunOpportunityMap、experimentMatrix。若事实包中存在成功高光帧，还必须包含 highlightDashboard。若每条素材包含 `secondLevelBreakdown`，还必须包含 materialDeepDives。
+输出必须是 JSON 对象，包含：topMaterialCombination、chapter02Insights、rankingOverview、audienceInsights、materialComparison、materialDiagnoses、competitorPatterns、xiaoxianDunOpportunityMap、experimentMatrix。若事实包中存在成功高光帧，还必须包含 highlightDashboard。若每条素材包含 `secondLevelBreakdown`，还必须包含 materialDeepDives。
 
-`topMaterialCombination` 必须是对象，包含 `executiveSummary`、`overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。`executiveSummary` 和 `overallConclusions` 只能引用 `industryTop1000Facts`；每个品牌结论和品牌间对比只能引用 `brandTopNFacts`。`overallConclusions` 必须恰好有三项，每项含 dimension、summary、evidence、material_ids，dimension 分别且只能为 `data`、`people`、`marketing`：data 只总结曝光、点击率、转化率、3s 播放率和 CPM，people 总结年龄、性别和八大人群，marketing 总结成分/功效/痛点/场景/内容形式/促销利益。每个品牌结论必须含 brand、classificationSource、dataSummary、peopleSummary、marketingSummary、evidence、material_ids，品牌名称必须与用户输入的完整参数一致；品牌 Top N 来自同一合并 TOP1000 的运行时品牌匹配，不能引用秒级详情。`brandComparisonConclusion` 只能比较 `brandTopNFacts` 中实际存在的品牌。人群标签重叠口径仅保留在事实和 evidence，不进入用户可见正文；CPM 未由 RPA 提供时写“数据不足以判断”，不得从其他指标推算。标签与指标只能描述共现关系，不得声称因果。
+`topMaterialCombination` 必须是对象，包含 `executiveSummary`、`overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。01 章只负责榜单数据维度：`executiveSummary` 和 `overallConclusions` 只能引用 `industryTop1000Facts`，overallConclusions 只输出 `data` 维度；每个品牌结论只输出 `brand`、`classificationSource`、`dataSummary`、`evidence`、`material_ids`，只能引用 `brandTopNFacts`。品牌名称必须与用户输入的完整参数一致；品牌 Top N 来自同一合并 TOP1000 的运行时品牌匹配，不能引用秒级详情。`brandComparisonConclusion` 只能比较 `brandTopNFacts` 中实际存在的品牌。CPM 未由 RPA 提供时写“数据不足以判断”，不得从其他指标推算。标签与指标只能描述共现关系，不得声称因果。
 
-`audienceInsights` 的每项必须含 summary、evidence，以及 material_id 或 material_ids；summary 应以具体标签、素材或内容方向形成可执行洞察，不得复述人群重叠等数据口径。前五个章节的每一项必须含 summary、evidence，以及 material_id 或 material_ids。experimentMatrix 的每一项必须含 priority、hypothesis、creative_variable、target_audience、success_metric、control、review_action、evidence；每项 evidence 至少引用事实包中真实存在的 material_id、metric、frame_ref，或趋势及其真实秒数。
+02 章必须读取 `chapter02AiFacts`，按其 `scopeOrder` 原样输出 `chapter02Insights`。本次 scope 顺序为：{scope_labels}。scope 第一项固定为 `all`（全量 TOP1000），其后逐个输出每个品牌；每个 scope 必须同时包含 `audienceInsights` 和 `marketingInsights`，并只引用该 scope 的 `audienceDashboard` 与 `marketingDashboard`。品牌 scope 的 AI 二次分析只使用用户输入的 Top N 素材；报告下方汇总图表另从 `chapter02Facts` 读取全量匹配素材。营销卖点分析必须围绕类别、Top 标签和命中素材展开，不把 1399 个标签逐项罗列。
+
+`chapter02Insights` 的每个 scope 使用 `scope`、`label`、`audienceInsights`、`marketingInsights` 字段；每条 insight 使用 `dimension`、`summary`、`evidence`、`material_id` 或 `material_ids`。旧版 `audienceInsights` 仅作为兼容字段，不替代各 scope 分析。
+
+`audienceInsights` 与 `chapter02Insights.scopes[*].marketingInsights` 的每项必须含 summary、evidence，以及 material_id 或 material_ids；summary 应以具体标签、素材或内容方向形成可执行洞察，不得复述人群重叠等数据口径。人群重叠口径只保留在事实和 evidence，不进入用户可见正文。前五个章节的每一项必须含 summary、evidence，以及 material_id 或 material_ids。experimentMatrix 的每一项必须含 priority、hypothesis、creative_variable、target_audience、success_metric、control、review_action、evidence；每项 evidence 至少引用事实包中真实存在的 material_id、metric、frame_ref，或趋势及其真实秒数。
 
 所有结论必须引用素材 ID、指标、标签或秒级趋势作为证据。事实不足时写“数据不足以判断”。解释只能描述可能关系，不得声称因果；不得生成未经业务与合规确认的滋补、孕期或健康功效宣称。不得写执行过程、重跑、补位调度、代码状态、排障细节、事实包返回、口径说明、仅限观察等处理过程话术；摘要必须基于该素材的实际指标、标签、趋势或画面写成业务判断。
 
-所有 AI 二次分析字段采用“少量关键事实锚点 + 多句分析判断”的写法：只选最能支撑结论的指标、标签或素材数量作为依据，随后说明事实意味着什么、为什么值得保留或改写、下一步如何验证；不得把指标或标签清单当作结论主体。用户可见的每条业务洞察采用“事实锚点 -> 业务判断 -> 下一步验证”结构。数据维度应优先比较行业基线与品牌 Top {brand_top_n} 的曝光、CTR、CVR 和 3 秒播放率，指出可测试的优势或短板；人群维度应把标签覆盖与内容主题连成目标人群假设；营销卖点维度应说明标签组合的内容取舍并给出拆分测试方向；品牌对比应指出相对优势、短板或指标取舍。解释只能描述可能关系，不得声称因果。`rankingOverview`、`audienceInsights`、`materialComparison`、`materialDiagnoses`、`competitorPatterns` 与 `xiaoxianDunOpportunityMap` 的每个 summary 至少 80 个中文字符，且同一章节不得重复同义文本。`experimentMatrix` 至少 4 条，覆盖放量、改写、验证和风险控制四类动作，每条基于不同的真实事实锚点。
+所有 AI 二次分析字段采用“少量关键事实锚点 + 多句分析判断”的写法：只选最能支撑结论的指标、标签或素材数量作为依据，随后说明事实意味着什么、为什么值得保留或改写、下一步如何验证；不得把指标或标签清单当作结论主体。用户可见的每条业务洞察采用“事实锚点 -> 业务判断 -> 下一步验证”结构。数据维度应优先比较行业基线与品牌{brand_scope_label}的曝光、CTR、CVR 和 3 秒播放率，指出可测试的优势或短板；人群维度应把标签覆盖与内容主题连成目标人群假设；营销卖点维度应说明标签组合的内容取舍并给出拆分测试方向；品牌对比应指出相对优势、短板或指标取舍。解释只能描述可能关系，不得声称因果。`rankingOverview`、`audienceInsights`、`materialComparison`、`materialDiagnoses`、`competitorPatterns` 与 `xiaoxianDunOpportunityMap` 的每个 summary 至少 80 个中文字符，且同一章节不得重复同义文本。`experimentMatrix` 至少 4 条，覆盖放量、改写、验证和风险控制四类动作，每条基于不同的真实事实锚点。
 
 `highlightDashboard` 只使用事实包中 `available=true` 的 highlightFrames。实际查看每张 JPEG 后，将每张成功帧且仅一次归入 portrait、product、scene、text_overlay、other 中的一个主视觉分类，分类顺序固定为 portrait、product、scene、text_overlay、other。每个非空分类包含 frame_refs、common_patterns 和 derivative_directions；方向只能引用本分类的 frame_refs。没有成功帧时不得编造视觉洞察。高光帧为封面帧和点击指数局部峰值。只能描述该帧处于点击指数峰值秒点；不得说该画面导致点击、转化或指标提升，也不能声称其对应某句脚本话术或真实点击次数。
 
@@ -542,6 +566,11 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
         top_n=brand_top_n,
         brands=brands,
     )
+    full_brand_combination = build_top_material_combination(
+        pool_records,
+        top_n=None,
+        brands=brands,
+    )
     list_by_id = {record.get("material_id"): record for record in pool_records}
     brand_facts = {
         "source_scope": "brand_top_n",
@@ -555,6 +584,42 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
             for brand, group in combination.get("brands", {}).items()
         },
     }
+    scope_order = ["all"]
+    chapter02_facts = {
+        "scopeOrder": scope_order,
+        "all": _chapter02_scope_fact(pool_records, label="全量 TOP1000", limit=1000),
+    }
+    chapter02_ai_facts = {
+        "scopeOrder": scope_order,
+        "all": _chapter02_scope_fact(pool_records, label="全量 TOP1000", limit=1000),
+    }
+    configured_brands = brands or list(brand_facts["brands"])
+    for brand in configured_brands:
+        if brand not in brand_facts["brands"] or brand not in full_brand_combination.get("brands", {}):
+            continue
+        full_brand_materials = full_brand_combination["brands"][brand].get("topMaterials", [])
+        full_brand_records = [
+            list_by_id[item["material_id"]]
+            for item in full_brand_materials
+            if item.get("material_id") in list_by_id
+        ]
+        ai_brand_materials = brand_facts["brands"][brand].get("materials", [])
+        ai_brand_records = [
+            list_by_id[item["material_id"]]
+            for item in ai_brand_materials
+            if item.get("material_id") in list_by_id
+        ]
+        scope_order.append(brand)
+        chapter02_facts[brand] = _chapter02_scope_fact(
+            full_brand_records,
+            label=brand,
+            limit=len(full_brand_records) or 1,
+        )
+        chapter02_ai_facts[brand] = _chapter02_scope_fact(
+            ai_brand_records,
+            label=brand,
+            limit=len(ai_brand_records) or 1,
+        )
     fact_pack = {
         "schemaVersion": 4,
         "filters": manifest.get("filters", {}),
@@ -570,12 +635,15 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
         "trendSummary": trend_summary,
         "dataAvailabilitySummary": _availability_summary(material_facts),
         "materialFacts": material_facts,
+        "chapter02Facts": chapter02_facts,
+        "chapter02AiFacts": chapter02_ai_facts,
     }
     fact_pack.update(
         _model_input_sections(
             material_facts,
             pool_records,
             brand_facts,
+            chapter02_ai_facts,
             candidate_pool,
             audience_dashboard,
             tag_insights,

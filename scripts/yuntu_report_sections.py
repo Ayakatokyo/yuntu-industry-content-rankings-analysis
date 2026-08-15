@@ -19,11 +19,15 @@ def render_top_material_combination(
     brand_summary_fields,
     brand_order,
     brand_top_n=None,
+    brand_scope_label=None,
 ):
     top_n_label = (
-        f"Top {brand_top_n}"
-        if isinstance(brand_top_n, int) and brand_top_n > 0
-        else "Top N"
+        brand_scope_label
+        or (
+            f"Top {brand_top_n}"
+            if isinstance(brand_top_n, int) and brand_top_n > 0
+            else "Top N"
+        )
     )
     overall_by_dimension = {
         item["dimension"]: item for item in value["overallConclusions"]
@@ -100,7 +104,7 @@ def render_top_material_combination(
     )
 
 
-def render_audience_insights(
+def _render_audience_scope(
     value,
     *,
     analysis,
@@ -114,6 +118,9 @@ def render_audience_insights(
     json_module,
     math_module,
     scope,
+    insights=None,
+    dashboard_id="audience-dashboard-body",
+    extra_dashboard_html="",
 ):
     def audience_dimension_chart(key, dimension):
         label = dimension_labels[key]
@@ -188,7 +195,7 @@ def render_audience_insights(
             )
         return f'<article class="chart-card audience-chart"><h3>{esc(label)}分布</h3><p class="data-note">暂无可视化数据。</p></article>'
 
-    ai_insights = insight_cards(analysis["audienceInsights"])
+    ai_insights = insight_cards(insights if isinstance(insights, list) else analysis["audienceInsights"])
     if not isinstance(value, dict):
         return ('<section class="section" id="audience-insights"><header class="section-header">'
                 '<h2>02｜人群洞察</h2>' + scope + '</header>' + ai_insights + '<p class="data-note">暂无人群汇总数据。</p></section>')
@@ -217,9 +224,114 @@ def render_audience_insights(
     return ('<section class="section" id="audience-insights"><header class="section-header">'
         '<h2>02｜人群洞察</h2>' + scope + '</header><div class="audience-ai-insights">' + ai_insights
         + '</div><div' + dashboard_attrs + '><div class="audience-data-card raw-fact-card">'
-        + '<div class="collapsible-head"><button class="collapsible-toggle" type="button" data-collapsible-toggle data-collapsible-expanded-label="收起人群汇总数据" data-collapsible-collapsed-label="展开人群汇总数据" aria-expanded="true" aria-controls="audience-dashboard-body"><span class="collapsible-toggle-action">收起人群汇总数据</span></button></div>'
-        + '<div class="collapsible-body" id="audience-dashboard-body">' + topn_controls
-        + '<div class="audience-chart-grid" data-audience-chart-grid>' + charts + '</div></div></div></div></section>')
+        + '<div class="collapsible-head"><button class="collapsible-toggle" type="button" data-collapsible-toggle data-collapsible-expanded-label="收起人群及营销卖点汇总数据" data-collapsible-collapsed-label="展开人群及营销卖点汇总数据" aria-expanded="true" aria-controls="' + dashboard_id + '"><span class="collapsible-toggle-action">收起人群及营销卖点汇总数据</span></button></div>'
+        + '<div class="collapsible-body" id="' + dashboard_id + '">' + topn_controls
+        + '<div class="audience-chart-grid" data-audience-chart-grid>' + charts + '</div>' + extra_dashboard_html + '</div></div></div></section>')
+
+
+def render_audience_insights(
+    value,
+    *,
+    analysis,
+    fact_pack,
+    facts,
+    esc,
+    generic_text,
+    insight_cards,
+    dimension_labels,
+    html_module,
+    json_module,
+    math_module,
+    scope,
+    chapter02_facts=None,
+):
+    """Render all-data and brand audience/marketing panels with one tab contract."""
+    if not isinstance(chapter02_facts, dict) or not chapter02_facts.get("scopeOrder"):
+        return _render_audience_scope(
+            value, analysis=analysis, fact_pack=fact_pack, facts=facts, esc=esc,
+            generic_text=generic_text, insight_cards=insight_cards,
+            dimension_labels=dimension_labels, html_module=html_module,
+            json_module=json_module, math_module=math_module, scope=scope,
+        )
+
+    insight_bundle = analysis.get("chapter02Insights", {})
+    insight_scopes = insight_bundle.get("scopes", {}) if isinstance(insight_bundle, dict) else {}
+    if not insight_scopes:
+        legacy_audience = analysis.get("audienceInsights", [])
+        combination = analysis.get("topMaterialCombination", {})
+        legacy_brands = {
+            item.get("brand"): item
+            for item in combination.get("brandConclusions", [])
+            if isinstance(item, dict)
+        }
+        overall_marketing = next(
+            (item.get("summary", "") for item in combination.get("overallConclusions", [])
+             if isinstance(item, dict) and item.get("dimension") == "marketing"),
+            "",
+        )
+        insight_scopes = {"all": {"audienceInsights": legacy_audience, "marketingInsights": [{"summary": overall_marketing}]}}
+        for brand, item in legacy_brands.items():
+            insight_scopes[brand] = {
+                "audienceInsights": [{"summary": item.get("peopleSummary", "")}],
+                "marketingInsights": [{"summary": item.get("marketingSummary", "")}],
+            }
+
+    def marketing_html(dashboard):
+        categories = dashboard.get("categories", []) if isinstance(dashboard, dict) else []
+        payload = html_module.escape(json_module.dumps(categories, ensure_ascii=False, separators=(",", ":")), quote=True)
+        if not categories:
+            return '<div class="marketing-dashboard"><h3>营销卖点汇总</h3><p class="data-note">暂无营销卖点汇总数据。</p></div>'
+        maximum = max((item.get("occurrenceCount", 0) for item in categories), default=1) or 1
+        columns = []
+        for item in categories:
+            count = item.get("occurrenceCount", 0)
+            columns.append(
+                '<button class="marketing-category-column" type="button" data-marketing-category-column data-marketing-category="'
+                + esc(item.get("category", "")) + '" aria-label="查看' + esc(item.get("category", ""))
+                + '标签比例"><span class="marketing-category-column-plot"><i style="height:'
+                + f'{count / maximum * 100:.2f}%' + '"></i></span><strong>' + esc(item.get("category", ""))
+                + '</strong><span>' + esc(count) + ' 次</span></button>'
+            )
+        return '<div class="marketing-dashboard marketing-dashboard-card chart-card" data-marketing-categories="' + payload + '"><h3>营销卖点汇总</h3><p class="script-dashboard-hint">共 ' \
+            + esc(dashboard.get("tagCount", 0)) + ' 个标签，' + esc(dashboard.get("occurrenceCount", 0)) \
+            + ' 次命中；点击类别柱查看该类别的标签比例。</p><div data-marketing-view><div class="chart-grid script-dashboard-overview marketing-column-chart" role="group" aria-label="营销卖点一级类别柱状图">' \
+            + "".join(columns) + '</div></div></div>'
+
+    tabs, panels = [], []
+    for index, scope_key in enumerate(chapter02_facts["scopeOrder"]):
+        scope_fact = chapter02_facts.get(scope_key, {})
+        selected = index == 0
+        tab_id, panel_id = f"chapter02-tab-{index}", f"chapter02-panel-{index}"
+        label = scope_fact.get("label", scope_key)
+        tabs.append(
+            '<button type="button" role="tab" id="' + tab_id + '" aria-controls="' + panel_id
+            + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1")
+            + '" data-chapter02-tab="' + esc(scope_key) + '" data-chapter02-target="' + panel_id + '">' + esc(label) + '</button>'
+        )
+        scope_insights = insight_scopes.get(scope_key, {}) if isinstance(insight_scopes, dict) else {}
+        insights = []
+        if isinstance(scope_insights, dict):
+            insights = (scope_insights.get("audienceInsights") or []) + (scope_insights.get("marketingInsights") or [])
+        ai_html = insight_cards(insights) or '<p class="data-note">暂无该范围 AI 二次分析。</p>'
+        rendered_scope = _render_audience_scope(
+            scope_fact.get("audienceDashboard", {}), analysis=analysis,
+            fact_pack={**fact_pack, "audienceTopNRecords": scope_fact.get("topMaterials", [])}, facts=facts, esc=esc,
+            generic_text=generic_text, insight_cards=insight_cards, dimension_labels=dimension_labels,
+            html_module=html_module, json_module=json_module, math_module=math_module,
+            scope="", insights=[], dashboard_id="chapter02-audience-dashboard-body-" + str(index),
+            extra_dashboard_html=marketing_html(scope_fact.get("marketingDashboard", {})),
+        )
+        dashboard_start = rendered_scope.find('<div class="audience-dashboard"')
+        dashboard_html = rendered_scope[dashboard_start:].rsplit("</section>", 1)[0] if dashboard_start >= 0 else '<p class="data-note">暂无人群汇总数据。</p>'
+        panels.append(
+            '<section class="chapter02-panel" role="tabpanel" id="' + panel_id + '" aria-labelledby="' + tab_id + '"'
+            + (" hidden" if not selected else "") + ' data-chapter02-panel="' + esc(scope_key) + '">'
+            + '<h3 class="chapter02-scope-title">' + esc(label) + '</h3><div class="chapter02-ai-insights">'
+            + ai_html + '</div><div class="chapter02-audience-summary">' + dashboard_html + '</div></section>'
+        )
+    return '<section class="section" id="audience-insights"><header class="section-header"><h2>02｜人群及营销卖点洞察</h2>' \
+        + scope + '</header><div class="chapter02-tabs" role="tablist" aria-label="人群及营销卖点洞察范围">' \
+        + "".join(tabs) + '</div><div class="chapter02-panels">' + "".join(panels) + '</div></section>'
 
 
 def render_highlight_insights(

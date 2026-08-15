@@ -552,7 +552,7 @@ class YuntuReportTests(unittest.TestCase):
             html = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
 
         for rendered in (markdown, html):
-            self.assertIn("02｜人群洞察", rendered)
+            self.assertIn("02｜人群及营销卖点洞察", rendered)
             self.assertIn("年龄", rendered)
             self.assertIn("性别", rendered)
             self.assertIn("八大人群", rendered)
@@ -579,9 +579,9 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('class="audience-column-chart"', html)
         self.assertIn('class="audience-column-label">新锐白领</span>', html)
         self.assertIn('class="audience-dashboard" data-audience-records=', html)
-        self.assertIn('data-collapsible-expanded-label="收起人群汇总数据"', html)
-        self.assertIn('data-collapsible-collapsed-label="展开人群汇总数据"', html)
-        self.assertIn('class="collapsible-toggle-action">收起人群汇总数据</span>', html)
+        self.assertIn('data-collapsible-expanded-label="收起人群及营销卖点汇总数据"', html)
+        self.assertIn('data-collapsible-collapsed-label="展开人群及营销卖点汇总数据"', html)
+        self.assertIn('class="collapsible-toggle-action">收起人群及营销卖点汇总数据</span>', html)
         self.assertNotIn('class="collapsible-body-title">人群数据</b>', html)
         self.assertIn('data-audience-topn-range', html)
         self.assertIn('data-audience-topn-input', html)
@@ -608,11 +608,50 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("归一化占比", html)
         self.assertNotIn("覆盖率", markdown)
         self.assertNotIn("覆盖率", html)
+
+    def test_render_report_renders_all_and_brand_chapter02_tabs(self):
+        report = load_module()
+        chapter02 = {
+            "scopeOrder": ["all", "WONDERLAB/万益蓝"],
+            "all": {"label": "全量 TOP1000", "topMaterials": [{"material_id": "1", "rank": 1, "title": "素材一", "people_tags": ["24-30"], "material_tags": ["功效功能_肠道健康"]}], "audienceDashboard": {"dimensions": {"age": {"labelMode": "normalized_tag_share", "recordCount": 1, "buckets": [{"label": "24-30", "materialCount": 1, "materialShare": 1, "chartShare": 1}]} }}, "marketingDashboard": {"tagCount": 3, "occurrenceCount": 5, "categories": [{"category": "成分/原料", "tagCount": 2, "occurrenceCount": 4, "tags": [{"tag": "益生菌", "count": 3}, {"tag": "膳食纤维", "count": 1}], "topTags": [{"tag": "益生菌", "count": 3}]}]}},
+            "WONDERLAB/万益蓝": {"label": "WONDERLAB/万益蓝", "topMaterials": [{"material_id": "2", "rank": 2, "title": "素材二", "people_tags": ["女"], "material_tags": ["功效功能_肠道健康"]}], "audienceDashboard": {"dimensions": {}}, "marketingDashboard": {"tagCount": 1, "occurrenceCount": 1, "categories": [{"category": "功效", "tagCount": 1, "occurrenceCount": 1, "topTags": [{"tag": "肠道健康", "count": 1}]}]}},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "report", fact_pack={"chapter02Facts": chapter02})
+            html = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+            markdown = (root / "report" / "final-report.md").read_text(encoding="utf-8")
+
+        self.assertIn("02｜人群及营销卖点洞察", html)
+        self.assertIn('data-chapter02-tab="all"', html)
+        self.assertIn('data-chapter02-tab="WONDERLAB/万益蓝"', html)
+        self.assertEqual(html.count('role="tabpanel" id="chapter02-panel-'), 2)
+        self.assertIn("营销卖点汇总", html)
+        self.assertIn('data-audience-records=', html)
+        self.assertIn('id="chapter02-audience-dashboard-body-0"', html)
+        self.assertIn('data-marketing-categories=', html)
+        self.assertIn('class="chart-grid script-dashboard-overview marketing-column-chart"', html)
+        self.assertIn('.chart-grid.script-dashboard-overview.marketing-column-chart{grid-template-columns:repeat(auto-fit,minmax(78px,1fr))', html)
+        self.assertIn('column-item column-item-interactive marketing-category-column', html)
+        self.assertIn('data-marketing-category-column', html)
+        self.assertIn('class="marketing-dashboard marketing-dashboard-card chart-card"', html)
+        self.assertIn('marketing-drill-detail script-drill-detail is-entering', html)
+        self.assertIn('marketing-drill-layout script-drill-layout', html)
+        self.assertIn('marketing-drill-primary script-drill-primary', html)
+        self.assertIn('marketing-drill-primary-plot script-drill-primary-plot', html)
+        self.assertIn('&quot;tags&quot;:[{', html)
+        self.assertIn('renderMarketingDrill', html)
+        self.assertIn('returnToMarketingOverview', html)
+        self.assertNotIn('class="marketing-dashboard raw-fact-card"', html)
+        self.assertIn("全量 TOP1000", markdown)
+        self.assertIn("WONDERLAB/万益蓝", markdown)
         self.assertIn("占比 100.0%", markdown)
         self.assertIn("占比：100.0%", html)
         self.assertIn('class="audience-data-card raw-fact-card"', html)
         self.assertIn('data-collapsible-toggle data-collapsible-expanded-label=', html)
-        self.assertIn('class="collapsible-body" id="audience-dashboard-body"', html)
+        self.assertIn('class="collapsible-body" id="chapter02-audience-dashboard-body-0"', html)
         self.assertIn('.page{width:min(1280px,calc(100% - 20px));', html)
         self.assertIn('overflow-x: hidden;', html)
         self.assertIn('.audience-pie-layout{display:grid;grid-template-columns:minmax(0,45fr) minmax(0,55fr);', html)

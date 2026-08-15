@@ -12,7 +12,7 @@
   <main class="page">
     <header class="report-cover"><div class="hero-copy"><h1>云图 TOP 素材池商业诊断报告</h1><p class="subtitle">$subtitle</p></div></header>
     <div class="report-shell">
-      <nav class="report-nav" aria-label="报告目录"><small>报告目录</small><a href="#top-material-combination" aria-current="location">01｜TOP 素材组合结论</a><a href="#audience-insights">02｜人群洞察</a><a href="#script-insights">03｜脚本洞察</a><a href="#highlight-insights">04｜高光画面洞察</a><a href="#material-deep-dive">05｜单素材深度分析</a></nav>
+      <nav class="report-nav" aria-label="报告目录"><small>报告目录</small><a href="#top-material-combination" aria-current="location">01｜TOP 素材组合结论</a><a href="#audience-insights">02｜人群及营销卖点洞察</a><a href="#script-insights">03｜脚本洞察</a><a href="#highlight-insights">04｜高光画面洞察</a><a href="#material-deep-dive">05｜单素材深度分析</a></nav>
       <div class="report-content" id="report-content">
         <section class="section" id="top-material-combination"><header class="section-header"><h2>01｜TOP 素材组合结论</h2>$top_material_scope</header>$top_material_combination</section>
         $audience_insights
@@ -54,6 +54,32 @@
           });
         }(tabs[index], index));
       }
+      }
+
+      var chapter02Tabs = document.querySelectorAll('[data-chapter02-tab]');
+      function activateChapter02(tab, focus) {
+        for (var chapterIndex = 0; chapterIndex < chapter02Tabs.length; chapterIndex += 1) {
+          var candidate = chapter02Tabs[chapterIndex];
+          var selected = candidate === tab;
+          var panel = document.getElementById(candidate.getAttribute('data-chapter02-target'));
+          candidate.setAttribute('aria-selected', selected ? 'true' : 'false');
+          candidate.tabIndex = selected ? 0 : -1;
+          if (panel) panel.hidden = !selected;
+        }
+        if (focus) tab.focus();
+      }
+      for (var chapterIndex = 0; chapterIndex < chapter02Tabs.length; chapterIndex += 1) {
+        (function (tab, tabIndex) {
+          tab.addEventListener('click', function () { activateChapter02(tab, false); });
+          tab.addEventListener('keydown', function (event) {
+            var direction = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+            if (event.key === 'Home' || event.key === 'End' || direction[event.key]) {
+              event.preventDefault();
+              var next = event.key === 'Home' ? 0 : event.key === 'End' ? chapter02Tabs.length - 1 : (tabIndex + direction[event.key] + chapter02Tabs.length) % chapter02Tabs.length;
+              activateChapter02(chapter02Tabs[next], true);
+            }
+          });
+        }(chapter02Tabs[chapterIndex], chapterIndex));
       }
 
       var charts = document.querySelectorAll('[data-audience-pie]');
@@ -595,6 +621,134 @@
           if (Number.isFinite(value)) renderAudienceTopN(value);
         });
         renderAudienceTopN(records.length);
+      });
+
+      document.querySelectorAll('[data-marketing-categories]').forEach(function (dashboard) {
+        var categories;
+        try {
+          categories = JSON.parse(dashboard.getAttribute('data-marketing-categories') || '[]');
+        } catch (error) {
+          categories = [];
+        }
+        if (!Array.isArray(categories) || !categories.length) return;
+        var view = dashboard.querySelector('[data-marketing-view]');
+        var colors = ['#9b6a37', '#d79a4b', '#6f7f5f', '#a14f38', '#6d5d4d', '#c7a36a', '#7d8f9a', '#b77d54'];
+
+        function renderMarketingOverview() {
+          var maximum = Math.max.apply(null, categories.map(function (item) { return Number(item.occurrenceCount || 0); })) || 1;
+          var chart = document.createElement('div');
+          chart.className = 'chart-grid script-dashboard-overview marketing-column-chart';
+          chart.setAttribute('role', 'group');
+          chart.setAttribute('aria-label', '营销卖点一级类别柱状图');
+          categories.forEach(function (item) {
+            var column = document.createElement('button');
+            column.type = 'button';
+            column.className = 'column-item column-item-interactive marketing-category-column';
+            column.setAttribute('data-marketing-category-column', '');
+            column.setAttribute('data-marketing-category', item.category || '其他');
+            column.setAttribute('aria-label', '查看' + (item.category || '其他') + '标签比例');
+            var plot = document.createElement('span');
+            plot.className = 'marketing-category-column-plot';
+            var bar = document.createElement('i');
+            bar.className = 'column-bar';
+            bar.style.height = (Number(item.occurrenceCount || 0) / maximum * 100).toFixed(2) + '%';
+            plot.append(bar);
+            var title = document.createElement('strong');
+            title.textContent = item.category || '其他';
+            var meta = document.createElement('span');
+            meta.textContent = Number(item.occurrenceCount || 0) + ' 次';
+            column.append(plot, title, meta);
+            column.addEventListener('click', function () { renderMarketingDrill(item); });
+            chart.append(column);
+          });
+          view.replaceChildren(chart);
+        }
+
+        function returnToMarketingOverview() {
+          var detail = view.querySelector('.marketing-drill-detail');
+          if (!detail) {
+            renderMarketingOverview();
+            return;
+          }
+          detail.classList.add('is-leaving');
+          window.setTimeout(renderMarketingOverview, 220);
+        }
+
+        function renderMarketingDrill(category) {
+          var tags = Array.isArray(category.tags) && category.tags.length ? category.tags : (category.topTags || []);
+          var total = tags.reduce(function (sum, tag) { return sum + Number(tag.count || 0); }, 0) || 1;
+          var cursor = 0;
+          var slices = tags.map(function (tag, index) {
+            var share = Number(tag.count || 0) / total;
+            var slice = { label: tag.tag || '未命名标签', count: Number(tag.count || 0), share: Number((share * 100).toFixed(1)), start: cursor * 360, end: (cursor + share) * 360, color: colors[index % colors.length] };
+            cursor += share;
+            return slice;
+          });
+          var control = document.createElement('div');
+          control.className = 'marketing-dashboard-control';
+          var back = document.createElement('button');
+          back.type = 'button';
+          back.className = 'marketing-drill-back';
+          back.textContent = '返回营销卖点总览';
+          back.addEventListener('click', returnToMarketingOverview);
+          control.append(back);
+          var detail = document.createElement('div');
+          detail.className = 'marketing-drill-detail script-drill-detail is-entering';
+          var primary = document.createElement('section');
+          primary.className = 'marketing-drill-primary script-drill-primary';
+          var primaryTitle = document.createElement('b');
+          primaryTitle.textContent = category.category || '其他';
+          var primaryPlot = document.createElement('div');
+          primaryPlot.className = 'marketing-drill-primary-plot script-drill-primary-plot';
+          var primaryBar = document.createElement('div');
+          primaryBar.className = 'marketing-drill-primary-bar';
+          primaryBar.style.height = '100%';
+          primaryPlot.append(primaryBar);
+          var count = document.createElement('span');
+          count.textContent = '命中 ' + Number(category.occurrenceCount || total) + ' 次';
+          primary.append(primaryTitle, primaryPlot, count);
+          var card = document.createElement('article');
+          card.className = 'chart-card marketing-drill-chart';
+          var heading = document.createElement('h3');
+          heading.textContent = (category.category || '其他') + '标签比例';
+          var layout = document.createElement('div');
+          layout.className = 'marketing-drill-layout script-drill-layout audience-pie-layout pie-layout';
+          var pie = document.createElement('div');
+          pie.className = 'pie-chart';
+          pie.setAttribute('data-pie-slices', JSON.stringify(slices));
+          pie.setAttribute('role', 'img');
+          pie.setAttribute('aria-label', (category.category || '其他') + '标签比例饼图');
+          pie.style.background = 'conic-gradient(' + slices.map(function (slice) { return slice.color + ' ' + slice.start.toFixed(4) + 'deg ' + slice.end.toFixed(4) + 'deg'; }).join(', ') + ')';
+          var tooltip = document.createElement('div');
+          tooltip.className = 'chart-tooltip';
+          tooltip.setAttribute('role', 'tooltip');
+          pie.append(tooltip);
+          var legend = document.createElement('ul');
+          legend.className = 'pie-legend';
+          slices.forEach(function (slice) {
+            var item = document.createElement('li');
+            item.className = 'legend-item';
+            item.title = slice.label + '：命中 ' + slice.count + ' 次，占比 ' + slice.share + '%';
+            var name = document.createElement('span');
+            name.className = 'legend-label';
+            var swatch = document.createElement('i');
+            swatch.className = 'legend-swatch';
+            swatch.style.background = slice.color;
+            name.append(swatch, document.createTextNode(slice.label));
+            var value = document.createElement('span');
+            value.className = 'legend-share';
+            value.textContent = slice.count + ' 次 · ' + slice.share + '%';
+            item.append(name, value);
+            legend.append(item);
+          });
+          layout.append(pie, legend);
+          card.append(heading, layout);
+          detail.append(primary, card);
+          view.replaceChildren(control, detail);
+          window.setTimeout(function () { detail.classList.add('is-visible'); }, 0);
+        }
+
+        renderMarketingOverview();
       });
 
       document.querySelectorAll('[data-second-level-timeline]').forEach(function (root) {

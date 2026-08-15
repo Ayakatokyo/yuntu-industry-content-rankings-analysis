@@ -24,7 +24,7 @@ REPORT_STYLE_PATH = SKILL_ROOT / "assets" / "report" / "unified-report.css"
 REPORT_SCRIPT_PATH = SKILL_ROOT / "assets" / "report" / "unified-report.js"
 CURRENT_REPORT_SECTIONS = (
     ("top_material_combination", "top-material-combination", "01｜TOP 素材组合结论"),
-    ("audience_insights", "audience-insights", "02｜人群洞察"),
+    ("audience_insights", "audience-insights", "02｜人群及营销卖点洞察"),
     ("script_insights", "script-insights", "03｜脚本洞察"),
     ("highlight_insights", "highlight-insights", "04｜高光画面洞察"),
     ("material_deep_dive", "material-deep-dive", "05｜单素材深度分析"),
@@ -161,6 +161,8 @@ def _load_analysis(path):
     for field in EVIDENCE_FIELDS:
         _validate_evidence_section(analysis[field], field)
     _validate_top_material_combination(analysis["topMaterialCombination"])
+    if "chapter02Insights" in analysis:
+        _validate_chapter02_insights(analysis["chapter02Insights"])
     _validate_experiments(analysis["experimentMatrix"])
     return analysis
 
@@ -231,9 +233,9 @@ def _validate_top_material_combination(value):
         executive_summary, "topMaterialCombination.executiveSummary"
     )
     overall = value.get("overallConclusions")
-    if not isinstance(overall, list) or len(overall) != len(TOP_MATERIAL_DIMENSIONS):
+    if not isinstance(overall, list) or not overall:
         raise YuntuReportError(
-            "topMaterialCombination.overallConclusions must contain exactly three dimensions"
+            "topMaterialCombination.overallConclusions must contain at least one dimension"
         )
     dimensions = []
     for item in overall:
@@ -253,9 +255,9 @@ def _validate_top_material_combination(value):
         _validate_evidence_and_material_ids(
             item, "topMaterialCombination.overallConclusions items"
         )
-    if set(dimensions) != set(TOP_MATERIAL_DIMENSIONS):
+    if set(dimensions) not in (set(TOP_MATERIAL_DIMENSIONS), {"data"}):
         raise YuntuReportError(
-            "topMaterialCombination.overallConclusions dimensions must be unique"
+            "topMaterialCombination.overallConclusions must contain either data only or data, people, and marketing"
         )
     brands = value.get("brandConclusions")
     if not isinstance(brands, list):
@@ -267,7 +269,8 @@ def _validate_top_material_combination(value):
             raise YuntuReportError("topMaterialCombination.brandConclusions items must include brand")
         if item.get("classificationSource") not in {"title_rule", "runtime_title_rule"}:
             raise YuntuReportError("topMaterialCombination.brandConclusions classificationSource must be a title classification rule")
-        for summary_field in BRAND_SUMMARY_FIELDS.values():
+        summary_fields = ("dataSummary",) if set(dimensions) == {"data"} else tuple(BRAND_SUMMARY_FIELDS.values())
+        for summary_field in summary_fields:
             _validate_summary(
                 item.get(summary_field),
                 f"topMaterialCombination.brandConclusions {summary_field}",
@@ -320,6 +323,30 @@ def _validate_experiments(items):
             raise YuntuReportError("experimentMatrix items require a real fact reference")
 
 
+def _validate_chapter02_insights(value):
+    if not isinstance(value, dict):
+        raise YuntuReportError("chapter02Insights must be an object")
+    order = value.get("scopeOrder")
+    scopes = value.get("scopes")
+    if not isinstance(order, list) or not order or order[0] != "all":
+        raise YuntuReportError("chapter02Insights.scopeOrder must start with all")
+    if not isinstance(scopes, dict) or set(order) != set(scopes):
+        raise YuntuReportError("chapter02Insights.scopes must match scopeOrder")
+    for scope_key in order:
+        scope = scopes[scope_key]
+        if not isinstance(scope, dict):
+            raise YuntuReportError("chapter02Insights scopes must be objects")
+        for field in ("audienceInsights", "marketingInsights"):
+            items = scope.get(field)
+            if not isinstance(items, list) or not items:
+                raise YuntuReportError(f"chapter02Insights {scope_key} must include {field}")
+            for item in items:
+                if not isinstance(item, dict):
+                    raise YuntuReportError("chapter02Insights items must be objects")
+                _validate_summary(item.get("summary"), f"chapter02Insights {field} summary")
+                _validate_evidence_and_material_ids(item, f"chapter02Insights {field}")
+
+
 def _validate_ranking_scope_contract(analysis, fact_pack):
     """Keep the 01 chapter aligned with the processed ranking scopes."""
     if not isinstance(fact_pack, dict) or "industryTop1000Facts" not in fact_pack:
@@ -342,6 +369,14 @@ def _validate_ranking_scope_contract(analysis, fact_pack):
 def _requested_brand_top_n(fact_pack):
     value = (fact_pack or {}).get("brandTopNFacts", {}).get("requested_top_n")
     return value if isinstance(value, int) and value > 0 else None
+
+
+def _brand_scope_label(fact_pack):
+    facts = (fact_pack or {}).get("brandTopNFacts", {})
+    if not isinstance(facts, dict) or "requested_top_n" not in facts:
+        return "Top N"
+    requested = facts.get("requested_top_n")
+    return f"Top {requested}" if isinstance(requested, int) and requested > 0 else "全量匹配素材"
 
 
 def _markdown_value(value):
@@ -374,14 +409,15 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
         item["dimension"]: item for item in combination["overallConclusions"]
     }
     lines.extend(["## 01｜TOP 素材组合结论", "", "### TOP1000 整体分析", ""])
-    for dimension in TOP_MATERIAL_DIMENSIONS:
+    report_dimensions = ("data",) if isinstance(fact_pack, dict) and fact_pack.get("chapter02Facts") else TOP_MATERIAL_DIMENSIONS
+    for dimension in report_dimensions:
         summary = overall[dimension]["summary"]
         lines.extend([
             f"{TOP_MATERIAL_LABELS[dimension]}，{summary}",
             "",
         ])
     brand_top_n = _requested_brand_top_n(fact_pack)
-    top_n_label = f"Top {brand_top_n}" if brand_top_n else "Top N"
+    top_n_label = _brand_scope_label(fact_pack)
     lines.extend(["---", "", f"### 各品牌榜单 {top_n_label} 分析", ""])
     brand_conclusions = {item["brand"]: item for item in combination["brandConclusions"]}
     configured_brands = (fact_pack or {}).get("filters", {}).get("brands", [])
@@ -403,7 +439,7 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
             f"### {item['brand']}",
             "",
         ])
-        for dimension in TOP_MATERIAL_DIMENSIONS:
+        for dimension in report_dimensions:
             lines.extend([
                 f"{TOP_MATERIAL_LABELS[dimension]}，{item[BRAND_SUMMARY_FIELDS[dimension]]}",
                 "",
@@ -416,10 +452,34 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
         combination["brandComparisonConclusion"]["summary"],
         "",
     ])
-    lines.extend(["## 02｜人群洞察", ""])
-    for insight in analysis["audienceInsights"]:
-        lines.extend([insight["summary"], ""])
-    if isinstance(audience_dashboard, dict):
+    lines.extend(["## 02｜人群及营销卖点洞察", ""])
+    chapter02 = (fact_pack or {}).get("chapter02Facts") if isinstance(fact_pack, dict) else None
+    chapter02_insights = analysis.get("chapter02Insights", {})
+    if isinstance(chapter02, dict) and chapter02.get("scopeOrder"):
+        scopes = chapter02_insights.get("scopes", {}) if isinstance(chapter02_insights, dict) else {}
+        for scope_key in chapter02["scopeOrder"]:
+            scope_fact = chapter02.get(scope_key, {})
+            lines.extend([f"### {scope_fact.get('label', scope_key)}", ""])
+            scope_ai = scopes.get(scope_key, {}) if isinstance(scopes, dict) else {}
+            for insight in (scope_ai.get("audienceInsights", []) + scope_ai.get("marketingInsights", [])) if isinstance(scope_ai, dict) else []:
+                lines.extend([insight.get("summary", ""), ""])
+            dashboard = scope_fact.get("audienceDashboard", {})
+            dimensions = dashboard.get("dimensions", {}) if isinstance(dashboard, dict) else {}
+            for key, label in AUDIENCE_DIMENSION_LABELS.items():
+                dimension = dimensions.get(key, {}) if isinstance(dimensions, dict) else {}
+                lines.extend([f"#### {label}", "", "图表按素材标签占比展示，用于观察标签结构，不代表真实人群分布。", ""])
+                for bucket in dimension.get("buckets", []):
+                    lines.append(f"- {bucket['label']}：{bucket['materialCount']} 条素材，占比 {bucket['chartShare'] * 100:.1f}%")
+                lines.append("")
+            marketing = scope_fact.get("marketingDashboard", {})
+            lines.extend(["#### 营销卖点汇总", "", f"共 {marketing.get('tagCount', 0)} 个标签，{marketing.get('occurrenceCount', 0)} 次命中。", ""])
+            for category in marketing.get("categories", []):
+                tags = "、".join(f"{tag['tag']}（{tag['count']}）" for tag in category.get("topTags", [])[:5])
+                lines.extend([f"- {category.get('category')}：{category.get('occurrenceCount', 0)} 次；Top：{tags}", ""])
+    else:
+        for insight in analysis["audienceInsights"]:
+            lines.extend([insight["summary"], ""])
+    if not (isinstance(chapter02, dict) and chapter02.get("scopeOrder")) and isinstance(audience_dashboard, dict):
         sample = audience_dashboard.get("sample", {})
         dimensions = audience_dashboard.get("dimensions", {})
         record_count = sample.get("recordCount", 0)
@@ -1076,15 +1136,18 @@ def _render_html(analysis, material_frames, fact_pack):
     )
 
     landscape = insight_cards(analysis.get("rankingOverview", []))
+    report_dimensions = ("data",) if fact_pack.get("chapter02Facts") else TOP_MATERIAL_DIMENSIONS
+    report_brand_fields = {"data": "dataSummary"} if fact_pack.get("chapter02Facts") else BRAND_SUMMARY_FIELDS
     top_material_combination = render_top_material_combination(
         analysis["topMaterialCombination"],
         esc=esc,
         generic_text=_generic_text,
         dimension_labels=TOP_MATERIAL_LABELS,
-        dimensions=TOP_MATERIAL_DIMENSIONS,
-        brand_summary_fields=BRAND_SUMMARY_FIELDS,
+        dimensions=report_dimensions,
+        brand_summary_fields=report_brand_fields,
         brand_order=(fact_pack.get("filters", {}).get("brands") or TOP_MATERIAL_BRAND_ORDER),
         brand_top_n=_requested_brand_top_n(fact_pack),
+        brand_scope_label=_brand_scope_label(fact_pack),
     )
     audience_insights = render_audience_insights(
         fact_pack.get("audienceDashboard"),
@@ -1099,6 +1162,7 @@ def _render_html(analysis, material_frames, fact_pack):
         json_module=json,
         math_module=math,
         scope=section_scope("02", "ranking"),
+        chapter02_facts=fact_pack.get("chapter02Facts"),
     )
     performance = insight_cards(analysis.get("materialComparison", []))
     opportunities = insight_cards(analysis.get("xiaoxianDunOpportunityMap", []))
@@ -1217,6 +1281,8 @@ def render_report(
     data["highlightFrames"] = {
         frame["frame_ref"]: frame for frame in _overview_highlight_frames(fact_pack)
     }
+    if isinstance(fact_pack, dict) and isinstance(fact_pack.get("chapter02Facts"), dict):
+        data["chapter02Facts"] = fact_pack["chapter02Facts"]
     audience_dashboard = fact_pack.get("audienceDashboard") if isinstance(fact_pack, dict) else None
     markdown = _render_markdown(analysis, audience_dashboard, fact_pack)
     rendered_html = _render_html(

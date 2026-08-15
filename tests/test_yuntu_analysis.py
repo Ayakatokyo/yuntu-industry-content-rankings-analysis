@@ -383,8 +383,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("brandComparisonConclusion", prompt)
         self.assertIn("dimension", prompt)
         self.assertIn("dataSummary", prompt)
-        self.assertIn("peopleSummary", prompt)
-        self.assertIn("marketingSummary", prompt)
+        self.assertIn("chapter02Insights", prompt)
         self.assertIn("industryTop1000Facts", prompt)
         self.assertIn("brandTopNFacts", prompt)
         self.assertIn("同一合并 TOP1000", prompt)
@@ -399,10 +398,119 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("少量关键事实锚点 + 多句分析判断", prompt)
         self.assertIn("为什么值得保留或改写", prompt)
         self.assertIn("下一步如何验证", prompt)
-        self.assertIn("本次品牌榜单分析数量为 Top 30", prompt)
+        self.assertIn("本次品牌榜单分析范围为Top 30", prompt)
+        self.assertIn("chapter02AiFacts", prompt)
         self.assertIn("固定提示词模板", prompt)
         self.assertIn("至少 80 个中文字符", prompt)
         self.assertIn("至少 4 条", prompt)
+
+    def test_prepare_analysis_writes_chapter02_scope_bundle_and_marketing_dashboard(self):
+        analysis = load_module()
+        records = [
+            {
+                "material_id": "1",
+                "title": "五个女博士富铁软糖",
+                "rank": 1,
+                "metrics": {"show_cnt": 200, "ctr": 0.2},
+                "people_tags": ["24-30", "女"],
+                "material_tags": ["成分配方原料_铁元素", "促销利益_买一送一"],
+                "data_availability": {},
+            },
+            {
+                "material_id": "2",
+                "title": "万益蓝 益生菌素材",
+                "rank": 2,
+                "metrics": {"show_cnt": 300, "ctr": 0.3},
+                "people_tags": ["36-40"],
+                "material_tags": ["成分配方原料_益生菌"],
+                "data_availability": {},
+            },
+        ]
+        selected = [{"rank": 1, "material_id": "1", "detailRecordPath": "normalized/detail-records/1.json"}]
+        details = {"1": {"material_id": "1", "high_points": [], "loss_points": [], "data_availability": {}}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
+            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+
+        chapter = data["chapter02Facts"]
+        self.assertEqual(chapter["scopeOrder"][0], "all")
+        self.assertEqual(chapter["all"]["label"], "全量 TOP1000")
+        self.assertIn("五个女博士", chapter["scopeOrder"])
+        self.assertEqual(chapter["all"]["marketingDashboard"]["tagCount"], 3)
+        self.assertEqual(chapter["all"]["marketingDashboard"]["occurrenceCount"], 3)
+        self.assertEqual(chapter["五个女博士"]["marketingDashboard"]["tagCount"], 2)
+
+    def test_prepare_analysis_defaults_brand_ai_scope_to_top_30(self):
+        analysis = load_module()
+        records = [
+            {
+                "material_id": "1", "title": "五个女博士富铁软糖", "rank": 1,
+                "metrics": {"show_cnt": 200, "ctr": 0.2},
+                "people_tags": ["24-30"], "material_tags": ["成分配方原料_铁元素"],
+                "data_availability": {},
+            },
+            {
+                "material_id": "2", "title": "五个女博士胶原蛋白", "rank": 2,
+                "metrics": {"show_cnt": 180, "ctr": 0.18},
+                "people_tags": ["31-35"], "material_tags": ["功效功能_补充营养"],
+                "data_availability": {},
+            },
+        ]
+        selected = [{"rank": 1, "material_id": "1", "detailRecordPath": "normalized/detail-records/1.json"}]
+        details = {"1": {"material_id": "1", "high_points": [], "loss_points": [], "data_availability": {}}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            manifest_path = root / "batch-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["filters"]["brands"] = ["五个女博士"]
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
+            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+            prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
+
+        scope = data["brandTopNFacts"]["brands"]["五个女博士"]
+        self.assertEqual(data["brandTopNFacts"]["requested_top_n"], 30)
+        self.assertEqual(scope["sample_count"], 2)
+        self.assertEqual(data["chapter02Facts"]["五个女博士"]["audienceDashboard"]["sample"]["recordCount"], 2)
+        self.assertIn("Top 30", prompt)
+
+    def test_prepare_analysis_keeps_chapter02_dashboard_full_when_brand_ai_uses_top_n(self):
+        analysis = load_module()
+        records = [
+            {
+                "material_id": str(index), "title": f"五个女博士素材{index}", "rank": index,
+                "metrics": {"show_cnt": 400 - index, "ctr": 0.1},
+                "people_tags": ["24-30"], "material_tags": ["成分配方原料_铁元素"],
+                "data_availability": {},
+            }
+            for index in range(1, 4)
+        ]
+        selected = [{"rank": 1, "material_id": "1", "detailRecordPath": "normalized/detail-records/1.json"}]
+        details = {"1": {"material_id": "1", "high_points": [], "loss_points": [], "data_availability": {}}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            manifest_path = root / "batch-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["filters"]["brands"] = ["五个女博士"]
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            analysis.prepare_analysis(
+                input_dir=root,
+                output_dir=root / "diagnostic-analysis",
+                brand_top_n=1,
+            )
+            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(data["brandTopNFacts"]["brands"]["五个女博士"]["sample_count"], 1)
+        self.assertEqual(data["chapter02AiFacts"]["五个女博士"]["sampleCount"], 1)
+        self.assertEqual(data["chapter02Facts"]["五个女博士"]["sampleCount"], 3)
+        self.assertEqual(
+            data["chapter02Facts"]["五个女博士"]["audienceDashboard"]["sample"]["recordCount"],
+            3,
+        )
 
     def test_second_level_breakdown_keeps_five_yuntu_indices_in_fixed_order(self):
         analysis = load_module()

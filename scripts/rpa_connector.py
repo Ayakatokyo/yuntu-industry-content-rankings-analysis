@@ -749,7 +749,12 @@ def _parser():
     )
     prepare_parser.add_argument("--input-dir", required=True)
     prepare_parser.add_argument("--output-dir", required=True)
-    prepare_parser.add_argument("--brand-top-n", type=_positive_int_argument, default=30)
+    prepare_parser.add_argument(
+        "--brand-top-n",
+        type=_positive_int_argument,
+        default=30,
+        help="Limit each brand's chapter 01 and AI analysis to its highest-exposure N materials; defaults to 30",
+    )
     attest_parser = commands.add_parser(
         "attest-analysis", help="Record the source of a model-authored analysis JSON"
     )

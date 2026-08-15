@@ -642,7 +642,7 @@ class RpaConnectorTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(
             prepare.call_args.kwargs,
-            {"input_dir": "in", "output_dir": "out"},
+            {"input_dir": "in", "output_dir": "out", "brand_top_n": 30},
         )
 
     def test_main_status_reads_local_collection_state_without_runtime_credentials(self):

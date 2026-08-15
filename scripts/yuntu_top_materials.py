@@ -38,16 +38,38 @@ def _number(value):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def classify_brand(title):
-    """Classify a title with an auditable business rule, never an RPA field."""
+def _runtime_brand_rules(brands):
+    rules = []
+    for brand in brands or ():
+        canonical = str(brand or "").strip()
+        if not canonical:
+            continue
+        tokens = tuple(
+            token.strip()
+            for token in canonical.split("/")
+            if token.strip()
+        )
+        if tokens:
+            rules.append((canonical, tokens))
+    return tuple(rules)
+
+
+def classify_brand(title, *, brands=None):
+    """Classify a title using only the current run's user-provided brands."""
+    if brands is None:
+        rules = BRAND_RULES
+        source = "title_rule"
+    else:
+        rules = _runtime_brand_rules(brands)
+        source = "runtime_title_rule"
     text = str(title or "").casefold()
     matches = [
         brand
-        for brand, keywords in BRAND_RULES
+        for brand, keywords in rules
         if any(keyword.casefold() in text for keyword in keywords)
     ]
     if len(matches) == 1:
-        return {"value": matches[0], "source": "title_rule"}
+        return {"value": matches[0], "source": source}
     if len(matches) > 1:
         return {"value": "歧义品牌", "source": "ambiguous"}
     return {"value": "未知品牌", "source": "unclassified"}
@@ -97,9 +119,9 @@ def _exposure_summary(records, pool_records):
     }
 
 
-def _classified_record(record):
+def _classified_record(record, *, brands=None):
     result = dict(record)
-    result["brandClassification"] = classify_brand(record.get("title"))
+    result["brandClassification"] = classify_brand(record.get("title"), brands=brands)
     return result
 
 
@@ -267,29 +289,48 @@ def _group_summary(records, pool_records, top_n):
     }
 
 
-def build_top_material_combination(records, *, top_n=30):
-    """Build auditable overall and title-classified brand TOP30 facts."""
-    classified = [_classified_record(record) for record in records if isinstance(record, dict)]
+def build_top_material_combination(records, *, top_n=30, brands=None):
+    """Build auditable overall and run-scoped brand TOPN facts."""
+    runtime_brands = [str(brand).strip() for brand in (brands or ()) if str(brand).strip()]
+    classification_brands = runtime_brands or [brand for brand, _keywords in BRAND_RULES]
+    classified = [
+        _classified_record(record, brands=runtime_brands or None)
+        for record in records
+        if isinstance(record, dict)
+    ]
     pool_records = select_top_materials(classified, limit=len(classified))
     warnings = []
     if any(record["brandClassification"]["source"] == "ambiguous" for record in classified):
         warnings.append("ambiguous_brand_title")
     brands = {}
-    for brand, _keywords in BRAND_RULES:
+    for brand in classification_brands:
         brand_records = [
             record for record in classified
             if record["brandClassification"] == {"value": brand, "source": "title_rule"}
+            or record["brandClassification"] == {"value": brand, "source": "runtime_title_rule"}
         ]
         if not brand_records:
             continue
         summary = _group_summary(brand_records, brand_records, top_n)
-        summary.update({"brand": brand, "classificationSource": "title_rule", "identifiedMaterialCount": len(brand_records)})
+        summary.update({
+            "brand": brand,
+            "classificationSource": "runtime_title_rule" if runtime_brands else "title_rule",
+            "identifiedMaterialCount": len(brand_records),
+        })
         brands[brand] = summary
     return {
         "schemaVersion": 1,
         "classificationRules": [
-            {"brand": brand, "keywords": list(keywords), "source": "title_rule"}
-            for brand, keywords in BRAND_RULES
+            {
+                "brand": brand,
+                "keywords": list(keywords),
+                "source": "runtime_title_rule" if runtime_brands else "title_rule",
+            }
+            for brand, keywords in (
+                _runtime_brand_rules(runtime_brands)
+                if runtime_brands
+                else BRAND_RULES
+            )
         ],
         "overall": _group_summary(pool_records, pool_records, top_n),
         "brands": brands,

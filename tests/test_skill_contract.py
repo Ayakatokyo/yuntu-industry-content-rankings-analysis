@@ -38,7 +38,8 @@ class AnalysisSkillContractTests(unittest.TestCase):
             "近七天",
             "云图界面",
             "行业",
-            "Top素材数量",
+            "品牌榜单Top素材数",
+            "秒级拆解素材数",
             "默认",
             "同一时间范围",
         ):
@@ -229,7 +230,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
 
         for phrase in (
             "TOP 素材组合结论",
-            "品牌筛选条件下 TOP30",
+            "同一合并 TOP1000",
             "标题匹配",
             "未知品牌",
             "CPM",

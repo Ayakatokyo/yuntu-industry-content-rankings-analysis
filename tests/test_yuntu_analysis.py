@@ -109,6 +109,10 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(audience_topn["101"], ["新锐白领"])
         self.assertEqual(audience_topn["104"], ["都市银发"])
         self.assertEqual(data["candidatePool"]["metrics"]["ctr"]["median"], 0.25)
+        self.assertEqual(data["industryTop1000Facts"]["sample_count"], 4)
+        self.assertEqual(data["brandTopNFacts"]["brands"], {})
+        self.assertEqual(data["topMaterialCombination"]["overall"]["candidateCount"], 4)
+        self.assertEqual(data["topMaterialCombination"]["brands"], {})
         self.assertEqual(data["audienceDashboard"]["sample"]["recordCount"], 4)
         self.assertEqual(
             {item["label"]: item["materialCount"] for item in data["audienceDashboard"]["dimensions"]["crowd"]["buckets"]},
@@ -368,21 +372,23 @@ class YuntuAnalysisTests(unittest.TestCase):
             data["topMaterialCombination"]["overall"]["topMaterials"][0][
                 "material_id"
             ],
-            "1",
+                    "2",
         )
         self.assertEqual(
             set(data["topMaterialCombination"]["brands"]),
-            {"五个女博士"},
+            {"万益蓝/WONDERLAB", "五个女博士"},
         )
         self.assertIn("topMaterialCombination", prompt)
-        self.assertIn("标题匹配归属", prompt)
+        self.assertIn("运行时品牌匹配", prompt)
         self.assertIn("brandComparisonConclusion", prompt)
         self.assertIn("dimension", prompt)
         self.assertIn("dataSummary", prompt)
         self.assertIn("peopleSummary", prompt)
         self.assertIn("marketingSummary", prompt)
-        self.assertIn("成功秒级拆解素材集合", prompt)
-        self.assertNotIn("品牌筛选 TOP30", prompt)
+        self.assertIn("industryTop1000Facts", prompt)
+        self.assertIn("brandTopNFacts", prompt)
+        self.assertIn("同一合并 TOP1000", prompt)
+        self.assertNotIn("成功秒级拆解素材集合", prompt)
         self.assertNotIn(
             "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。",
             prompt,
@@ -390,6 +396,11 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("不进入用户可见正文", prompt)
         self.assertIn("不得写执行过程", prompt)
         self.assertIn("事实锚点 -> 业务判断 -> 下一步验证", prompt)
+        self.assertIn("少量关键事实锚点 + 多句分析判断", prompt)
+        self.assertIn("为什么值得保留或改写", prompt)
+        self.assertIn("下一步如何验证", prompt)
+        self.assertIn("本次品牌榜单分析数量为 Top 30", prompt)
+        self.assertIn("固定提示词模板", prompt)
         self.assertIn("至少 80 个中文字符", prompt)
         self.assertIn("至少 4 条", prompt)
 

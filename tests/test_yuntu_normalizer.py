@@ -95,6 +95,28 @@ class YuntuNormalizerTests(unittest.TestCase):
             },
         )
 
+    def test_normalize_list_records_preserves_requested_top1000_metrics_only(self):
+        normalizer = load_module()
+        record = normalizer.normalize_list_records(
+            [{
+                "material_id": "101",
+                "object_index": {
+                    "show_cnt": "1000",
+                    "ctr": 0.1,
+                    "cvr": 0.2,
+                    "play_3s_rate": 0.3,
+                    "interact_cnt": "9",
+                    "like_rate": 0.01,
+                },
+            }],
+            source_path="raw-csv/list.csv",
+        )[0]
+
+        self.assertEqual(
+            record["metrics"],
+            {"show_cnt": 1000, "ctr": 0.1, "cvr": 0.2, "play_3s_rate": 0.3},
+        )
+
     def test_normalize_list_records_marks_unparsed_nested_values_unavailable(self):
         normalizer = load_module()
 

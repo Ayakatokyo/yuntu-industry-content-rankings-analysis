@@ -30,6 +30,23 @@ def record(material_id, show_cnt, rank, title="", *, people=None, tags=None, met
 
 
 class YuntuTopMaterialsTests(unittest.TestCase):
+    def test_classify_brand_uses_runtime_brand_inputs_without_persisting_aliases(self):
+        subject = load_module()
+        brands = ["WONDERLAB/万益蓝", "五个女博士", "燕之屋"]
+
+        self.assertEqual(
+            subject.classify_brand("晚饭后吃万益蓝益生菌", brands=brands),
+            {"value": "WONDERLAB/万益蓝", "source": "runtime_title_rule"},
+        )
+        self.assertEqual(
+            subject.classify_brand("WONDERLAB 蓝绿组合", brands=brands),
+            {"value": "WONDERLAB/万益蓝", "source": "runtime_title_rule"},
+        )
+        self.assertEqual(
+            subject.classify_brand("未命中", brands=brands),
+            {"value": "未知品牌", "source": "unclassified"},
+        )
+
     def test_classify_brand_uses_confirmed_title_rules(self):
         subject = load_module()
 
@@ -103,6 +120,29 @@ class YuntuTopMaterialsTests(unittest.TestCase):
             ["1"],
         )
         self.assertIn("ambiguous_brand_title", result["warnings"])
+
+    def test_build_combination_uses_runtime_brands_and_full_pool(self):
+        subject = load_module()
+        records = [
+            record("1", 1000, 1, "万益蓝蓝绿组合"),
+            record("2", 900, 2, "五个女博士胶原蛋白"),
+            record("3", 800, 3, "燕之屋燕窝"),
+            record("4", 700, 4, "万益蓝工厂"),
+        ]
+
+        result = subject.build_top_material_combination(
+            records,
+            top_n=1,
+            brands=["WONDERLAB/万益蓝", "五个女博士", "燕之屋"],
+        )
+
+        self.assertEqual(result["overall"]["candidateCount"], 4)
+        self.assertEqual(result["brands"]["WONDERLAB/万益蓝"]["identifiedMaterialCount"], 2)
+        self.assertEqual(
+            result["brands"]["WONDERLAB/万益蓝"]["topMaterials"][0]["material_id"],
+            "1",
+        )
+        self.assertEqual(result["brands"]["WONDERLAB/万益蓝"]["classificationSource"], "runtime_title_rule")
 
     def test_tag_comparison_requires_three_materials_on_each_side(self):
         subject = load_module()

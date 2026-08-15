@@ -18,7 +18,13 @@ def render_top_material_combination(
     dimensions,
     brand_summary_fields,
     brand_order,
+    brand_top_n=None,
 ):
+    top_n_label = (
+        f"Top {brand_top_n}"
+        if isinstance(brand_top_n, int) and brand_top_n > 0
+        else "Top N"
+    )
     overall_by_dimension = {
         item["dimension"]: item for item in value["overallConclusions"]
     }
@@ -57,7 +63,9 @@ def render_top_material_combination(
         + ("hidden " if item["brand"] != default_brand else "")
         + f'aria-label="{esc(item["brand"])}，标题匹配归属" '
         + f'data-brand-panel="{esc(item["brand"])}">'
-        + '<p class="brand-classification-note">品牌归属：标题匹配归属；对比样本：成功秒级拆解素材</p>'
+        + '<p class="brand-classification-note">品牌归属：本次榜单标题匹配；分析范围：同一榜单 TOP1000 内的品牌 '
+        + esc(top_n_label)
+        + '</p>'
         + "".join(
             '<p><strong>'
             + dimension_labels[dimension]
@@ -76,8 +84,12 @@ def render_top_material_combination(
         + '<div class="top-material-overall yuntu-content-card"><h3>TOP1000 整体分析</h3>'
         + overall
         + "</div>"
-        + '<div class="top-material-brands yuntu-content-card"><h3>各品牌 TOP 对比分析（成功秒级拆解素材）</h3>'
-        + '<div class="brand-tabs" role="tablist" aria-label="各品牌 TOP 对比分析（成功秒级拆解素材）">'
+        + '<div class="top-material-brands yuntu-content-card"><h3>各品牌榜单 '
+        + esc(top_n_label)
+        + ' 分析</h3>'
+        + '<div class="brand-tabs" role="tablist" aria-label="各品牌榜单 '
+        + esc(top_n_label)
+        + ' 分析">'
         + tabs
         + '</div><div class="brand-panels">'
         + panels

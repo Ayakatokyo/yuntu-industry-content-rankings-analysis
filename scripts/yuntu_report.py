@@ -265,8 +265,8 @@ def _validate_top_material_combination(value):
             raise YuntuReportError("topMaterialCombination.brandConclusions items must be objects")
         if not isinstance(item.get("brand"), str) or not item["brand"].strip():
             raise YuntuReportError("topMaterialCombination.brandConclusions items must include brand")
-        if item.get("classificationSource") != "title_rule":
-            raise YuntuReportError("topMaterialCombination.brandConclusions classificationSource must be title_rule")
+        if item.get("classificationSource") not in {"title_rule", "runtime_title_rule"}:
+            raise YuntuReportError("topMaterialCombination.brandConclusions classificationSource must be a title classification rule")
         for summary_field in BRAND_SUMMARY_FIELDS.values():
             _validate_summary(
                 item.get(summary_field),
@@ -320,6 +320,30 @@ def _validate_experiments(items):
             raise YuntuReportError("experimentMatrix items require a real fact reference")
 
 
+def _validate_ranking_scope_contract(analysis, fact_pack):
+    """Keep the 01 chapter aligned with the processed ranking scopes."""
+    if not isinstance(fact_pack, dict) or "industryTop1000Facts" not in fact_pack:
+        return
+    industry = fact_pack["industryTop1000Facts"]
+    if industry.get("source_scope") != "industry_top1000":
+        raise YuntuReportError("industryTop1000Facts must describe the industry ranking scope")
+    brands = fact_pack.get("filters", {}).get("brands") or []
+    conclusions = analysis.get("topMaterialCombination", {}).get("brandConclusions", [])
+    actual_names = [item.get("brand") for item in conclusions if isinstance(item, dict)]
+    if brands and set(actual_names) != set(brands):
+        raise YuntuReportError("brand conclusions must preserve the complete input brand names")
+    brand_facts = fact_pack.get("brandTopNFacts", {}).get("brands", {})
+    for brand in actual_names:
+        scope = brand_facts.get(brand)
+        if not isinstance(scope, dict) or scope.get("source_scope") != "brand_top_n":
+            raise YuntuReportError(f"missing processed brand Top N facts for {brand}")
+
+
+def _requested_brand_top_n(fact_pack):
+    value = (fact_pack or {}).get("brandTopNFacts", {}).get("requested_top_n")
+    return value if isinstance(value, int) and value > 0 else None
+
+
 def _markdown_value(value):
     if isinstance(value, str):
         return value
@@ -356,11 +380,15 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
             f"{TOP_MATERIAL_LABELS[dimension]}，{summary}",
             "",
         ])
-    lines.extend(["---", "", "### 各品牌 TOP 对比分析（成功秒级拆解素材）", ""])
+    brand_top_n = _requested_brand_top_n(fact_pack)
+    top_n_label = f"Top {brand_top_n}" if brand_top_n else "Top N"
+    lines.extend(["---", "", f"### 各品牌榜单 {top_n_label} 分析", ""])
     brand_conclusions = {item["brand"]: item for item in combination["brandConclusions"]}
+    configured_brands = (fact_pack or {}).get("filters", {}).get("brands", [])
+    brand_order = configured_brands or TOP_MATERIAL_BRAND_ORDER
     ordered_brands = [
         brand_conclusions[brand]
-        for brand in TOP_MATERIAL_BRAND_ORDER
+        for brand in brand_order
         if brand in brand_conclusions
     ]
     ordered_brands.extend(
@@ -1055,7 +1083,8 @@ def _render_html(analysis, material_frames, fact_pack):
         dimension_labels=TOP_MATERIAL_LABELS,
         dimensions=TOP_MATERIAL_DIMENSIONS,
         brand_summary_fields=BRAND_SUMMARY_FIELDS,
-        brand_order=TOP_MATERIAL_BRAND_ORDER,
+        brand_order=(fact_pack.get("filters", {}).get("brands") or TOP_MATERIAL_BRAND_ORDER),
+        brand_top_n=_requested_brand_top_n(fact_pack),
     )
     audience_insights = render_audience_insights(
         fact_pack.get("audienceDashboard"),
@@ -1143,7 +1172,7 @@ def _render_html(analysis, material_frames, fact_pack):
         source_list=source_label("Top1000 榜单数据"),
         source_detail=source_label("成功秒级拆解素材"),
         source_derived=source_label("TOP1000 + 成功秒级拆解素材派生"),
-        top_material_scope=section_scope("01", "ranking", "detail"),
+        top_material_scope=section_scope("01", "ranking"),
         highlight_scope=section_scope("04", "detail"),
         material_deep_dive_scope=section_scope("05", "detail"),
         top_material_combination=top_material_combination,
@@ -1178,6 +1207,7 @@ def render_report(
 ):
     analysis = _load_analysis(analysis_json)
     fact_pack = fact_pack or {}
+    _validate_ranking_scope_contract(analysis, fact_pack)
     _validate_highlight_dashboard(analysis, fact_pack)
     _validate_material_deep_dives(analysis, fact_pack)
     _validate_experiment_fact_references(analysis, fact_pack)

@@ -24,6 +24,7 @@ class YuntuAnalysisError(RuntimeError):
 
 
 SECOND_LEVEL_TRENDS = ALLOWED_HIGHLIGHT_TRENDS
+RANKING_FACT_METRICS = ("show_cnt", "ctr", "cvr", "play_3s_rate")
 
 
 def _load_json(path):
@@ -84,9 +85,51 @@ def _report_scopes(pool_records, selected, rejected):
             "sample_count": len(selected),
             "success_count": len(selected),
             "failed_count": len(rejected),
-            "selection_rule": "实际成功取得秒级详情的素材；各品牌 TOP 对比仅使用此集合",
-            "limitations": ["执行失败素材不纳入秒级分析或各品牌 TOP 对比"],
+            "selection_rule": "实际成功取得秒级详情的素材，仅供秒级与高光章节",
+            "limitations": ["执行失败素材不纳入秒级分析"],
         },
+    }
+
+
+def _ranking_material_fact(record):
+    return {
+        "material_id": str(record.get("material_id", "")),
+        "rank": record.get("rank"),
+        "title": record.get("title", ""),
+        "metrics": {
+            name: record.get("metrics", {}).get(name)
+            for name in RANKING_FACT_METRICS
+            if name in record.get("metrics", {})
+        },
+        "people_tags": list(record.get("people_tags", [])),
+        "material_tags": list(record.get("material_tags", [])),
+    }
+
+
+def _ranking_scope_facts(records, *, source_scope, requested_top_n):
+    selected = select_top_materials(records, limit=requested_top_n)
+    metrics = {
+        name: _metric_summary(selected, name)
+        for name in RANKING_FACT_METRICS
+        if name != "show_cnt"
+    }
+    show_summary = _metric_summary(selected, "show_cnt")
+    metrics["show_cnt"] = {
+        "count": show_summary["count"] if show_summary else 0,
+        "total": sum(_numeric_metric_values(selected, "show_cnt")),
+        "mean": show_summary["mean"] if show_summary else None,
+        "median": show_summary["median"] if show_summary else None,
+    }
+    metrics["cpm"] = {
+        "available": False,
+        "missing_reason": "rpa_not_provided",
+    }
+    return {
+        "source_scope": source_scope,
+        "requested_top_n": requested_top_n,
+        "sample_count": len(selected),
+        "metrics": metrics,
+        "materials": [_ranking_material_fact(record) for record in selected],
     }
 
 
@@ -305,6 +348,8 @@ def _data_limitations(material_facts):
 
 def _model_input_sections(
     material_facts,
+    pool_records,
+    brand_facts,
     candidate_pool,
     audience_dashboard,
     tag_insights,
@@ -349,6 +394,12 @@ def _model_input_sections(
                 for fact in material_facts
             ],
         },
+        "industryTop1000Facts": _ranking_scope_facts(
+            pool_records,
+            source_scope="industry_top1000",
+            requested_top_n=1000,
+        ),
+        "brandTopNFacts": brand_facts,
         "audienceFacts": {
             "labelsMayOverlap": True,
             "notice": "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。",
@@ -402,22 +453,25 @@ def _model_input_sections(
     }
 
 
-def _prompt_text():
-    return """# 小仙炖云图行业内容榜单分析任务
+def _prompt_text(*, brand_top_n, filters):
+    brands = "、".join(str(brand) for brand in filters.get("brands", []) if brand)
+    return f"""# 小仙炖云图行业内容榜单分析任务
 
 读取同目录的 `yuntu-analysis-data.json`，生成 `yuntu-ai-analysis.json`。
 
-事实包同时提供 `rankingFacts`、`audienceFacts`、`marketingFacts`、`secondLevelFacts`、`highlightFrameFacts`、`visualAssets` 与 `dataLimitations`。它们是模型可分析材料：规则只计算事实，模型负责写业务判断。`visualAssets` 是本地图片清单；必须实际查看每张成功 JPEG（`available=true`），原视频 URL 过期时仍使用已落盘的本地帧，不得以 URL 不可用为由跳过画面分析。
+本提示词采用固定提示词模板；本次运行参数动态注入，不随机改写分析规则。本次品牌榜单分析数量为 Top {brand_top_n}，品牌范围为：{brands or "未指定品牌"}。
+
+事实包同时提供 `industryTop1000Facts`、`brandTopNFacts`、`rankingFacts`、`audienceFacts`、`marketingFacts`、`secondLevelFacts`、`highlightFrameFacts`、`visualAssets` 与 `dataLimitations`。它们是模型可分析材料：规则只计算事实，模型负责写业务判断。`visualAssets` 是本地图片清单；必须实际查看每张成功 JPEG（`available=true`），原视频 URL 过期时仍使用已落盘的本地帧，不得以 URL 不可用为由跳过画面分析。
 
 输出必须是 JSON 对象，包含：topMaterialCombination、rankingOverview、audienceInsights、materialComparison、materialDiagnoses、competitorPatterns、xiaoxianDunOpportunityMap、experimentMatrix。若事实包中存在成功高光帧，还必须包含 highlightDashboard。若每条素材包含 `secondLevelBreakdown`，还必须包含 materialDeepDives。
 
-`topMaterialCombination` 必须是对象，包含 `executiveSummary`、`overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。`executiveSummary` 必须含 summary、evidence、material_ids，summary 用一段话综合榜单、人群、营销卖点和已取得的秒级详情信号；只引用事实包 `reportScopes` 中实际可用的范围，不得把秒级详情推断为 TOP1000 全量结论。`overallConclusions` 必须恰好有三项，每项含 dimension、summary、evidence、material_ids，dimension 分别且只能为 `data`、`people`、`marketing`：data 总结 TOP1000 曝光集中度与内容表现，people 总结 TOP1000 年龄、性别和八大人群的曝光加权覆盖，marketing 总结 TOP1000 成分/功效/痛点/场景/内容形式/促销利益。人群重叠口径仅保留在 `audienceFacts` 和 evidence，不进入用户可见正文；summary 要给出标签、素材或内容方向之间的具体观察，不把曝光加权覆盖写成真实人群比例。每个品牌结论必须含 brand、classificationSource、dataSummary、peopleSummary、marketingSummary、evidence、material_ids，且只能引用成功秒级拆解素材集合，classificationSource 必须为 `title_rule`；三个 Summary 分别只写该品牌的数据、人群、营销卖点结论。`brandComparisonConclusion` 必须含 summary、evidence、material_ids，且只能比较成功秒级拆解素材集合内实际有数据的品牌。标题匹配归属是业务分类，不得称作 RPA 原生品牌字段。CPM 缺失或标签比较样本不足时写“数据不足以判断”。标签与指标只能描述共现关系，不得声称因果。
+`topMaterialCombination` 必须是对象，包含 `executiveSummary`、`overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。`executiveSummary` 和 `overallConclusions` 只能引用 `industryTop1000Facts`；每个品牌结论和品牌间对比只能引用 `brandTopNFacts`。`overallConclusions` 必须恰好有三项，每项含 dimension、summary、evidence、material_ids，dimension 分别且只能为 `data`、`people`、`marketing`：data 只总结曝光、点击率、转化率、3s 播放率和 CPM，people 总结年龄、性别和八大人群，marketing 总结成分/功效/痛点/场景/内容形式/促销利益。每个品牌结论必须含 brand、classificationSource、dataSummary、peopleSummary、marketingSummary、evidence、material_ids，品牌名称必须与用户输入的完整参数一致；品牌 Top N 来自同一合并 TOP1000 的运行时品牌匹配，不能引用秒级详情。`brandComparisonConclusion` 只能比较 `brandTopNFacts` 中实际存在的品牌。人群标签重叠口径仅保留在事实和 evidence，不进入用户可见正文；CPM 未由 RPA 提供时写“数据不足以判断”，不得从其他指标推算。标签与指标只能描述共现关系，不得声称因果。
 
 `audienceInsights` 的每项必须含 summary、evidence，以及 material_id 或 material_ids；summary 应以具体标签、素材或内容方向形成可执行洞察，不得复述人群重叠等数据口径。前五个章节的每一项必须含 summary、evidence，以及 material_id 或 material_ids。experimentMatrix 的每一项必须含 priority、hypothesis、creative_variable、target_audience、success_metric、control、review_action、evidence；每项 evidence 至少引用事实包中真实存在的 material_id、metric、frame_ref，或趋势及其真实秒数。
 
 所有结论必须引用素材 ID、指标、标签或秒级趋势作为证据。事实不足时写“数据不足以判断”。解释只能描述可能关系，不得声称因果；不得生成未经业务与合规确认的滋补、孕期或健康功效宣称。不得写执行过程、重跑、补位调度、代码状态、排障细节、事实包返回、口径说明、仅限观察等处理过程话术；摘要必须基于该素材的实际指标、标签、趋势或画面写成业务判断。
 
-用户可见的每条业务洞察采用“事实锚点 -> 业务判断 -> 下一步验证”结构：先选取少量真实指标、标签、趋势秒点或帧画面作为锚点，再解释其对素材保留、改写或测试的意义，最后给出可验证的下一步。`rankingOverview`、`audienceInsights`、`materialComparison`、`materialDiagnoses`、`competitorPatterns` 与 `xiaoxianDunOpportunityMap` 的每个 summary 至少 80 个中文字符，且同一章节不得重复同义文本。`experimentMatrix` 至少 4 条，覆盖放量、改写、验证和风险控制四类动作，每条基于不同的真实事实锚点。
+所有 AI 二次分析字段采用“少量关键事实锚点 + 多句分析判断”的写法：只选最能支撑结论的指标、标签或素材数量作为依据，随后说明事实意味着什么、为什么值得保留或改写、下一步如何验证；不得把指标或标签清单当作结论主体。用户可见的每条业务洞察采用“事实锚点 -> 业务判断 -> 下一步验证”结构。数据维度应优先比较行业基线与品牌 Top {brand_top_n} 的曝光、CTR、CVR 和 3 秒播放率，指出可测试的优势或短板；人群维度应把标签覆盖与内容主题连成目标人群假设；营销卖点维度应说明标签组合的内容取舍并给出拆分测试方向；品牌对比应指出相对优势、短板或指标取舍。解释只能描述可能关系，不得声称因果。`rankingOverview`、`audienceInsights`、`materialComparison`、`materialDiagnoses`、`competitorPatterns` 与 `xiaoxianDunOpportunityMap` 的每个 summary 至少 80 个中文字符，且同一章节不得重复同义文本。`experimentMatrix` 至少 4 条，覆盖放量、改写、验证和风险控制四类动作，每条基于不同的真实事实锚点。
 
 `highlightDashboard` 只使用事实包中 `available=true` 的 highlightFrames。实际查看每张 JPEG 后，将每张成功帧且仅一次归入 portrait、product、scene、text_overlay、other 中的一个主视觉分类，分类顺序固定为 portrait、product、scene、text_overlay、other。每个非空分类包含 frame_refs、common_patterns 和 derivative_directions；方向只能引用本分类的 frame_refs。没有成功帧时不得编造视觉洞察。高光帧为封面帧和点击指数局部峰值。只能描述该帧处于点击指数峰值秒点；不得说该画面导致点击、转化或指标提升，也不能声称其对应某句脚本话术或真实点击次数。
 
@@ -425,7 +479,7 @@ def _prompt_text():
 """
 
 
-def prepare_analysis(*, input_dir, output_dir):
+def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
     root = Path(input_dir)
     output = Path(output_dir)
     manifest = _load_json(root / "batch-manifest.json")
@@ -437,9 +491,6 @@ def prepare_analysis(*, input_dir, output_dir):
     pool_records = [record for record in list_records if isinstance(record, dict)]
     list_by_id = {record.get("material_id"): record for record in pool_records}
     selected_ids = {item.get("material_id") for item in selected}
-    selected_pool_records = [
-        record for record in pool_records if record.get("material_id") in selected_ids
-    ]
     details = []
     material_facts = []
     for item in selected:
@@ -485,6 +536,25 @@ def prepare_analysis(*, input_dir, output_dir):
     audience_topn_records = _audience_topn_records(pool_records)
     tag_insights = _tag_insights(pool_records, selected_ids)
     trend_summary = _trend_summary(details)
+    brands = manifest.get("filters", {}).get("brands", [])
+    combination = build_top_material_combination(
+        pool_records,
+        top_n=brand_top_n,
+        brands=brands,
+    )
+    list_by_id = {record.get("material_id"): record for record in pool_records}
+    brand_facts = {
+        "source_scope": "brand_top_n",
+        "requested_top_n": brand_top_n,
+        "brands": {
+            brand: _ranking_scope_facts(
+                [list_by_id[item["material_id"]] for item in group["topMaterials"]],
+                source_scope="brand_top_n",
+                requested_top_n=brand_top_n,
+            )
+            for brand, group in combination.get("brands", {}).items()
+        },
+    }
     fact_pack = {
         "schemaVersion": 4,
         "filters": manifest.get("filters", {}),
@@ -493,7 +563,7 @@ def prepare_analysis(*, input_dir, output_dir):
         "summaryMetrics": {"selectedCount": len(selected), "rejectedCount": len(rejected), "candidateCount": len(pool_records)},
         "candidatePool": candidate_pool,
         "reportScopes": report_scopes,
-        "topMaterialCombination": build_top_material_combination(selected_pool_records),
+        "topMaterialCombination": combination,
         "audienceDashboard": audience_dashboard,
         "audienceTopNRecords": audience_topn_records,
         "tagInsights": tag_insights,
@@ -504,6 +574,8 @@ def prepare_analysis(*, input_dir, output_dir):
     fact_pack.update(
         _model_input_sections(
             material_facts,
+            pool_records,
+            brand_facts,
             candidate_pool,
             audience_dashboard,
             tag_insights,
@@ -513,5 +585,8 @@ def prepare_analysis(*, input_dir, output_dir):
     )
     write_json_atomically(fact_pack, output / "yuntu-analysis-data.json")
     output.mkdir(parents=True, exist_ok=True)
-    (output / "yuntu-analysis-prompt.md").write_text(_prompt_text(), encoding="utf-8")
+    (output / "yuntu-analysis-prompt.md").write_text(
+        _prompt_text(brand_top_n=brand_top_n, filters=manifest.get("filters", {})),
+        encoding="utf-8",
+    )
     return 0

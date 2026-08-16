@@ -22,6 +22,26 @@ def load_module():
 
 
 class YuntuReportTests(unittest.TestCase):
+    def test_render_report_writes_valid_presentation_projection(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+
+            status = report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+
+            presentation = json.loads(
+                (root / "final-report" / "presentation-report.json").read_text(encoding="utf-8")
+            )
+            report_data = json.loads(
+                (root / "final-report" / "final-report-data.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(presentation["presentationSchemaVersion"], 1)
+        self.assertEqual(report_data["presentation"], presentation)
+
     def test_progressive_section_renderers_are_explicitly_orchestrated(self):
         source = MODULE_PATH.read_text(encoding="utf-8")
 

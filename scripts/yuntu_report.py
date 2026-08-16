@@ -9,6 +9,7 @@ from pathlib import Path
 from string import Template
 
 from rpa_io import write_json_atomically
+from yuntu_presentation import build_yuntu_presentation
 from yuntu_report_sections import (
     render_audience_insights,
     render_highlight_insights,
@@ -1275,7 +1276,8 @@ def render_report(
     _validate_highlight_dashboard(analysis, fact_pack)
     _validate_material_deep_dives(analysis, fact_pack)
     _validate_experiment_fact_references(analysis, fact_pack)
-    data = {"status": "complete", "analysis": analysis}
+    presentation = build_yuntu_presentation(analysis, fact_pack)
+    data = {"status": "complete", "analysis": analysis, "presentation": presentation}
     if analysis_provenance is not None:
         data["analysisProvenance"] = analysis_provenance
     data["highlightFrames"] = {
@@ -1291,6 +1293,7 @@ def render_report(
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     _copy_highlight_assets(fact_pack, output, highlight_asset_root)
+    write_json_atomically(presentation, output / "presentation-report.json")
     write_json_atomically(data, output / "final-report-data.json")
     (output / "final-report.md").write_text(markdown, encoding="utf-8")
     (output / "final-report.html").write_text(rendered_html, encoding="utf-8")

@@ -99,7 +99,7 @@ def _copy_insights(items):
 def _chapter02_sources(fact_pack):
     chart_facts = fact_pack.get("chapter02Facts", {})
     ai_facts = fact_pack.get("chapter02AiFacts", {})
-    if not chart_facts and not ai_facts:
+    if not chart_facts or not ai_facts:
         return {}, {}, []
     if not isinstance(chart_facts, dict) or not isinstance(ai_facts, dict):
         raise YuntuPresentationError("chapter02 facts are invalid")
@@ -252,7 +252,9 @@ def _available_frames(fact_pack):
             if not isinstance(frame, dict) or frame.get("available") is not True:
                 continue
             ref = _text(frame.get("frame_ref"))
-            if not ref or ref in frames:
+            if not ref:
+                continue
+            if ref in frames:
                 raise YuntuPresentationError("highlight frame reference is invalid")
             copied = deepcopy(frame)
             copied["relative_path"] = _safe_relative_frame_path(copied.get("relative_path"))
@@ -343,6 +345,11 @@ def _project_chapter05(analysis, fact_pack):
         selected_ids = list(facts)
     dives = analysis.get("materialDeepDives", []) if isinstance(analysis, dict) else []
     dives_by_id = {_text(dive.get("material_id")): dive for dive in dives if isinstance(dive, dict) and _text(dive.get("material_id"))}
+    if not selected_ids or not dives_by_id:
+        return {"materialTabs": [], "panels": []}, {
+            "chapter05-material-tabs": {"id": "chapter05-material-tabs", "type": "tab-list", "items": [], "defaultItemId": "", "keyboard": ["ArrowLeft", "ArrowRight", "Home", "End"]},
+            "chapter05-second-level": {"id": "chapter05-second-level", "type": "timeline-metric-switch", "metricOrder": list(SECOND_LEVEL_METRIC_ORDER)},
+        }
     if selected_ids and set(dives_by_id) != set(selected_ids):
         raise YuntuPresentationError("material deep dives must cover selected materials")
     tabs, panels = [], []

@@ -675,12 +675,23 @@
         }
 
         function renderMarketingDrill(category) {
-          var tags = Array.isArray(category.tags) && category.tags.length ? category.tags : (category.topTags || []);
+          var tags = (Array.isArray(category.tags) && category.tags.length ? category.tags : (category.topTags || [])).slice()
+            .sort(function (left, right) { return Number(right.count || 0) - Number(left.count || 0); });
+          var topTags = tags.slice(0, 10);
+          var tailTags = tags.slice(10);
           var total = tags.reduce(function (sum, tag) { return sum + Number(tag.count || 0); }, 0) || 1;
+          var pieTags = topTags.slice();
+          if (tailTags.length) {
+            pieTags.push({
+              tag: '其他 ' + tailTags.length + ' 个标签',
+              count: tailTags.reduce(function (sum, tag) { return sum + Number(tag.count || 0); }, 0),
+              isAggregate: true
+            });
+          }
           var cursor = 0;
-          var slices = tags.map(function (tag, index) {
+          var slices = pieTags.map(function (tag, index) {
             var share = Number(tag.count || 0) / total;
-            var slice = { label: tag.tag || '未命名标签', count: Number(tag.count || 0), share: Number((share * 100).toFixed(1)), start: cursor * 360, end: (cursor + share) * 360, color: colors[index % colors.length] };
+            var slice = { label: tag.tag || '未命名标签', count: Number(tag.count || 0), share: Number((share * 100).toFixed(1)), start: cursor * 360, end: (cursor + share) * 360, color: tag.isAggregate ? '#a28d7d' : colors[index % colors.length] };
             cursor += share;
             return slice;
           });
@@ -742,7 +753,33 @@
             legend.append(item);
           });
           layout.append(pie, legend);
-          card.append(heading, layout);
+          var detailControl = document.createElement('div');
+          detailControl.className = 'marketing-tag-detail-control';
+          var detailToggle = document.createElement('button');
+          detailToggle.type = 'button';
+          detailToggle.className = 'marketing-tag-detail-toggle';
+          detailToggle.textContent = '查看全部标签明细';
+          detailToggle.setAttribute('aria-expanded', 'false');
+          var detailTable = document.createElement('div');
+          detailTable.className = 'marketing-tag-detail-table';
+          detailTable.hidden = true;
+          tags.forEach(function (tag) {
+            var row = document.createElement('div');
+            row.className = 'marketing-tag-detail-row';
+            var label = document.createElement('span');
+            label.textContent = tag.tag || '未命名标签';
+            var value = document.createElement('span');
+            value.textContent = Number(tag.count || 0) + ' 次';
+            row.append(label, value);
+            detailTable.append(row);
+          });
+          detailToggle.addEventListener('click', function () {
+            detailTable.hidden = !detailTable.hidden;
+            detailToggle.textContent = detailTable.hidden ? '查看全部标签明细' : '收起标签明细';
+            detailToggle.setAttribute('aria-expanded', String(!detailTable.hidden));
+          });
+          detailControl.append(detailToggle);
+          card.append(heading, layout, detailControl, detailTable);
           detail.append(primary, card);
           view.replaceChildren(control, detail);
           window.setTimeout(function () { detail.classList.add('is-visible'); }, 0);

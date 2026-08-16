@@ -131,7 +131,7 @@ class YuntuPresentationTests(unittest.TestCase):
         payload = build_yuntu_presentation(analysis, facts)
 
         self.assertEqual(payload["presentationSchemaVersion"], 1)
-        self.assertEqual(payload["report"]["sections"], ["chapter02", "chapter04", "chapter05"])
+        self.assertEqual(payload["report"]["sections"], ["chapter01", "chapter02", "chapter04", "chapter05"])
         self.assertIs(payload, validate_yuntu_presentation(payload))
         json.dumps(payload, ensure_ascii=False)
         self.assertEqual(before, json.dumps({"analysis": analysis, "facts": facts}, ensure_ascii=False, sort_keys=True))
@@ -149,6 +149,28 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(panels[1]["chartFactSource"], "chapter02Facts")
         self.assertEqual(panels[1]["topNControl"]["factSource"], "chapter02Facts")
         self.assertEqual(panels[1]["charts"][0]["buckets"][0]["value"], 2)
+
+    def test_projects_chapter01_top_material_conclusions(self):
+        analysis = self.analysis()
+        analysis["topMaterialCombination"] = {
+            "executiveSummary": {"summary": "行业头部素材以清晰卖点驱动理解。", "evidence": [{"material_id": "101"}]},
+            "overallConclusions": [{"dimension": "data", "summary": "TOP1000 中高表现素材呈现稳定。", "evidence": [{"material_id": "101"}]}],
+            "brandConclusions": [{"brand": "WONDERLAB/万益蓝", "classificationSource": "title_match", "dataSummary": "品牌 Top30 以产品解释为主。", "evidence": [{"material_id": "101"}]}],
+            "brandComparisonConclusion": {"summary": "品牌间存在素材表达差异。", "evidence": [{"material_id": "101"}]},
+        }
+
+        payload = build_yuntu_presentation(analysis, self.fact_pack())
+
+        chapter = payload["chapters"]["chapter01"]
+        self.assertEqual(payload["report"]["sections"], ["chapter01", "chapter02", "chapter04", "chapter05"])
+        self.assertEqual(chapter["executiveInsight"]["text"], "行业头部素材以清晰卖点驱动理解。")
+        self.assertEqual(chapter["overallInsights"][0]["dimension"], "data")
+        self.assertEqual(chapter["brandPanels"][0]["brand"], "WONDERLAB/万益蓝")
+        self.assertEqual(chapter["brandPanels"][0]["topN"], 30)
+        brand_tabs = payload["interactions"]["chapter01-brand-tabs"]
+        self.assertEqual(brand_tabs["items"], chapter["brandTabs"])
+        self.assertEqual(brand_tabs["defaultItemId"], chapter["brandTabs"][0]["id"])
+        self.assertEqual(brand_tabs["keyboard"], ["ArrowLeft", "ArrowRight", "Home", "End"])
 
     def test_brand_scope_ids_remain_unique_for_chinese_brand_names(self):
         facts = self.fact_pack()

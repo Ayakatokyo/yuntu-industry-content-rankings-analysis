@@ -7,7 +7,7 @@ from pathlib import PurePosixPath
 
 PRESENTATION_SCHEMA_VERSION = 1
 REPORT_TITLE = "云图行业内容榜单分析"
-SECTION_IDS = ("chapter02", "chapter04", "chapter05")
+SECTION_IDS = ("chapter01", "chapter02", "chapter04", "chapter05")
 REPORT_STATUSES = {"complete", "partial", "unavailable"}
 HIGHLIGHT_CATEGORIES = ("portrait", "product", "scene", "text_overlay", "other")
 SECOND_LEVEL_METRIC_ORDER = ("点赞指数", "流失指数", "点击指数", "互动指数", "评论指数")
@@ -204,6 +204,7 @@ def _project_chapter02(analysis, fact_pack):
             raise YuntuPresentationError("chapter02 scope fact is invalid")
         scopes.append({
             "id": scope_id,
+            "sourceKey": scope_key,
             "label": _text(scope_fact.get("label")) or scope_key,
             "kind": "industry" if scope_key == "all" else "brand",
             "rankScope": "top1000" if scope_key == "all" else "all-materials",
@@ -224,6 +225,7 @@ def _project_chapter02(analysis, fact_pack):
                 "audience": _copy_insights(scope_insights.get("audienceInsights", [])),
                 "marketing": _copy_insights(scope_insights.get("marketingInsights", [])),
             },
+            "audienceDashboard": deepcopy(scope_fact.get("audienceDashboard", {})),
             "charts": charts,
             "detailViews": detail_views,
             "topNControl": {
@@ -243,6 +245,62 @@ def _project_chapter02(analysis, fact_pack):
     }
 
 
+def _chapter01_insight(item, *, dimension="", brand=""):
+    if not isinstance(item, dict):
+        raise YuntuPresentationError("chapter01 insight is invalid")
+    text = _text(item.get("summary"))
+    if not text:
+        raise YuntuPresentationError("chapter01 insight summary is required")
+    return {
+        "text": text,
+        "dimension": _text(dimension or item.get("dimension")),
+        "brand": _text(brand or item.get("brand")),
+        "evidence": deepcopy(item.get("evidence", [])),
+    }
+
+
+def _project_chapter01(analysis, fact_pack):
+    combination = analysis.get("topMaterialCombination", {}) if isinstance(analysis, dict) else {}
+    if not combination:
+        return {"executiveInsight": {}, "overallInsights": [], "brandTabs": [], "brandPanels": [], "brandComparisonInsight": {}}
+    if not isinstance(combination, dict):
+        raise YuntuPresentationError("chapter01 combination is invalid")
+    requested_top_n = (fact_pack.get("brandTopNFacts") or {}).get("requested_top_n")
+    top_n = requested_top_n if isinstance(requested_top_n, int) and requested_top_n > 0 else None
+    executive = _chapter01_insight(combination.get("executiveSummary", {}))
+    overall = [_chapter01_insight(item) for item in combination.get("overallConclusions", [])]
+    brands = combination.get("brandConclusions", [])
+    if not isinstance(brands, list):
+        raise YuntuPresentationError("chapter01 brand conclusions are invalid")
+    panels = []
+    for item in brands:
+        if not isinstance(item, dict) or not _text(item.get("brand")):
+            raise YuntuPresentationError("chapter01 brand conclusion is invalid")
+        brand = _text(item.get("brand"))
+        panels.append({
+            "id": _scope_id(brand),
+            "brand": brand,
+            "classificationSource": _text(item.get("classificationSource")),
+            "topN": top_n,
+            "insights": [
+                {"text": _text(item.get(field)), "dimension": key, "brand": brand, "evidence": deepcopy(item.get("evidence", []))}
+                for key, field in (("data", "dataSummary"), ("people", "peopleSummary"), ("marketing", "marketingSummary"))
+                if _text(item.get(field))
+            ],
+        })
+    if not panels:
+        raise YuntuPresentationError("chapter01 brand conclusions are required")
+    comparison = _chapter01_insight(combination.get("brandComparisonConclusion", {}))
+    tabs = [{"id": panel["id"], "label": panel["brand"], "panelId": panel["id"]} for panel in panels]
+    return {
+        "executiveInsight": executive,
+        "overallInsights": overall,
+        "brandTabs": tabs,
+        "brandPanels": panels,
+        "brandComparisonInsight": comparison,
+    }
+
+
 def _available_frames(fact_pack):
     frames = {}
     for fact in fact_pack.get("materialFacts", []) if isinstance(fact_pack, dict) else []:
@@ -258,6 +316,9 @@ def _available_frames(fact_pack):
                 raise YuntuPresentationError("highlight frame reference is invalid")
             copied = deepcopy(frame)
             copied["relative_path"] = _safe_relative_frame_path(copied.get("relative_path"))
+            copied["material_id"] = _text(fact.get("material_id"))
+            copied["rank"] = fact.get("rank", "-")
+            copied["title"] = _text(fact.get("title"))
             frames[ref] = copied
     return frames
 
@@ -274,6 +335,9 @@ def _frame_card(frame):
         "frameType": frame_type,
         "peakRank": rank,
         "clickValue": frame.get("click_value"),
+        "materialId": _text(frame.get("material_id")),
+        "rank": frame.get("rank", "-"),
+        "title": _text(frame.get("title")),
         "caption": caption,
     }
 
@@ -359,11 +423,19 @@ def _project_chapter05(analysis, fact_pack):
             raise YuntuPresentationError("selected material fact is missing")
         dive = dives_by_id[material_id]
         frames = []
+        frame_failures = []
         for frame in fact.get("highlightFrames", []):
             if isinstance(frame, dict) and frame.get("available") is True:
                 copied = deepcopy(frame)
                 copied["relative_path"] = _safe_relative_frame_path(copied.get("relative_path"))
+                copied["material_id"] = material_id
+                copied["rank"] = fact.get("rank", "-")
+                copied["title"] = _text(fact.get("title"))
                 frames.append(_frame_card(copied))
+            elif isinstance(frame, dict):
+                reason = _text(frame.get("failure_reason") or frame.get("missing_reason") or frame.get("reason"))
+                if reason and reason not in frame_failures:
+                    frame_failures.append(reason)
         observations = dive.get("frame_observations", [])
         observations_by_ref = {item.get("frame_ref"): deepcopy(item) for item in observations if isinstance(item, dict)}
         frame_refs = {frame["frameRef"] for frame in frames}
@@ -388,7 +460,11 @@ def _project_chapter05(analysis, fact_pack):
             "rank": fact.get("rank"),
             "title": _text(fact.get("title")),
             "metrics": deepcopy(fact.get("metrics", {})),
+            "peopleTags": deepcopy(fact.get("people_tags", [])),
+            "materialTags": deepcopy(fact.get("material_tags", [])),
+            "listDataAvailability": deepcopy(fact.get("listDataAvailability", {})),
             "frames": frames,
+            "frameFailures": frame_failures,
             "frameObservations": [observations_by_ref[frame["frameRef"]] for frame in frames],
             "secondLevel": second_level,
             "secondLevelObservations": deepcopy(second_observations),
@@ -419,6 +495,7 @@ def validate_yuntu_presentation(payload):
 def build_yuntu_presentation(analysis, fact_pack, *, report_meta=None):
     if not isinstance(analysis, dict) or not isinstance(fact_pack, dict):
         raise YuntuPresentationError("analysis and fact pack must be objects")
+    chapter01 = _project_chapter01(analysis, fact_pack)
     scopes, chapter02, chapter02_interactions = _project_chapter02(analysis, fact_pack)
     chapter04 = _project_chapter04(analysis, fact_pack)
     chapter05, chapter05_interactions = _project_chapter05(analysis, fact_pack)
@@ -426,9 +503,9 @@ def build_yuntu_presentation(analysis, fact_pack, *, report_meta=None):
         "presentationSchemaVersion": PRESENTATION_SCHEMA_VERSION,
         "report": _report_metadata(fact_pack, report_meta),
         "scopes": scopes,
-        "chapters": {"chapter02": chapter02, "chapter04": chapter04, "chapter05": chapter05},
+        "chapters": {"chapter01": chapter01, "chapter02": chapter02, "chapter04": chapter04, "chapter05": chapter05},
         "materials": deepcopy(chapter05["panels"]),
-        "interactions": {**chapter02_interactions, "chapter04-frame-lightbox": {"id": "chapter04-frame-lightbox", "type": "frame-lightbox"}, **chapter05_interactions},
+        "interactions": {"chapter01-brand-tabs": {"id": "chapter01-brand-tabs", "type": "tab-list", "items": chapter01["brandTabs"], "defaultItemId": chapter01["brandTabs"][0]["id"] if chapter01["brandTabs"] else "", "keyboard": ["ArrowLeft", "ArrowRight", "Home", "End"]}, **chapter02_interactions, "chapter04-frame-lightbox": {"id": "chapter04-frame-lightbox", "type": "frame-lightbox"}, **chapter05_interactions},
         "extensions": {
             "yuntu": {
                 "rankingMetric": "totalCost",

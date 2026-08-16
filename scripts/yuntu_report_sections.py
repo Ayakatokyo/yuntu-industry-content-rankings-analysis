@@ -20,7 +20,30 @@ def render_top_material_combination(
     brand_order,
     brand_top_n=None,
     brand_scope_label=None,
+    presentation=None,
 ):
+    if isinstance(presentation, dict) and presentation.get("brandPanels"):
+        executive = presentation.get("executiveInsight", {})
+        comparison = presentation.get("brandComparisonInsight", {})
+        value = {
+            "executiveSummary": {"summary": executive.get("text", "")},
+            "overallConclusions": [
+                {"dimension": item.get("dimension", ""), "summary": item.get("text", "")}
+                for item in presentation.get("overallInsights", [])
+            ],
+            "brandConclusions": [],
+            "brandComparisonConclusion": {"summary": comparison.get("text", "")},
+        }
+        for panel in presentation["brandPanels"]:
+            summaries = {item.get("dimension"): item.get("text", "") for item in panel.get("insights", [])}
+            value["brandConclusions"].append({
+                "brand": panel.get("brand", ""),
+                "dataSummary": summaries.get("data", ""),
+                "peopleSummary": summaries.get("people", ""),
+                "marketingSummary": summaries.get("marketing", ""),
+            })
+        brand_order = [panel.get("brand", "") for panel in presentation["brandPanels"]]
+        brand_top_n = presentation["brandPanels"][0].get("topN") or brand_top_n
     top_n_label = (
         brand_scope_label
         or (
@@ -244,8 +267,30 @@ def render_audience_insights(
     math_module,
     scope,
     chapter02_facts=None,
+    presentation=None,
 ):
     """Render all-data and brand audience/marketing panels with one tab contract."""
+    if isinstance(presentation, dict) and presentation.get("panels"):
+        panels = presentation.get("panels", [])
+        converted_facts = {"scopeOrder": []}
+        converted_insights = {"scopeOrder": [], "scopes": {}}
+        for panel in panels:
+            scope_id = panel.get("scopeId", "")
+            scope_definition = next((item for item in presentation.get("scopeDefinitions", []) if item.get("id") == scope_id), None)
+            scope_key = (scope_definition or {}).get("sourceKey", scope_id)
+            converted_facts["scopeOrder"].append(scope_key)
+            chart = (panel.get("charts") or [{}])[0]
+            categories = []
+            details = {item.get("category"): item for item in panel.get("detailViews", [])}
+            for bucket in chart.get("buckets", []):
+                detail = details.get(bucket.get("label"), {})
+                tags = [{"tag": item.get("label"), "count": item.get("value", 0)} for item in (detail.get("pie", {}).get("buckets", []))]
+                categories.append({"category": bucket.get("label"), "occurrenceCount": bucket.get("value", 0), "tagCount": len(tags), "tags": tags})
+            converted_facts[scope_key] = {"label": (scope_definition or {}).get("label", scope_key), "audienceDashboard": panel.get("audienceDashboard", {}), "marketingDashboard": {"categories": categories, "tagCount": sum(item.get("tagCount", 0) for item in categories), "occurrenceCount": sum(item.get("occurrenceCount", 0) for item in categories)}}
+            converted_insights["scopes"][scope_key] = {"audienceInsights": [{"summary": item.get("text", ""), "dimension": item.get("title", "")} for item in panel.get("aiInsights", {}).get("audience", [])], "marketingInsights": [{"summary": item.get("text", ""), "dimension": item.get("title", "")} for item in panel.get("aiInsights", {}).get("marketing", [])]}
+        converted_insights["scopeOrder"] = converted_facts["scopeOrder"]
+        analysis = {**analysis, "chapter02Insights": converted_insights}
+        chapter02_facts = converted_facts
     if not isinstance(chapter02_facts, dict) or not chapter02_facts.get("scopeOrder"):
         return _render_audience_scope(
             value, analysis=analysis, fact_pack=fact_pack, facts=facts, esc=esc,
@@ -338,7 +383,18 @@ def render_highlight_insights(
     *, successful_frames, dashboard, esc, html_module, math_module,
     image_src, frame_label, material_title, format_index_value, failure_reason,
     category_order, category_labels,
+    presentation=None,
 ):
+    if isinstance(presentation, dict) and presentation.get("categories"):
+        successful_frames = []
+        groups = []
+        for category in presentation.get("categories", []):
+            refs = []
+            for frame in category.get("frames", []):
+                converted = {"frame_ref": frame.get("frameRef"), "available": True, "relative_path": frame.get("relativePath"), "second": frame.get("second"), "frame_type": frame.get("frameType"), "peak_rank": frame.get("peakRank"), "click_value": frame.get("clickValue"), "material_id": frame.get("materialId", ""), "rank": frame.get("rank", "-"), "title": frame.get("title", "")}
+                successful_frames.append(converted); refs.append(converted["frame_ref"])
+            groups.append({"category": category.get("id"), "frame_refs": refs, "common_patterns": category.get("commonConclusion", []), "derivative_directions": category.get("derivativeDirections", [])})
+        dashboard = {"groups": groups}
     if not successful_frames:
         detail = f"（{esc(failure_reason)}）" if failure_reason else ""
         return '<p class="data-note">暂无可用高光帧' + detail + "。</p>"
@@ -381,7 +437,18 @@ def render_material_deep_dive(
     format_metric,
     metric_labels,
     second_level_trends,
+    presentation=None,
 ):
+    if isinstance(presentation, dict) and presentation.get("panels"):
+        deep_dives = []
+        selected_material_ids = []
+        facts = {}
+        material_frames = {}
+        for panel in presentation.get("panels", []):
+            material_id = str(panel.get("materialId", "")); selected_material_ids.append(material_id)
+            facts[material_id] = {"material_id": material_id, "rank": panel.get("rank", "-"), "title": panel.get("title", ""), "metrics": panel.get("metrics", {}), "people_tags": panel.get("peopleTags", []), "material_tags": panel.get("materialTags", []), "listDataAvailability": panel.get("listDataAvailability", {}), "secondLevelBreakdown": {"metrics": [{"trend_name": metric.get("id"), "available": metric.get("available"), "missing_reason": metric.get("reason", ""), "points": metric.get("points", []), "high_points": metric.get("highPoints", []), "loss_points": metric.get("lossPoints", [])} for metric in panel.get("secondLevel", {}).get("metrics", [])]}}
+            material_frames[material_id] = [{"frame_ref": frame.get("frameRef"), "available": True, "relative_path": frame.get("relativePath"), "second": frame.get("second"), "frame_type": frame.get("frameType"), "peak_rank": frame.get("peakRank"), "click_value": frame.get("clickValue")} for frame in panel.get("frames", [])] + [{"available": False, "failure_reason": reason} for reason in panel.get("frameFailures", [])]
+            deep_dives.append({"material_id": material_id, "frame_observations": panel.get("frameObservations", []), "second_level_observations": panel.get("secondLevelObservations", [])})
     if not isinstance(deep_dives, list) or not deep_dives:
         return '<p class="data-note">暂无单素材深度分析数据。</p>'
     dives_by_id = {str(dive.get("material_id")): dive for dive in deep_dives}

@@ -950,7 +950,7 @@ def _generic_text(value):
     return str(value or "").replace("小仙炖", "目标品牌")
 
 
-def _render_html(analysis, material_frames, fact_pack):
+def _render_html(analysis, material_frames, fact_pack, presentation=None):
     def esc(value):
         return html.escape(str(value))
 
@@ -1120,6 +1120,7 @@ def _render_html(analysis, material_frames, fact_pack):
         failure_reason=_highlight_failure_reasons(fact_pack),
         category_order=HIGHLIGHT_CATEGORY_ORDER,
         category_labels=HIGHLIGHT_CATEGORY_LABELS,
+        presentation=(presentation or {}).get("chapters", {}).get("chapter04") if isinstance(presentation, dict) else None,
     )
     material_deep_dive = render_material_deep_dive(
         deep_dives=analysis.get("materialDeepDives"),
@@ -1134,6 +1135,7 @@ def _render_html(analysis, material_frames, fact_pack):
         format_metric=_format_metric,
         metric_labels=METRIC_LABELS,
         second_level_trends=SECOND_LEVEL_TRENDS,
+        presentation=(presentation or {}).get("chapters", {}).get("chapter05") if isinstance(presentation, dict) else None,
     )
 
     landscape = insight_cards(analysis.get("rankingOverview", []))
@@ -1149,6 +1151,7 @@ def _render_html(analysis, material_frames, fact_pack):
         brand_order=(fact_pack.get("filters", {}).get("brands") or TOP_MATERIAL_BRAND_ORDER),
         brand_top_n=_requested_brand_top_n(fact_pack),
         brand_scope_label=_brand_scope_label(fact_pack),
+        presentation=(presentation or {}).get("chapters", {}).get("chapter01") if isinstance(presentation, dict) else None,
     )
     audience_insights = render_audience_insights(
         fact_pack.get("audienceDashboard"),
@@ -1164,6 +1167,7 @@ def _render_html(analysis, material_frames, fact_pack):
         math_module=math,
         scope=section_scope("02", "ranking"),
         chapter02_facts=fact_pack.get("chapter02Facts"),
+        presentation={**((presentation or {}).get("chapters", {}).get("chapter02") or {}), "scopeDefinitions": (presentation or {}).get("scopes", [])} if isinstance(presentation, dict) else None,
     )
     performance = insight_cards(analysis.get("materialComparison", []))
     opportunities = insight_cards(analysis.get("xiaoxianDunOpportunityMap", []))
@@ -1288,7 +1292,7 @@ def render_report(
     audience_dashboard = fact_pack.get("audienceDashboard") if isinstance(fact_pack, dict) else None
     markdown = _render_markdown(analysis, audience_dashboard, fact_pack)
     rendered_html = _render_html(
-        analysis, _material_frames(fact_pack), fact_pack
+        analysis, _material_frames(fact_pack), fact_pack, presentation
     )
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)

@@ -163,6 +163,9 @@ def _load_analysis(path):
         _validate_evidence_section(analysis[field], field)
     _validate_top_material_combination(analysis["topMaterialCombination"])
     if "chapter02Insights" in analysis:
+        analysis["chapter02Insights"] = _normalize_chapter02_insights(
+            analysis["chapter02Insights"]
+        )
         _validate_chapter02_insights(analysis["chapter02Insights"])
     _validate_experiments(analysis["experimentMatrix"])
     return analysis
@@ -346,6 +349,42 @@ def _validate_chapter02_insights(value):
                     raise YuntuReportError("chapter02Insights items must be objects")
                 _validate_summary(item.get("summary"), f"chapter02Insights {field} summary")
                 _validate_evidence_and_material_ids(item, f"chapter02Insights {field}")
+
+
+def _normalize_chapter02_insights(value):
+    """Adapt attested pre-tab chapter 02 insights without changing their source file."""
+    if not isinstance(value, dict) or not isinstance(value.get("scopes"), dict):
+        return value
+    normalized = {**value, "scopes": {}}
+    legacy_fields = {
+        "audienceInsights": "audienceAnalysis",
+        "marketingInsights": "marketingAnalysis",
+    }
+    for scope_key, scope in value["scopes"].items():
+        if not isinstance(scope, dict):
+            normalized["scopes"][scope_key] = scope
+            continue
+        converted = dict(scope)
+        for target, legacy in legacy_fields.items():
+            if target in converted:
+                continue
+            legacy_section = converted.get(legacy)
+            legacy_items = legacy_section.get("insights") if isinstance(legacy_section, dict) else None
+            if not isinstance(legacy_items, list):
+                continue
+            converted[target] = [
+                {
+                    "summary": item.get("conclusion"),
+                    "evidence": item.get("evidence"),
+                    "material_id": item.get("material_id"),
+                    "material_ids": item.get("material_ids"),
+                    "dimension": item.get("title"),
+                }
+                for item in legacy_items
+                if isinstance(item, dict)
+            ]
+        normalized["scopes"][scope_key] = converted
+    return normalized
 
 
 def _validate_ranking_scope_contract(analysis, fact_pack):

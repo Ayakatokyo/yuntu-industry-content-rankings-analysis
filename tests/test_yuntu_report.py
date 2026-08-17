@@ -42,6 +42,39 @@ class YuntuReportTests(unittest.TestCase):
         self.assertEqual(presentation["presentationSchemaVersion"], 1)
         self.assertEqual(report_data["presentation"], presentation)
 
+    def test_load_analysis_adapts_legacy_chapter02_scope_insights(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        analysis["chapter02Insights"] = {
+            "scopeOrder": ["all"],
+            "scopes": {
+                "all": {
+                    "audienceAnalysis": {
+                        "insights": [{
+                            "conclusion": "旧版人群结论仍应作为新版报告的事实锚点和验证方向。",
+                            "material_ids": ["101"],
+                            "evidence": [{"material_id": "101", "metric": "people_tags"}],
+                        }],
+                    },
+                    "marketingAnalysis": {
+                        "insights": [{
+                            "conclusion": "旧版营销卖点结论仍应作为新版报告的事实锚点和验证方向。",
+                            "material_ids": ["101"],
+                            "evidence": [{"material_id": "101", "metric": "material_tags"}],
+                        }],
+                    },
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            loaded = report._load_analysis(path)
+
+        scope = loaded["chapter02Insights"]["scopes"]["all"]
+        self.assertEqual(scope["audienceInsights"][0]["summary"], "旧版人群结论仍应作为新版报告的事实锚点和验证方向。")
+        self.assertEqual(scope["marketingInsights"][0]["summary"], "旧版营销卖点结论仍应作为新版报告的事实锚点和验证方向。")
+
     def test_progressive_section_renderers_are_explicitly_orchestrated(self):
         source = MODULE_PATH.read_text(encoding="utf-8")
 

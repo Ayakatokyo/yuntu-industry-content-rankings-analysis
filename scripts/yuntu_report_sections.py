@@ -286,7 +286,7 @@ def render_audience_insights(
                 detail = details.get(bucket.get("label"), {})
                 tags = [{"tag": item.get("label"), "count": item.get("value", 0)} for item in (detail.get("pie", {}).get("buckets", []))]
                 categories.append({"category": bucket.get("label"), "occurrenceCount": bucket.get("value", 0), "tagCount": len(tags), "tags": tags})
-            converted_facts[scope_key] = {"label": (scope_definition or {}).get("label", scope_key), "audienceDashboard": panel.get("audienceDashboard", {}), "marketingDashboard": {"categories": categories, "tagCount": sum(item.get("tagCount", 0) for item in categories), "occurrenceCount": sum(item.get("occurrenceCount", 0) for item in categories)}}
+            converted_facts[scope_key] = {"label": (scope_definition or {}).get("label", scope_key), "audienceDashboard": panel.get("audienceDashboard", {}), "topMaterials": panel.get("topMaterials", []), "marketingDashboard": {"categories": categories, "tagCount": sum(item.get("tagCount", 0) for item in categories), "occurrenceCount": sum(item.get("occurrenceCount", 0) for item in categories)}}
             converted_insights["scopes"][scope_key] = {"audienceInsights": [{"summary": item.get("text", ""), "dimension": item.get("title", "")} for item in panel.get("aiInsights", {}).get("audience", [])], "marketingInsights": [{"summary": item.get("text", ""), "dimension": item.get("title", "")} for item in panel.get("aiInsights", {}).get("marketing", [])]}
         converted_insights["scopeOrder"] = converted_facts["scopeOrder"]
         analysis = {**analysis, "chapter02Insights": converted_insights}

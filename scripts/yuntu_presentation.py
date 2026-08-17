@@ -226,6 +226,7 @@ def _project_chapter02(analysis, fact_pack):
                 "marketing": _copy_insights(scope_insights.get("marketingInsights", [])),
             },
             "audienceDashboard": deepcopy(scope_fact.get("audienceDashboard", {})),
+            "topMaterials": deepcopy(scope_fact.get("topMaterials", [])),
             "charts": charts,
             "detailViews": detail_views,
             "topNControl": {

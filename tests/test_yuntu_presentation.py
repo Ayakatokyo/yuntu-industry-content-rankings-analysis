@@ -70,11 +70,13 @@ class YuntuPresentationTests(unittest.TestCase):
             "scopeOrder": ["all", "WONDERLAB/万益蓝"],
             "all": {
                 "label": "全量 TOP1000",
+                "topMaterials": [{"material_id": "101", "rank": 1, "people_tags": ["都市女性"]}],
                 "audienceDashboard": {"dimensions": {"age": {"buckets": [{"label": "24-30", "materialCount": 2, "chartShare": 1.0}]}}},
                 "marketingDashboard": {"categories": [{"category": "功效", "tagCount": 2, "occurrenceCount": 3, "tags": [{"tag": "营养补给", "count": 2}, {"tag": "日常养护", "count": 1}], "topTags": [{"tag": "营养补给", "count": 2}]}]},
             },
             "WONDERLAB/万益蓝": {
                 "label": "WONDERLAB/万益蓝",
+                "topMaterials": [{"material_id": "102", "rank": 2, "people_tags": ["都市女性"]}],
                 "audienceDashboard": {"dimensions": {"age": {"buckets": [{"label": "24-30", "materialCount": 1, "chartShare": 1.0}]}}},
                 "marketingDashboard": {"categories": [{"category": "功效", "tagCount": 1, "occurrenceCount": 2, "tags": [{"tag": "营养补给", "count": 2}], "topTags": [{"tag": "营养补给", "count": 2}]}]},
             },
@@ -149,6 +151,7 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(panels[1]["chartFactSource"], "chapter02Facts")
         self.assertEqual(panels[1]["topNControl"]["factSource"], "chapter02Facts")
         self.assertEqual(panels[1]["charts"][0]["buckets"][0]["value"], 2)
+        self.assertEqual(panels[1]["topMaterials"][0]["material_id"], "102")
 
     def test_projects_chapter01_top_material_conclusions(self):
         analysis = self.analysis()

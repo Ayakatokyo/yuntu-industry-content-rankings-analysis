@@ -487,9 +487,11 @@ def _prompt_text(*, brand_top_n, filters):
 
 `topMaterialCombination` 必须是对象，包含 `executiveSummary`、`overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。01 章只负责榜单数据维度：`executiveSummary`、`overallConclusions` 和 `brandComparisonConclusion` 只能引用 `industryTop1000Facts` 与 `brandTopNFacts`；`overallConclusions` 必须且只能输出一个 `data` 维度。每个品牌结论只输出 `brand`、`classificationSource`、`dataSummary`、`evidence`、`material_ids`，只能引用 `brandTopNFacts`，不得生成 `peopleSummary` 或 `marketingSummary`。综合结论、每个品牌 `dataSummary` 和品牌差异总结均需在事实允许时写明分析样本、累计曝光、CTR/CVR/3 秒播放率的中位数及其行业基线比较，再给出一个可验证的测试方向；避免空泛短句。品牌名称必须与用户输入的完整参数一致；品牌 Top N 来自同一合并 TOP1000 的运行时品牌匹配，不能引用秒级详情。CPM 未由 RPA 提供时写“数据不足以判断”，不得从其他指标推算。
 
-02 章必须读取 `chapter02AiFacts`，按其 `scopeOrder` 原样输出 `chapter02Insights`。本次 scope 顺序为：{scope_labels}。scope 第一项固定为 `all`（全量 TOP1000），其后逐个输出每个品牌；每个 scope 必须同时包含 `audienceInsights` 和 `marketingInsights`，并只引用该 scope 的 `audienceDashboard` 与 `marketingDashboard`。品牌 scope 的 AI 二次分析只使用用户输入的 Top N 素材；报告下方汇总图表另从 `chapter02Facts` 读取全量匹配素材。营销卖点分析必须围绕类别、Top 标签和命中素材展开，不把 1399 个标签逐项罗列。
+02 章必须读取 `chapter02AiFacts`，按其 `scopeOrder` 原样输出 `chapter02Insights`。本次 scope 顺序为：{scope_labels}。scope 第一项固定为 `all`（全量 TOP1000），其后逐个输出每个品牌；每个 scope 必须同时包含人群和营销卖点两组内容，并只引用该 scope 的 `audienceDashboard` 与 `marketingDashboard`。保留双事实源边界：`chapter02Facts` 仅用于图表、标签统计、范围 Tab 与 TopN 控件；`chapter02AiFacts` 仅用于 AI 二次分析。品牌 scope 的 AI 二次分析只使用用户输入的 Top N 素材；报告下方汇总图表另从 `chapter02Facts` 读取全量匹配素材。营销卖点分析必须围绕类别、Top 标签和命中素材展开，不把 1399 个标签逐项罗列。
 
-`chapter02Insights` 的每个 scope 使用 `scope`、`label`、`audienceInsights`、`marketingInsights` 字段；每条 insight 使用 `dimension`、`summary`、`evidence`、`material_id` 或 `material_ids`。旧版 `audienceInsights` 仅作为兼容字段，不替代各 scope 分析。
+`chapter02Insights` 的每个 scope 使用 `scope`、`label`、`audienceSummary`、`audienceInsights`、`marketingSummary`、`marketingInsights` 字段。`audienceSummary` 与 `marketingSummary` 都必须含可直接展示的总结性标题 `title`、详细洞察内容 `summary`、`evidence`、`material_id` 或 `material_ids`；两个 insights 数组都至少输出 2 条详细洞察，每条也使用 `title`、`summary`、`evidence`、`material_id` 或 `material_ids`。最终报告中人群和营销卖点分开渲染，禁止将两个数组拼成连续段落。标题应为可直接展示的总结性判断，不得写“分析如下”“洞察 1”等模板化标题。兼容读取旧式 `audienceAnalysis`/`marketingAnalysis`，但新输出不得使用旧式字段。
+
+第 02 章的用户可见详细洞察必须是自然连贯的中文段落，并遵守中文标点规则：每条 `title` 是短语，不要以句号或分号结尾；每条 `summary` 必须是完整句子，以句号、问号或感叹号收束，不要以分号收束，不要以“；”开头。每个维度有多条详细洞察时，按业务顺序输出，渲染层会自动添加“1. ”、“2. ”等编号；不要把编号写进 title。标题与 summary 拼接后应形成“标题：正文”的自然表达；不同洞察之间由渲染层使用空格连接，不要输出用于拼接的额外分号或重复的“人群/营销卖点”标签。避免同义重复，summary 不要重复 title 的原句。
 
 `audienceInsights` 与 `chapter02Insights.scopes[*].marketingInsights` 的每项必须含 summary、evidence，以及 material_id 或 material_ids；summary 应以具体标签、素材或内容方向形成可执行洞察，不得复述人群重叠等数据口径。人群重叠口径只保留在事实和 evidence，不进入用户可见正文。前五个章节的每一项必须含 summary、evidence，以及 material_id 或 material_ids。experimentMatrix 的每一项必须含 priority、hypothesis、creative_variable、target_audience、success_metric、control、review_action、evidence；每项 evidence 至少引用事实包中真实存在的 material_id、metric、frame_ref，或趋势及其真实秒数。
 
@@ -501,8 +503,6 @@ def _prompt_text(*, brand_top_n, filters):
 
 `materialDeepDives` 仅用于支撑 05｜单素材深度分析中的高光帧观察与秒级拆解。每项包含 material_id、frame_observations、second_level_observations；不得输出或生成额外的单素材 AI 二次分析摘要字段。`frame_observations` 必须将该素材每一张 `available=true` 的 highlightFrames 恰好引用一次，每项只含 frame_ref 和至少 40 个中文字符的可观察 observation；不得引用其他素材或失败帧。观察只能描述事实包和实际可见画面，不得生成脚本、内容公式、真实互动量、转化或因果结论。`second_level_observations` 只使用 `点赞指数`、`流失指数`、`点击指数`、`互动指数`、`评论指数`，每项含 trend_name、至少 60 个中文字符的 summary、evidence_seconds；evidence_seconds 只能填写该素材对应趋势 `points` 中实际存在的秒数。该部分在报告中叫“秒级拆解”，不叫“互动时序分析”。
 """
-
-
 def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
     root = Path(input_dir)
     output = Path(output_dir)

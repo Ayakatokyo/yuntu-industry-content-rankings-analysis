@@ -338,6 +338,17 @@ def _validate_chapter02_insights(value):
         scope = scopes[scope_key]
         if not isinstance(scope, dict):
             raise YuntuReportError("chapter02Insights scopes must be objects")
+        for field in ("audienceSummary", "marketingSummary"):
+            summary = scope.get(field)
+            if summary is None:
+                continue
+            if not isinstance(summary, dict):
+                raise YuntuReportError(f"chapter02Insights {scope_key} {field} must be an object")
+            if not isinstance(summary.get("title"), str) or not summary["title"].strip():
+                raise YuntuReportError(f"chapter02Insights {scope_key} {field} title is required")
+            if summary.get("summary") not in (None, ""):
+                _validate_summary(summary.get("summary"), f"chapter02Insights {field} summary")
+            _validate_evidence_and_material_ids(summary, f"chapter02Insights {field}")
         for field in ("audienceInsights", "marketingInsights"):
             items = scope.get(field)
             if not isinstance(items, list) or not items:
@@ -355,32 +366,38 @@ def _normalize_chapter02_insights(value):
         return value
     normalized = {**value, "scopes": {}}
     legacy_fields = {
-        "audienceInsights": "audienceAnalysis",
-        "marketingInsights": "marketingAnalysis",
+        "audience": ("audienceInsights", "audienceAnalysis", "人群洞察"),
+        "marketing": ("marketingInsights", "marketingAnalysis", "营销卖点洞察"),
     }
     for scope_key, scope in value["scopes"].items():
         if not isinstance(scope, dict):
             normalized["scopes"][scope_key] = scope
             continue
         converted = dict(scope)
-        for target, legacy in legacy_fields.items():
-            if target in converted:
-                continue
+        for dimension, (target, legacy, default_title) in legacy_fields.items():
             legacy_section = converted.get(legacy)
             legacy_items = legacy_section.get("insights") if isinstance(legacy_section, dict) else None
-            if not isinstance(legacy_items, list):
-                continue
-            converted[target] = [
-                {
-                    "summary": item.get("conclusion"),
-                    "evidence": item.get("evidence"),
-                    "material_id": item.get("material_id"),
-                    "material_ids": item.get("material_ids"),
-                    "dimension": item.get("title"),
+            if target not in converted and isinstance(legacy_items, list):
+                converted[target] = [{
+                    "title": item.get("title"), "summary": item.get("conclusion"),
+                    "evidence": item.get("evidence"), "material_id": item.get("material_id"),
+                    "material_ids": item.get("material_ids"), "dimension": item.get("title"),
+                } for item in legacy_items if isinstance(item, dict)]
+            summary_field = f"{dimension}Summary"
+            if summary_field not in converted and isinstance(legacy_section, dict):
+                material_ids, evidence = [], []
+                for item in legacy_items if isinstance(legacy_items, list) else []:
+                    if isinstance(item, dict):
+                        material_ids.extend(item.get("material_ids") or [])
+                        if item.get("material_id"):
+                            material_ids.append(item["material_id"])
+                        evidence.extend(item.get("evidence") or [])
+                converted[summary_field] = {
+                    "title": legacy_section.get("title") or default_title,
+                    "summary": legacy_section.get("overallSummary") or "",
+                    "evidence": evidence,
+                    "material_ids": list(dict.fromkeys(str(item) for item in material_ids if item)),
                 }
-                for item in legacy_items
-                if isinstance(item, dict)
-            ]
         normalized["scopes"][scope_key] = converted
     return normalized
 

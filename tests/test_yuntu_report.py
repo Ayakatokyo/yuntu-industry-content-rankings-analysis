@@ -74,6 +74,10 @@ class YuntuReportTests(unittest.TestCase):
         scope = loaded["chapter02Insights"]["scopes"]["all"]
         self.assertEqual(scope["audienceInsights"][0]["summary"], "旧版人群结论仍应作为新版报告的事实锚点和验证方向。")
         self.assertEqual(scope["marketingInsights"][0]["summary"], "旧版营销卖点结论仍应作为新版报告的事实锚点和验证方向。")
+        self.assertEqual(scope["audienceSummary"]["title"], "人群洞察")
+        self.assertEqual(scope["audienceSummary"]["summary"], "")
+        self.assertEqual(scope["audienceSummary"]["material_ids"], ["101"])
+        self.assertEqual(scope["marketingSummary"]["title"], "营销卖点洞察")
 
     def test_progressive_section_renderers_are_explicitly_orchestrated(self):
         source = MODULE_PATH.read_text(encoding="utf-8")
@@ -797,6 +801,71 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("scrollbar-width: thin;", html)
         self.assertNotIn('class="pie-tooltip"', html)
         self.assertNotIn('class="audience-bar-chart"', html)
+
+    def test_render_report_renders_chapter02_dimensions_with_titles_and_details(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        analysis["chapter02Insights"] = {
+            "scopeOrder": ["all"],
+            "scopes": {
+                "all": {
+                    "audienceSummary": {
+                        "title": "女性与 31-40 岁是主要内容入口",
+                        "summary": "人群标签在头部素材中形成稳定交集，应作为内容入口假设而非真实受众比例。",
+                        "evidence": [{"metric": "people_tags", "value": "女/31-40"}],
+                        "material_ids": ["101"],
+                    },
+                    "audienceInsights": [{
+                        "title": "女性点击意愿更强",
+                        "summary": "点击样本中的女性标签更集中，可围绕女性日常场景拆分版本并观察点击承接。",
+                        "evidence": [{"metric": "people_tags", "value": "女"}],
+                        "material_ids": ["101"],
+                    }],
+                    "marketingSummary": {
+                        "title": "产品展示承担首屏识别",
+                        "summary": "卖点标签显示产品展示与购买信息经常并置，后续应拆开顺序验证。",
+                        "evidence": [{"metric": "material_tags", "value": "商品展示"}],
+                        "material_ids": ["101"],
+                    },
+                    "marketingInsights": [{
+                        "title": "场景与权益应分层",
+                        "summary": "场景信息和购买权益可以拆为两个版本，避免首屏信息过载。",
+                        "evidence": [{"metric": "material_tags", "value": "使用场景/促销利益"}],
+                        "material_ids": ["101"],
+                    }],
+                }
+            },
+        }
+        chapter02 = {
+            "scopeOrder": ["all"],
+            "all": {
+                "label": "全量 TOP1000",
+                "topMaterials": [],
+                "audienceDashboard": {"dimensions": {}},
+                "marketingDashboard": {"tagCount": 1, "occurrenceCount": 1, "categories": []},
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "report", fact_pack={"chapter02Facts": chapter02})
+            html = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn("人群", html)
+        self.assertIn("女性与 31-40 岁是主要内容入口", html)
+        self.assertIn("女性点击意愿更强", html)
+        self.assertIn("营销卖点", html)
+        self.assertIn("产品展示承担首屏识别", html)
+        self.assertIn("场景与权益应分层", html)
+        self.assertIn('class="chapter02-dimension-block"', html)
+        self.assertIn('class="chapter02-dimension-content"', html)
+        self.assertNotIn('<article class="chapter02-detail-insight"', html)
+        self.assertIn('class="chapter02-dimension-lead"', html)
+        self.assertIn('女性点击意愿更强：点击样本中的女性标签更集中', html)
+        self.assertIn('1. 女性点击意愿更强：点击样本中的女性标签更集中', html)
+        self.assertIn('1. 场景与权益应分层：场景信息和购买权益可以拆为两个版本', html)
+        self.assertNotIn('。；', html)
 
     def test_render_report_keeps_unlabeled_dimension_out_of_pie_chart(self):
         report = load_module()

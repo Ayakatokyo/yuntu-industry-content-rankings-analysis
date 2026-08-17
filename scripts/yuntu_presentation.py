@@ -86,7 +86,7 @@ def _copy_insights(items):
             raise YuntuPresentationError("chapter02 insight summary is required")
         result.append({
             "id": f"insight-{index}",
-            "title": _text(item.get("dimension")),
+            "title": _text(item.get("title") or item.get("dimension")),
             "text": summary,
             "evidence": deepcopy(item.get("evidence", [])),
             "materialIds": [str(value) for value in item.get("material_ids", []) if _text(value)],
@@ -94,6 +94,20 @@ def _copy_insights(items):
             "parts": {},
         })
     return result
+
+
+def _copy_insight(item):
+    if item is None:
+        return None
+    if not isinstance(item, dict):
+        raise YuntuPresentationError("chapter02 dimension summary is invalid")
+    return {
+        "title": _text(item.get("title")),
+        "text": _text(item.get("summary")),
+        "evidence": deepcopy(item.get("evidence", [])),
+        "materialIds": [str(value) for value in item.get("material_ids", []) if _text(value)],
+        "materialId": _text(item.get("material_id")),
+    }
 
 
 def _chapter02_sources(fact_pack):
@@ -222,7 +236,9 @@ def _project_chapter02(analysis, fact_pack):
             "aiFactSource": "chapter02AiFacts",
             "chartFactSource": "chapter02Facts",
             "aiInsights": {
+                "audienceSummary": _copy_insight(scope_insights.get("audienceSummary")),
                 "audience": _copy_insights(scope_insights.get("audienceInsights", [])),
+                "marketingSummary": _copy_insight(scope_insights.get("marketingSummary")),
                 "marketing": _copy_insights(scope_insights.get("marketingInsights", [])),
             },
             "audienceDashboard": deepcopy(scope_fact.get("audienceDashboard", {})),

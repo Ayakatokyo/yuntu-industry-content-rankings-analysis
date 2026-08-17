@@ -368,25 +368,23 @@ def _project_chapter04(analysis, fact_pack):
     if not isinstance(groups, list) or not groups:
         raise YuntuPresentationError("highlight dashboard is required")
     seen, categories, previous_index = [], [], -1
+    merged = {}
+    category_aliases = {"scene": "other", "text_overlay": "other"}
     for group in groups:
         if not isinstance(group, dict) or group.get("category") not in HIGHLIGHT_CATEGORIES:
             raise YuntuPresentationError("highlight category is invalid")
-        category = group["category"]
-        category_index = HIGHLIGHT_CATEGORIES.index(category)
-        if category_index <= previous_index:
-            raise YuntuPresentationError("highlight category order is invalid")
-        previous_index = category_index
+        category = category_aliases.get(group["category"], group["category"])
         refs = group.get("frame_refs", [])
         if not isinstance(refs, list) or any(_text(ref) not in available for ref in refs):
             raise YuntuPresentationError("highlight frame reference is invalid")
         seen.extend(refs)
-        categories.append({
-            "id": category,
-            "label": category,
-            "commonConclusion": list(deepcopy(group.get("common_patterns", []))),
-            "derivativeDirections": deepcopy(group.get("derivative_directions", [])),
-            "frames": [_frame_card(available[ref]) for ref in refs],
-        })
+        target = merged.setdefault(category, {"id": category, "label": category, "commonConclusion": [], "derivativeDirections": [], "frames": []})
+        target["commonConclusion"].extend(deepcopy(group.get("common_patterns", [])))
+        target["derivativeDirections"].extend(deepcopy(group.get("derivative_directions", [])))
+        target["frames"].extend(_frame_card(available[ref]) for ref in refs)
+    for category in ("portrait", "product", "other"):
+        if category in merged:
+            categories.append(merged[category])
     if set(seen) != set(available) or len(seen) != len(set(seen)):
         raise YuntuPresentationError("highlight frame coverage is invalid")
     return {"scopeId": "all", "categories": categories, "availability": {"status": "complete", "reasons": []}}

@@ -1120,6 +1120,45 @@ body.unified-report {
   display: none;
 }
 
+.unified-yuntu .highlight-frame-meta {
+  display: grid;
+  gap: 3px;
+  text-align: center;
+}
+
+.unified-yuntu .highlight-frame-kind,
+.unified-yuntu .highlight-frame-metric {
+  display: block;
+  text-align: center;
+}
+
+.unified-yuntu .highlight-material-title {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--unified-ink);
+  padding: 0;
+  text-align: center;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.unified-yuntu .highlight-material-title:hover,
+.unified-yuntu .highlight-material-title:focus-visible {
+  color: var(--unified-accent-dark);
+  text-decoration: underline;
+}
+
+.unified-yuntu .highlight-analysis-pair .highlight-directions > h4 {
+  margin: 0 0 10px;
+}
+
+.unified-yuntu .highlight-direction h5 {
+  margin: 0 0 6px;
+}
+
 @media (max-width: 900px) {
   .unified-yuntu .highlight-frame-grid {
     --highlight-grid-height: min(1320px, 176vw);

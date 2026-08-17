@@ -125,11 +125,12 @@ AUDIENCE_DIMENSION_LABELS = {
 HIGHLIGHT_CATEGORY_LABELS = {
     "portrait": "人像画面",
     "product": "产品画面",
-    "scene": "场景画面",
-    "text_overlay": "字幕画面",
+    "scene": "其他画面",
+    "text_overlay": "其他画面",
     "other": "其他画面",
 }
 HIGHLIGHT_CATEGORY_ORDER = tuple(HIGHLIGHT_CATEGORY_LABELS)
+HIGHLIGHT_RENDER_CATEGORY_ORDER = ("portrait", "product", "other")
 SECOND_LEVEL_TRENDS = ("点赞指数", "流失指数", "点击指数", "互动指数", "评论指数")
 AI_TEXT_MINIMUMS = {
     "frame_observation": 24,
@@ -552,7 +553,6 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
         "",
         "## 04｜高光画面洞察",
         "",
-        "每条素材保留封面画面，并从点击指数局部峰值中按点击值降序、秒数升序取最多 5 帧。",
         "",
     ])
     successful_frames = _overview_highlight_frames(fact_pack or {})
@@ -565,7 +565,8 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
     else:
         frames_by_ref = {frame["frame_ref"]: frame for frame in successful_frames}
         for group in dashboard["groups"]:
-            lines.extend([f"### {HIGHLIGHT_CATEGORY_LABELS[group['category']]}", ""])
+            category = {"scene": "other", "text_overlay": "other"}.get(group["category"], group["category"])
+            lines.extend([f"### {HIGHLIGHT_CATEGORY_LABELS[category]}", "", "#### 共性洞察", ""])
             for pattern in group["common_patterns"]:
                 lines.extend([f"- {pattern}", ""])
             for frame_ref in group["frame_refs"]:
@@ -576,6 +577,7 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
                     f"- #{frame.get('rank', '-')}｜{frame.get('title', frame['material_id'])}｜{frame_label}｜{frame.get('second')}s｜点击指数 {value}"
                 )
             lines.append("")
+            lines.extend(["#### 裂变方向", ""])
             for direction in group["derivative_directions"]:
                 lines.extend([f"- {direction['title']}：{direction['body']}", ""])
     lines.extend(["## 05｜单素材深度分析", ""])
@@ -1158,7 +1160,7 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None):
         material_title=highlight_material_title,
         format_index_value=_format_index_value,
         failure_reason=_highlight_failure_reasons(fact_pack),
-        category_order=HIGHLIGHT_CATEGORY_ORDER,
+        category_order=HIGHLIGHT_RENDER_CATEGORY_ORDER,
         category_labels=HIGHLIGHT_CATEGORY_LABELS,
         presentation=(presentation or {}).get("chapters", {}).get("chapter04") if isinstance(presentation, dict) else None,
     )

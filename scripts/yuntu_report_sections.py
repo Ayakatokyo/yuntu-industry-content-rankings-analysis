@@ -406,6 +406,17 @@ def render_highlight_insights(
         return '<p class="data-note">暂无可用高光帧' + detail + "。</p>"
     if not isinstance(dashboard, dict):
         return '<p class="data-note">高光帧已生成，尚未完成视觉分类，因此不输出视觉洞察。</p>'
+    category_aliases = {"scene": "other", "text_overlay": "other"}
+    normalized_groups = {}
+    for raw_group in dashboard.get("groups", []):
+        if not isinstance(raw_group, dict):
+            continue
+        category = category_aliases.get(raw_group.get("category"), raw_group.get("category"))
+        target = normalized_groups.setdefault(category, {"category": category, "frame_refs": [], "common_patterns": [], "derivative_directions": []})
+        target["frame_refs"].extend(raw_group.get("frame_refs", []))
+        target["common_patterns"].extend(raw_group.get("common_patterns", []))
+        target["derivative_directions"].extend(raw_group.get("derivative_directions", []))
+    dashboard = {"groups": [normalized_groups[key] for key in ("portrait", "product", "other") if key in normalized_groups]}
     frames_by_ref = {frame["frame_ref"]: frame for frame in successful_frames}
     groups = [group for category in category_order for group in dashboard["groups"] if group["category"] == category]
     tabs, panels = [], []
@@ -421,12 +432,12 @@ def render_highlight_insights(
             material_id = str(frame.get("material_id", ""))
             click_text = f"点击指数 {format_index_value(frame.get('click_value'))}"
             caption = f"#{esc(frame.get('rank', '-'))} · {esc(material_title(frame))} · {esc(frame_label(frame))} · {esc(frame.get('second'))}s · {click_text}"
-            cards.append('<article class="highlight-frame-card" data-highlight-frame-card data-highlight-material-id="' + esc(material_id) + '"><figure><button class="highlight-frame-preview highlight-frame-button" type="button" data-highlight-src="' + html_module.escape(image_src(frame), quote=True) + '" data-highlight-caption="' + html_module.escape(caption, quote=True) + '" aria-label="查看高光帧大图"><img loading="lazy" src="' + html_module.escape(image_src(frame), quote=True) + '" alt="' + esc(caption) + '"></button></figure><div class="highlight-frame-meta"><strong>' + esc(material_title(frame)) + '</strong><small>' + esc(frame_label(frame)) + '</small><span>' + esc(frame.get("second")) + 's · ' + esc(click_text) + '</span><button class="highlight-source-link" type="button" data-jump-material="' + esc(material_id) + '">查看素材：#' + esc(frame.get("rank", "-")) + '</button></div></article>')
+            cards.append('<article class="highlight-frame-card" data-highlight-frame-card data-highlight-material-id="' + esc(material_id) + '"><figure><button class="highlight-frame-preview highlight-frame-button" type="button" data-highlight-src="' + html_module.escape(image_src(frame), quote=True) + '" data-highlight-caption="' + html_module.escape(caption, quote=True) + '" aria-label="查看高光帧大图"><img loading="lazy" src="' + html_module.escape(image_src(frame), quote=True) + '" alt="' + esc(caption) + '"></button></figure><div class="highlight-frame-meta"><small class="highlight-frame-kind">' + esc(frame_label(frame)) + '</small><span class="highlight-frame-metric">' + esc(frame.get("second")) + 's · ' + esc(click_text) + '</span><button class="highlight-material-title" type="button" data-jump-material="' + esc(material_id) + '">' + esc(material_title(frame)) + '</button></div></article>')
         patterns = "".join(f"<li>{esc(item)}</li>" for item in group["common_patterns"])
-        directions = "".join(f'<article class="highlight-direction"><h4>{esc(item["title"])}</h4><p>{esc(item["body"])}</p></article>' for item in group["derivative_directions"])
+        directions = "<h4>裂变方向</h4>" + "".join(f'<article class="highlight-direction"><h5>{esc(item["title"])}</h5><p>{esc(item["body"])}</p></article>' for item in group["derivative_directions"])
         page_count = max(1, math_module.ceil(len(refs) / 12))
         panels.append('<article class="highlight-category highlight-category-panel" role="tabpanel" id="' + esc(panel_id) + '" aria-labelledby="' + esc(tab_id) + '"' + (" hidden" if not selected else "") + ' data-highlight-page-size="12" data-highlight-frame-count="' + esc(len(refs)) + '"><div class="highlight-analysis-pair"><div class="highlight-summary"><h4>共性洞察</h4><ul>' + patterns + '</ul></div><div class="highlight-directions">' + directions + '</div></div><div class="highlight-frame-grid">' + "".join(cards) + '</div><div class="highlight-pagination" data-highlight-pagination><button type="button" data-highlight-page="previous">上一页</button><span data-highlight-page-status>1 / ' + esc(page_count) + '</span><button type="button" data-highlight-page="next">下一页</button></div></article>')
-    return '<p class="data-note">每条素材保留封面画面，并从点击指数局部峰值中按点击值降序、秒数升序取最多 5 帧。</p><div class="highlight-dashboard-tabs" role="tablist" aria-label="高光画面分类">' + "".join(tabs) + '</div><div class="highlight-dashboard-panels">' + "".join(panels) + '</div>'
+    return '<div class="highlight-dashboard-tabs" role="tablist" aria-label="高光画面分类">' + "".join(tabs) + '</div><div class="highlight-dashboard-panels">' + "".join(panels) + '</div>'
 
 
 def render_material_deep_dive(

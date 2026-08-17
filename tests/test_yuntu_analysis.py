@@ -408,6 +408,9 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("固定提示词模板", prompt)
         self.assertIn("至少 80 个中文字符", prompt)
         self.assertIn("至少 4 条", prompt)
+        self.assertIn("portrait、product、other", prompt)
+        self.assertIn("共性洞察", prompt)
+        self.assertIn("裂变方向", prompt)
 
     def test_prepare_analysis_writes_chapter02_scope_bundle_and_marketing_dashboard(self):
         analysis = load_module()

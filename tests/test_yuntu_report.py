@@ -1003,7 +1003,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertEqual(rendered.count('class="second-level-chart"'), 0)
         self.assertIn("点击 Top1 波峰画面", rendered)
         self.assertIn('data-jump-material="101"', rendered)
-        self.assertIn('class="highlight-source-link"', rendered)
+        self.assertIn('class="highlight-material-title"', rendered)
         self.assertIn("## 05｜单素材深度分析", markdown)
         self.assertIn("秒级拆解", markdown)
         self.assertNotIn("AI 二次分析", rendered)
@@ -1267,6 +1267,13 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-highlight-page-size="12"', rendered)
         self.assertIn('data-highlight-frame-count="9"', rendered)
         self.assertIn('data-highlight-page-status', rendered)
+        self.assertIn('共性洞察', rendered)
+        self.assertIn('裂变方向', rendered)
+        self.assertIn('class="highlight-frame-kind"', rendered)
+        self.assertIn('class="highlight-frame-metric"', rendered)
+        self.assertIn('class="highlight-material-title"', rendered)
+        self.assertNotIn('每条素材保留封面画面', rendered)
+        self.assertNotIn('查看素材：#', rendered)
         self.assertIn("1 / 1", rendered)
         self.assertLess(
             rendered.index('class="highlight-analysis-pair"'),

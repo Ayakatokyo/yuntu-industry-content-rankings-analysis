@@ -259,9 +259,9 @@ def _validate_top_material_combination(value):
         _validate_evidence_and_material_ids(
             item, "topMaterialCombination.overallConclusions items"
         )
-    if set(dimensions) not in (set(TOP_MATERIAL_DIMENSIONS), {"data"}):
+    if set(dimensions) != {"data"}:
         raise YuntuReportError(
-            "topMaterialCombination.overallConclusions must contain either data only or data, people, and marketing"
+            "topMaterialCombination.overallConclusions must contain data only"
         )
     brands = value.get("brandConclusions")
     if not isinstance(brands, list):
@@ -273,12 +273,10 @@ def _validate_top_material_combination(value):
             raise YuntuReportError("topMaterialCombination.brandConclusions items must include brand")
         if item.get("classificationSource") not in {"title_rule", "runtime_title_rule"}:
             raise YuntuReportError("topMaterialCombination.brandConclusions classificationSource must be a title classification rule")
-        summary_fields = ("dataSummary",) if set(dimensions) == {"data"} else tuple(BRAND_SUMMARY_FIELDS.values())
-        for summary_field in summary_fields:
-            _validate_summary(
-                item.get(summary_field),
-                f"topMaterialCombination.brandConclusions {summary_field}",
-            )
+        _validate_summary(
+            item.get("dataSummary"),
+            "topMaterialCombination.brandConclusions dataSummary",
+        )
         _validate_evidence_and_material_ids(
             item, "topMaterialCombination.brandConclusions items"
         )
@@ -445,17 +443,7 @@ def _markdown_value(value):
 def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
     lines = ["# 云图行业内容榜单分析报告", ""]
     combination = analysis["topMaterialCombination"]
-    overall = {
-        item["dimension"]: item for item in combination["overallConclusions"]
-    }
-    lines.extend(["## 01｜TOP 素材组合结论", "", "### TOP1000 整体分析", ""])
-    report_dimensions = ("data",) if isinstance(fact_pack, dict) and fact_pack.get("chapter02Facts") else TOP_MATERIAL_DIMENSIONS
-    for dimension in report_dimensions:
-        summary = overall[dimension]["summary"]
-        lines.extend([
-            f"{TOP_MATERIAL_LABELS[dimension]}，{summary}",
-            "",
-        ])
+    lines.extend(["## 01｜TOP 素材组合结论", "", "### 综合结论", "", combination["executiveSummary"]["summary"], ""])
     brand_top_n = _requested_brand_top_n(fact_pack)
     top_n_label = _brand_scope_label(fact_pack)
     lines.extend(["---", "", f"### 各品牌榜单 {top_n_label} 分析", ""])
@@ -479,11 +467,7 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
             f"### {item['brand']}",
             "",
         ])
-        for dimension in report_dimensions:
-            lines.extend([
-                f"{TOP_MATERIAL_LABELS[dimension]}，{item[BRAND_SUMMARY_FIELDS[dimension]]}",
-                "",
-            ])
+        lines.extend([item["dataSummary"], ""])
     lines.extend([
         "---",
         "",
@@ -1178,8 +1162,8 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None):
     )
 
     landscape = insight_cards(analysis.get("rankingOverview", []))
-    report_dimensions = ("data",) if fact_pack.get("chapter02Facts") else TOP_MATERIAL_DIMENSIONS
-    report_brand_fields = {"data": "dataSummary"} if fact_pack.get("chapter02Facts") else BRAND_SUMMARY_FIELDS
+    report_dimensions = ("data",)
+    report_brand_fields = {"data": "dataSummary"}
     top_material_combination = render_top_material_combination(
         analysis["topMaterialCombination"],
         esc=esc,

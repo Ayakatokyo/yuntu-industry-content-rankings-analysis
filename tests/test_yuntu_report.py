@@ -181,18 +181,6 @@ class YuntuReportTests(unittest.TestCase):
                         "material_ids": ["101"],
                         "evidence": [{"hidden": "evidence-sentinel-data"}],
                     },
-                    {
-                        "dimension": "people",
-                        "summary": "女性与新锐白领标签的曝光加权覆盖更高。",
-                        "material_ids": ["101"],
-                        "evidence": [{"hidden": "evidence-sentinel-audience"}],
-                    },
-                    {
-                        "dimension": "marketing",
-                        "summary": "头部素材以功效理性种草和痛点触发为主。",
-                        "material_ids": ["101"],
-                        "evidence": [{"hidden": "evidence-sentinel-marketing"}],
-                    }
                 ],
                 "brandConclusions": [
                     {
@@ -354,10 +342,10 @@ class YuntuReportTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(data["status"], "complete")
         for rendered in (markdown, html):
-            self.assertIn("TOP1000 整体分析", rendered)
-            self.assertIn("从数据维度看", rendered)
-            self.assertIn("从人群维度看", rendered)
-            self.assertIn("从营销卖点维度看", rendered)
+            self.assertNotIn("TOP1000 整体分析", rendered)
+            self.assertNotIn("从数据维度看", rendered)
+            self.assertNotIn("从人群维度看", rendered)
+            self.assertNotIn("从营销卖点维度看", rendered)
             self.assertNotIn("人群标签是重叠标签，不是真实人群分布，不能相加为 100%。", rendered)
             self.assertIn("各品牌榜单 Top N 分析", rendered)
             self.assertIn("万益蓝/WONDERLAB", rendered)
@@ -370,9 +358,8 @@ class YuntuReportTests(unittest.TestCase):
             self.assertNotIn('<details class="evidence-details">', rendered)
             self.assertNotIn("证据：", rendered)
             self.assertNotIn("evidence-sentinel", rendered)
-            self.assertEqual(rendered.count("从数据维度看"), 4)
-            self.assertEqual(rendered.count("从人群维度看"), 4)
-            self.assertEqual(rendered.count("从营销卖点维度看"), 4)
+            self.assertNotIn("女性与新锐白领标签", rendered)
+            self.assertNotIn("营销卖点以肠道健康表达为主", rendered)
             for title in ("榜单竞争格局", "内容表现地图", "内容与人群机会", "竞品内容模式", "秒级创意结构", "机会与实验"):
                 self.assertNotIn(title, rendered)
         self.assertNotIn("一、品牌筛选条件下", markdown)
@@ -471,7 +458,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("TOP1000 榜单素材：1000 条", top_section)
         self.assertNotIn("成功秒级拆解素材：5 条", top_section)
         self.assertNotIn("高光帧可用：", rendered)
-        self.assertIn("TOP1000 整体分析", rendered)
+        self.assertNotIn("TOP1000 整体分析", rendered)
         self.assertIn("各品牌榜单 Top 30 分析", rendered)
         self.assertNotIn("各品牌榜单 Top N 分析", rendered)
         self.assertNotIn("品牌筛选 TOP30", rendered)
@@ -480,6 +467,63 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('<h3>综合结论</h3>', rendered)
         self.assertIn("综合结论：榜单、人群、卖点和已取得详情共同指向明确的内容机会。", rendered)
         self.assertIn('class="brand-classification-note">品牌归属：本次榜单标题匹配；分析范围：同一榜单 TOP1000 内的品牌 Top 30</p>', rendered)
+
+    def test_chapter01_renders_brand_metric_facts_instead_of_overall_block(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        analysis["topMaterialCombination"]["overallConclusions"] = [
+            analysis["topMaterialCombination"]["overallConclusions"][0]
+        ]
+        fact_pack = {
+            "filters": {"brands": ["万益蓝/WONDERLAB", "五个女博士", "燕之屋"]},
+            "industryTop1000Facts": {"source_scope": "industry_top1000"},
+            "brandTopNFacts": {
+                "requested_top_n": 30,
+                "brands": {
+                    "万益蓝/WONDERLAB": {
+                        "source_scope": "brand_top_n",
+                        "sample_count": 12,
+                        "metrics": {
+                            "show_cnt": {"total": 123456},
+                            "ctr": {"median": 0.0123},
+                            "cvr": {"median": 0.0456},
+                            "play_3s_rate": {"median": 0.321},
+                        },
+                    },
+                    "五个女博士": {"source_scope": "brand_top_n", "sample_count": 8, "metrics": {}},
+                    "燕之屋": {"source_scope": "brand_top_n", "sample_count": 6, "metrics": {}},
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack=fact_pack,
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertNotIn("TOP1000 整体分析", rendered)
+        self.assertNotIn('class="brand-metric-facts"', rendered)
+        self.assertNotIn("分析样本 12 条", rendered)
+        self.assertNotIn("累计曝光 12.3 万", rendered)
+        self.assertNotIn("CTR 中位数 1.23%", rendered)
+        self.assertNotIn("CVR 中位数 4.56%", rendered)
+        self.assertNotIn("3 秒播放率中位数 32.10%", rendered)
+
+    def test_chapter01_executive_uses_shared_card_style_without_left_rule(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertNotIn(".unified-yuntu .top-material-executive {", rendered)
 
     def test_render_report_inlines_unified_assets_and_emits_unified_structure(self):
         report = load_module()
@@ -515,7 +559,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("TOP30 素材组合结论", rendered)
         self.assertNotIn("来源：Top1000 榜单数据", rendered)
         self.assertNotIn("基于筛选品牌集合与标题匹配品牌", rendered)
-        self.assertEqual(rendered.count(' yuntu-content-card"'), 4)
+        self.assertEqual(rendered.count(' yuntu-content-card"'), 3)
         self.assertIn(".unified-report .report-shell", rendered)
         self.assertIn("data-unified-report-ready", rendered)
         self.assertNotIn('rel="stylesheet"', rendered)
@@ -830,7 +874,6 @@ class YuntuReportTests(unittest.TestCase):
         for field, value in (
             ("summary", "查看数据依据"),
             ("dataSummary", "证据：{\"metric\": \"ctr\"}"),
-            ("marketingSummary", "指标对象：{\"metric\": \"ctr\"}"),
         ):
             with self.subTest(field=field):
                 analysis = self.analysis_json()

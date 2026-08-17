@@ -1212,23 +1212,8 @@ body.unified-report {
   font-variant-numeric: tabular-nums;
 }
 
-.unified-yuntu .top-material-executive {
-  margin: 0 0 16px;
-  padding: 18px;
-  border-left: 3px solid var(--unified-accent-dark);
-}
-
-.unified-yuntu .top-material-executive h3 {
-  margin: 0 0 8px;
-  font-size: 18px;
-}
-
-.unified-yuntu .top-material-executive p,
 .unified-yuntu .brand-classification-note {
   margin: 0;
-}
-
-.unified-yuntu .brand-classification-note {
   margin-bottom: 12px;
   color: var(--unified-muted);
   font-size: 12px;

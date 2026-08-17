@@ -52,17 +52,6 @@ def render_top_material_combination(
             else "Top N"
         )
     )
-    overall_by_dimension = {
-        item["dimension"]: item for item in value["overallConclusions"]
-    }
-    overall = "".join(
-        '<p><strong>'
-        + dimension_labels[dimension]
-        + "，</strong>"
-        + esc(generic_text(overall_by_dimension[dimension]["summary"]))
-        + "</p>"
-        for dimension in dimensions
-    )
     brand_conclusions = {item["brand"]: item for item in value["brandConclusions"]}
     ordered_brands = [
         brand_conclusions[brand] for brand in brand_order if brand in brand_conclusions
@@ -93,14 +82,7 @@ def render_top_material_combination(
         + '<p class="brand-classification-note">品牌归属：本次榜单标题匹配；分析范围：同一榜单 TOP1000 内的品牌 '
         + esc(top_n_label)
         + '</p>'
-        + "".join(
-            '<p><strong>'
-            + dimension_labels[dimension]
-            + "，</strong>"
-            + esc(generic_text(item[brand_summary_fields[dimension]]))
-            + "</p>"
-            for dimension in dimensions
-        )
+        + '<p>' + esc(generic_text(item[brand_summary_fields["data"]])) + "</p>"
         + "</article>"
         for index, item in enumerate(ordered_brands)
     )
@@ -108,9 +90,6 @@ def render_top_material_combination(
         '<article class="top-material-executive yuntu-content-card"><h3>综合结论</h3><p>'
         + esc(generic_text(value["executiveSummary"]["summary"]))
         + "</p></article>"
-        + '<div class="top-material-overall yuntu-content-card"><h3>TOP1000 整体分析</h3>'
-        + overall
-        + "</div>"
         + '<div class="top-material-brands yuntu-content-card"><h3>各品牌榜单 '
         + esc(top_n_label)
         + ' 分析</h3>'

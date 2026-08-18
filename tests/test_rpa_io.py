@@ -214,6 +214,24 @@ class RpaIoTests(unittest.TestCase):
             self.assertEqual(records[0]["object_index"], {"ctr": 0.5})
             self.assertEqual(records[0]["tags"], ["轻食", "便携"])
 
+    def test_parse_csv_records_ignores_delimiter_only_trailing_row(self):
+        io = load_module()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "list.csv"
+            source.write_text(
+                "material_id\x01title\x01show_cnt\n"
+                "101\x01有效素材\x01100\n"
+                "\x02,,,,\n",
+                encoding="utf-8",
+            )
+
+            records = io.parse_csv_records(source)
+
+        self.assertEqual(
+            records,
+            [{"material_id": "101", "title": "有效素材", "show_cnt": "100"}],
+        )
+
     def test_parse_csv_records_decodes_yuntu_python_literal_cells_from_fixture(self):
         io = load_module()
 

@@ -22,6 +22,25 @@ def load_module():
 
 
 class YuntuAnalysisTests(unittest.TestCase):
+    def test_prompt_template_is_loaded_and_runtime_scope_is_injected(self):
+        analysis = load_module()
+
+        template = analysis.PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
+        prompt = analysis._prompt_text(
+            brand_top_n=18,
+            filters={"brands": ["万益蓝", "燕之屋"]},
+        )
+
+        self.assertIn("__BRAND_SCOPE_LABEL__", template)
+        self.assertIn("__BRANDS__", template)
+        self.assertIn("__SCOPE_LABELS__", template)
+        self.assertIn("Top 18", prompt)
+        self.assertIn("万益蓝、燕之屋", prompt)
+        self.assertIn("all（全量 TOP1000）、万益蓝、燕之屋", prompt)
+        self.assertNotIn("__BRAND_SCOPE_LABEL__", prompt)
+        self.assertNotIn("__BRANDS__", prompt)
+        self.assertNotIn("__SCOPE_LABELS__", prompt)
+
     def _write_input(self, root, records, selected, details):
         (root / "normalized" / "detail-records").mkdir(parents=True)
         (root / "batch-manifest.json").write_text(

@@ -117,7 +117,7 @@ python <skill-root>/scripts/rpa_connector.py prepare-analysis \
 
 视频下载、FFmpeg 或单帧截图失败只记录具体失败原因，不阻断事实包或最终报告；HTML 只展示成功 JPEG，不输出损坏图片。这里的“点击指数”不是实际点击次数，局部峰值也不能用于推断转化因果。
 
-当前对话模型读取 `diagnostic-analysis/yuntu-analysis-data.json` 和 `diagnostic-analysis/yuntu-analysis-prompt.md` 后，生成 `diagnostic-analysis/yuntu-ai-analysis.json`。模型或人工模型步骤完成后，必须登记来源回执；未经回执核验不得渲染最终报告：
+固定分析规则维护在 `<skill-root>/prompts/yuntu-analysis-prompt.md`。`prepare-analysis` 会读取该模板并注入本次品牌、Top N 与 scope 参数，生成批次内的 `diagnostic-analysis/yuntu-analysis-prompt.md`。当前对话模型只读取该批次提示词与 `diagnostic-analysis/yuntu-analysis-data.json`，生成 `diagnostic-analysis/yuntu-ai-analysis.json`。模型或人工模型步骤完成后，必须登记来源回执；未经回执核验不得渲染最终报告：
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py attest-analysis \

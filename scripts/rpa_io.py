@@ -53,6 +53,13 @@ def _clean_csv_value(value):
     return value
 
 
+def _is_csv_padding_row(row):
+    values = [value for value in row.values() if value not in (None, "")]
+    return bool(values) and all(
+        isinstance(value, str) and not value.strip(" ,") for value in values
+    )
+
+
 def _records_from_payload(payload):
     if isinstance(payload, str):
         try:
@@ -205,6 +212,8 @@ def parse_csv_records(path):
             raise RpaIoError(f"RPA CSV {source} row {row_number} has too many fields")
         cleaned_row = {key: _clean_csv_value(value) for key, value in row.items()}
         if not any(value not in (None, "") for value in cleaned_row.values()):
+            continue
+        if _is_csv_padding_row(cleaned_row):
             continue
         records.append(
             {key: _decode_json_cell(value) for key, value in cleaned_row.items()}

@@ -975,27 +975,102 @@
           });
           detailPanels.forEach(function (item) { item.hidden = item.id !== target; });
         }
-        tabs.forEach(function (tab) { tab.addEventListener('click', function () { selectDetailTab(tab); }); });
+        tabs.forEach(function (tab, tabIndex) {
+          tab.addEventListener('click', function () { selectDetailTab(tab); });
+          tab.addEventListener('keydown', function (event) {
+            var direction = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+            if (event.key === 'Home' || event.key === 'End' || direction[event.key]) {
+              event.preventDefault();
+              var next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (tabIndex + direction[event.key] + tabs.length) % tabs.length;
+              selectDetailTab(tabs[next]);
+              tabs[next].focus();
+            }
+          });
+        });
 
-        var checkboxes = panel.querySelectorAll('[data-deep-frame-checkbox]');
-        var observations = panel.querySelectorAll('[data-deep-frame-observation]');
-        function syncFrameObservations() {
-          checkboxes.forEach(function (checkbox) {
-            var card = checkbox.closest('[data-deep-frame-card]');
-            var frameRef = checkbox.getAttribute('data-frame-ref');
-            var observation = Array.prototype.find.call(observations, function (item) {
-              return item.getAttribute('data-frame-ref') === frameRef;
-            });
-            if (card) card.classList.toggle('is-selected', checkbox.checked);
-            if (observation) observation.hidden = !checkbox.checked;
+        var checkboxes = Array.prototype.slice.call(panel.querySelectorAll('[data-deep-frame-checkbox]'));
+        var observations = panel.querySelector('[data-deep-frame-observations]');
+        var emptyState = panel.querySelector('[data-deep-frame-observation-empty]');
+        var selectAll = panel.querySelector('[data-deep-frame-select-all]');
+        var selectNone = panel.querySelector('[data-deep-frame-clear]');
+        var selectionControls = panel.querySelector('.deep-frame-selection-controls');
+        var selectedRefs = new Set(checkboxes.filter(function (checkbox) { return checkbox.checked; }).map(function (checkbox) { return checkbox.getAttribute('data-frame-ref'); }));
+        var observationByRef = new Map();
+        var selectionHint = document.createElement('p');
+        selectionHint.className = 'highlight-selection-hint';
+        if (selectionControls) {
+          selectionControls.classList.add('highlight-selection-actions');
+          selectionControls.prepend(selectionHint);
+        }
+        if (selectAll) selectAll.classList.add('highlight-selection-button');
+        if (selectNone) selectNone.classList.add('highlight-selection-button');
+        if (observations) {
+          Array.prototype.slice.call(observations.querySelectorAll('[data-deep-frame-observation]')).forEach(function (item) {
+            observationByRef.set(item.getAttribute('data-frame-ref'), item.cloneNode(true));
           });
         }
-        checkboxes.forEach(function (checkbox) { checkbox.addEventListener('change', syncFrameObservations); });
-        var selectAll = panel.querySelector('[data-deep-frame-select-all]');
-        var clear = panel.querySelector('[data-deep-frame-clear]');
-        if (selectAll) selectAll.addEventListener('click', function () { checkboxes.forEach(function (checkbox) { checkbox.checked = true; }); syncFrameObservations(); });
-        if (clear) clear.addEventListener('click', function () { checkboxes.forEach(function (checkbox) { checkbox.checked = false; }); syncFrameObservations(); });
-        syncFrameObservations();
+
+        checkboxes.forEach(function (checkbox) {
+          var card = checkbox.closest('[data-deep-frame-card]');
+          var label = checkbox.closest('.deep-frame-select-label');
+          var caption = card && card.querySelector('figcaption');
+          if (label && caption) {
+            label.textContent = '';
+            label.appendChild(checkbox);
+            caption.prepend(label);
+            caption.addEventListener('click', function (event) {
+              if (event.target.closest('.deep-frame-select-label')) return;
+              var reference = checkbox.getAttribute('data-frame-ref');
+              setSelection(reference, !selectedRefs.has(reference));
+            });
+          }
+        });
+
+        function renderObservations() {
+          if (!observations) return;
+          observations.replaceChildren();
+          checkboxes.forEach(function (checkbox) {
+            var reference = checkbox.getAttribute('data-frame-ref');
+            var observation = observationByRef.get(reference);
+            if (selectedRefs.has(reference) && observation) observations.append(observation.cloneNode(true));
+          });
+          if (emptyState) emptyState.hidden = selectedRefs.size !== 0;
+        }
+
+        function syncSelection() {
+          checkboxes.forEach(function (checkbox) {
+            var reference = checkbox.getAttribute('data-frame-ref');
+            var selected = selectedRefs.has(reference);
+            var card = checkbox.closest('[data-deep-frame-card]');
+            checkbox.checked = selected;
+            if (card) card.classList.toggle('is-selected', selected);
+          });
+          if (selectAll) selectAll.disabled = selectedRefs.size === checkboxes.length;
+          if (selectNone) selectNone.disabled = selectedRefs.size === 0;
+          selectionHint.textContent = '已选择 ' + selectedRefs.size + ' / ' + checkboxes.length + ' 帧';
+          renderObservations();
+        }
+
+        function setSelection(reference, selected) {
+          if (selected) selectedRefs.add(reference);
+          else selectedRefs.delete(reference);
+          syncSelection();
+        }
+
+        checkboxes.forEach(function (checkbox) {
+          checkbox.addEventListener('change', function () {
+            setSelection(checkbox.getAttribute('data-frame-ref'), checkbox.checked);
+          });
+        });
+        if (selectAll) selectAll.addEventListener('click', function () {
+          checkboxes.forEach(function (checkbox) { selectedRefs.add(checkbox.getAttribute('data-frame-ref')); });
+          syncSelection();
+        });
+        if (selectNone) selectNone.addEventListener('click', function () {
+          selectedRefs.clear();
+          syncSelection();
+        });
+        syncSelection();
       });
     }());
   </script>

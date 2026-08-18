@@ -1001,7 +1001,11 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-collapsible-toggle', rendered)
         self.assertIn('class="collapsible-toggle-action">收起数据</span>', rendered)
         self.assertEqual(rendered.count('class="second-level-chart"'), 0)
-        self.assertIn("点击 Top1 波峰画面", rendered)
+        deep_dive_section = rendered.split('id="material-deep-dive"', 1)[1]
+        self.assertIn("0s · 点击指数 -", deep_dive_section)
+        self.assertIn("2s · 点击指数 0.8", deep_dive_section)
+        self.assertNotIn("封面画面", deep_dive_section)
+        self.assertNotIn("点击 Top1 波峰画面", deep_dive_section)
         self.assertIn('data-jump-material="101"', rendered)
         self.assertIn('class="highlight-material-title"', rendered)
         self.assertIn("## 05｜单素材深度分析", markdown)
@@ -1110,8 +1114,34 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-deep-frame-clear', rendered)
         self.assertIn('data-deep-frame-checkbox', rendered)
         self.assertIn('data-deep-frame-observation', rendered)
+        self.assertIn('data-deep-frame-observation-empty', rendered)
+        self.assertIn('全选高光帧', rendered)
+        self.assertIn('全不选高光帧', rendered)
         self.assertIn('脚本数据：未接入', rendered)
         self.assertIn('核心人群标签</dt><dd>未返回</dd>', rendered)
+
+    def test_render_report_supports_keyboard_tabs_and_filtered_highlight_observations(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(self.deep_dive_analysis(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=self.deep_dive_fact_pack())
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-material-detail-tab="visual"', rendered)
+        self.assertIn('tabindex="-1" data-material-detail-tab="timeline"', rendered)
+        self.assertIn('data-deep-frame-select-all', rendered)
+        self.assertIn('data-deep-frame-clear', rendered)
+        self.assertIn('data-deep-frame-observation-empty', rendered)
+        self.assertIn("var selectedRefs = new Set", rendered)
+        self.assertIn("function renderObservations()", rendered)
+        self.assertIn("function syncSelection()", rendered)
+        self.assertIn("selectAll.disabled = selectedRefs.size === checkboxes.length", rendered)
+        self.assertIn("selectNone.disabled = selectedRefs.size === 0", rendered)
+        self.assertIn("caption.prepend(label)", rendered)
+        self.assertIn("tab.addEventListener('keydown'", rendered)
+        self.assertIn("tabs.length - 1", rendered)
 
     def test_render_report_rejects_invalid_material_deep_dive_frame_and_second(self):
         report = load_module()

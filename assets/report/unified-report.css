@@ -758,28 +758,65 @@ body.unified-report {
 
 .unified-yuntu .material-detail-tabs {
   display: flex;
-  gap: 8px;
+  flex-wrap: nowrap;
+  gap: 18px;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
   margin-top: 18px;
   border-bottom: 1px solid var(--unified-line);
-  padding-bottom: 10px;
+  padding: 0 2px 8px;
+  scrollbar-width: thin;
 }
 
-.unified-yuntu .material-detail-tabs button,
 .unified-yuntu .deep-frame-selection-controls button {
-  min-height: 36px;
+  min-height: 38px;
   border: 1px solid var(--unified-line);
   border-radius: 6px;
-  background: var(--unified-paper);
+  background: #fff;
   color: var(--unified-ink);
   padding: 6px 10px;
   cursor: pointer;
 }
 
+.unified-yuntu .material-detail-tabs button {
+  position: relative;
+  flex: 0 0 auto;
+  min-height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--unified-muted);
+  padding: 8px 2px;
+  cursor: pointer;
+  white-space: nowrap;
+  font: inherit;
+}
+
+.unified-yuntu .material-detail-tabs button:hover {
+  color: var(--unified-ink);
+}
+
 .unified-yuntu .material-detail-tabs button[aria-selected="true"] {
-  border-color: var(--unified-ink);
-  background: var(--unified-ink);
-  color: #fff;
+  background: transparent;
+  color: var(--unified-ink);
   font-weight: 800;
+}
+
+.unified-yuntu .material-detail-tabs button[aria-selected="true"]::after {
+  content: "";
+  display: block;
+  position: absolute;
+  right: 0;
+  bottom: -9px;
+  left: 0;
+  height: 2px;
+  background: var(--unified-accent);
+}
+
+.unified-yuntu .material-detail-tabs button:focus-visible {
+  outline: 2px solid var(--unified-focus);
+  outline-offset: 3px;
 }
 
 .unified-yuntu .material-detail-panel {
@@ -788,18 +825,58 @@ body.unified-report {
 
 .unified-yuntu .deep-frame-selection-controls {
   display: flex;
+  align-items: center;
   gap: 8px;
   justify-content: flex-end;
   margin-bottom: 10px;
 }
 
+.unified-yuntu .highlight-selection-hint {
+  margin: 0 auto 0 0;
+  color: var(--unified-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.unified-yuntu .deep-frame-selection-controls button:focus-visible,
+.unified-yuntu .deep-frame-select-label input:focus-visible {
+  outline: 3px solid var(--unified-focus);
+  outline-offset: 2px;
+}
+
+.unified-yuntu .deep-frame-selection-controls button:disabled {
+  cursor: default;
+  opacity: .5;
+}
+
 .unified-yuntu .deep-frame-select-label {
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  order: 2;
+  flex: 0 0 auto;
   gap: 5px;
-  padding: 7px 10px 0;
+  margin: 0 0 0 auto;
+  padding: 0;
   color: var(--unified-muted);
   font-size: 12px;
+  line-height: 1.2;
+  vertical-align: middle;
+}
+
+.unified-yuntu .deep-frame-card figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.unified-yuntu .deep-frame-select-label input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #2c1810;
+  cursor: pointer;
 }
 
 .unified-yuntu .deep-frame-card.is-selected {
@@ -809,6 +886,16 @@ body.unified-report {
 
 .unified-yuntu .deep-frame-observations li[hidden] {
   display: none;
+}
+
+.unified-yuntu .deep-frame-observation-empty {
+  margin: 0;
+  color: var(--unified-muted);
+}
+
+.unified-yuntu .deep-frame-observations ul {
+  margin: 0;
+  padding-left: 20px;
 }
 
 @media (max-width: 680px) {

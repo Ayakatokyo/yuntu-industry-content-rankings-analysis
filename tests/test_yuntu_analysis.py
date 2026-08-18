@@ -266,6 +266,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(data["dataLimitations"][0]["reason"], "not_returned")
         self.assertIn("visualAssets", prompt)
         self.assertIn("实际查看每张成功 JPEG", prompt)
+        self.assertIn("主体、人物、产品、动作、场景、构图和可见字幕", prompt)
 
     def test_prepare_analysis_records_standard_highlight_failure_states(self):
         analysis = load_module()

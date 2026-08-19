@@ -86,7 +86,7 @@ class RpaConnectorTest(unittest.TestCase):
     def test_connector_script_exists(self):
         self.assertTrue(SCRIPT_PATH.exists(), "analysis connector has not been implemented")
 
-    def test_fetch_batch_uses_target_plus_two_candidates_by_default(self):
+    def test_fetch_batch_uses_double_target_candidates_by_default(self):
         connector = self.connector()
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             connector, "fetch_batch", return_value=0
@@ -100,7 +100,7 @@ class RpaConnectorTest(unittest.TestCase):
             )
 
         self.assertEqual(status, 0)
-        self.assertEqual(fetch_batch.call_args.kwargs["candidate_top_n"], 7)
+        self.assertEqual(fetch_batch.call_args.kwargs["candidate_top_n"], 10)
 
     def test_main_dispatches_explicit_unresolved_retry(self):
         connector = self.connector()
@@ -330,7 +330,7 @@ class RpaConnectorTest(unittest.TestCase):
                     },
                     "headers": {"Content-Type": "application/json"},
                     "cookies": {"YCSESSIONID": "authorization-token"},
-                    "timeout": 3600,
+                    "timeout": 300,
                 },
             )
 

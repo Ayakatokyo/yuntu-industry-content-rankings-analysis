@@ -64,6 +64,7 @@ DETAIL_FUNCTION_CODE = "rpa.conn.juliang.yt.industry.content.rankings.detail"
 PLATFORM = "RPA_JULIANG_YT_ACCOUNT_PASSWORD"
 DATA_SOURCE_TYPE = "rpa"
 HEADERS = {"Content-Type": "application/json"}
+RPA_REQUEST_TIMEOUT_SECONDS = 300
 REQUIRED_ENVIRONMENT = (
     "ENV_BACKEND_HOST",
     "YUCE_AUTHORIZATION",
@@ -423,7 +424,7 @@ def _invoke(operation, shop_id, business_params, environ=None, session=None):
             },
             headers=HEADERS,
             cookies=cookies,
-            timeout=3600,
+            timeout=RPA_REQUEST_TIMEOUT_SECONDS,
         )
     except Exception as exc:
         raise RpaConnectorError(
@@ -675,7 +676,7 @@ def fetch_batch_analysis(
     }
     target_top_n = _validate_top_n(target_top_n)
     candidate_top_n = (
-        target_top_n + 2 if candidate_top_n is None else _validate_top_n(candidate_top_n)
+        target_top_n * 2 if candidate_top_n is None else _validate_top_n(candidate_top_n)
     )
     try:
         return fetch_batch(

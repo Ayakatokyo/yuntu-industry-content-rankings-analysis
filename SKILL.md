@@ -41,7 +41,7 @@ metadata:
 `rpa.conn.juliang.yt.industry.content.rankings.list`，再从列表响应中按顺序选取
 `material_id`，按固定波次调用 `rpa.conn.juliang.yt.industry.content.rankings.detail`。
 列表连接器完成后必须先完成结构化落盘：`normalized/list-records.json` 保存素材本身的标题、身份、发布时间、指标、标签和列表筛选上下文；`normalized/detail-request-params.json` 保存下一步详情连接器所需的 `material_id` 与详情日期参数。详情连接器只消费后者，分析事实包消费前者和成功详情记录。
-`fetch` 是长任务：详情 RPA 单次调用可能超过 300 秒，必须使用平台提供的异步/长任务会话执行，并通过 `status` 定期观察落盘进度；不得在 300 秒同步窗口中等待完整批次。详情阶段固定每波最多并行 2 个素材；某条详情持久化后立即在独立后处理线程中下载视频并提取标准高光帧，但下一波详情只能在本波全部详情和高光帧任务均进入终态后启动。高光帧失败只记录具体失败原因，不会重发详情 RPA 或触发额外补位。详情阶段中断后，只能以完全相同的运行契约续跑。契约包含 `shop_id`、全部列表筛选、详情日期、`targetTopN` 与 `candidateTopN`；参数不一致时，脚本会在调用 RPA 前拒绝该目录，必须新建输出目录。旧目录缺少可验证的 `run-summary.json` 时同样拒绝，不得把历史 CSV 当作本次列表。
+`fetch` 是长任务：榜单和详情 RPA 单次请求最多等待 300 秒，超时会被记录为对应请求失败；列表失败终止当前批次，详情失败由现有批次调度继续从候选池补位。必须使用平台提供的异步/长任务会话执行，并通过 `status` 定期观察落盘进度；不得在 300 秒同步窗口中等待完整批次。详情阶段固定每波最多并行 2 个素材；某条详情持久化后立即在独立后处理线程中下载视频并提取标准高光帧，但下一波详情只能在本波全部详情和高光帧任务均进入终态后启动。高光帧失败只记录具体失败原因，不会重发详情 RPA 或触发额外补位。详情阶段中断后，只能以完全相同的运行契约续跑。契约包含 `shop_id`、全部列表筛选、详情日期、`targetTopN` 与 `candidateTopN`；参数不一致时，脚本会在调用 RPA 前拒绝该目录，必须新建输出目录。旧目录缺少可验证的 `run-summary.json` 时同样拒绝，不得把历史 CSV 当作本次列表。
 
 ## 运行环境要求
 
@@ -59,7 +59,7 @@ metadata:
 
 详情日期使用 `--detail-date-range-type`（`LAST_7_DAYS`、`LAST_30_DAYS` 或 `CUSTOM`），但必须与榜单时间范围一致；详情自定义日期必须同时提供 `--detail-custom-start-date` 和 `--detail-custom-end-date`，且结束日期不得早于开始日期。
 
-`--top-n` 必须为正整数，默认值为 `10`，兼容旧用法。新增批次口径中，`--target-top-n` 表示最终希望分析成功的素材数量；`--candidate-top-n` 表示从榜单中保留的候选池上限，未显式指定时为目标数量加 2，用于避免无故拉取过多详情。`material_id` 始终从列表响应中选择，不能作为详情覆盖参数提供。
+`--top-n` 必须为正整数，默认值为 `10`，兼容旧用法。新增批次口径中，`--target-top-n` 表示最终希望分析成功的素材数量；`--candidate-top-n` 表示从榜单中保留的候选池上限，未显式指定时为目标数量的 2 倍，以便详情超时、失败或被拒绝时按排名继续补位。`material_id` 始终从列表响应中选择，不能作为详情覆盖参数提供。
 
 列表筛选标志为 `--industry`、`--time-range-type`、`--custom-start-date`、`--custom-end-date`、`--ages`、`--genders`、`--crowd-groups`、`--brand-scope-type`、`--brands` 和 `--ranking-limit-type`。
 

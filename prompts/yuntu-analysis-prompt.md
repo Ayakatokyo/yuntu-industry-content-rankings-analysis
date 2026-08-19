@@ -1,4 +1,4 @@
-# 小仙炖云图行业内容榜单分析任务
+# 云图行业内容榜单分析任务
 
 读取同目录的 `yuntu-analysis-data.json`，生成 `yuntu-ai-analysis.json`。
 

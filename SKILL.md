@@ -1,9 +1,9 @@
 ---
 name: 云图行业内容榜单分析
-description: 适用于通过固定预策 RPA 连接器获取竞品内容榜单与秒级详情，并生成小仙炖内容策略报告的场景。
-argument_hint: 输入行业、分析时间范围（优先填云图界面显示的真实起止日期）、榜单筛选项、品牌榜单Top素材数和秒级拆解素材数，生成小仙炖行业内容榜单分析报告。
+description: 适用于通过固定预策 RPA 连接器获取行业内容榜单与秒级详情，并生成内容策略报告的场景。
+argument_hint: 输入行业、分析周期（近7天、近30天或自定义起止日期）、指定品牌、截取方式、年龄、性别、八大人群、品牌榜单Top素材数和秒级拆解素材数，生成行业内容榜单分析报告。
 metadata:
-  pre_input: 帮我生成云图行业内容榜单分析报告，行业是 ____，分析时间范围是 ____（云图界面真实起止日期，如 2026-07-26 至 2026-08-01；未填写则列表和素材详情均使用云图默认近七天），榜单筛选项是 ____，品牌榜单Top素材数是 ____（默认30），秒级拆解素材数是 ____（默认10）。
+  pre_input: 帮我生成云图行业内容榜单分析报告，行业是 ____，分析周期是 ____（近7天、近30天或自定义起止日期；近7天/近30天直接使用云图周期定义，不换算为自定义日期），指定品牌是 ____（至少3个品牌），截取方式是 ____（曝光量TOP1000、CTRTOP1000、互动率TOP1000、完播率TOP1000），年龄是 ____（可选；不填写则不筛选，即全选），性别是 ____（可选；不填写则不筛选，即全选），八大人群是 ____（可选；不填写则不筛选，即全选），品牌榜单Top素材数是 ____（默认30），秒级拆解素材数是 ____（默认10）。
 ---
 
 # 云图行业内容榜单分析
@@ -13,14 +13,16 @@ metadata:
 调用本技能时，提示词应提供以下业务信息：
 
 - `行业`：必填，例如“食品饮料”。
-- `分析时间范围`：榜单和素材详情共用。优先填写云图界面日期控件实际展示的闭区间，例如截图中的“近七天”应写为 `2026-07-26 至 2026-08-01`，不要只写“近七天”。未填写时，二者均使用云图默认“近七天”。
-- `榜单筛选项`：按需填写品牌范围、指定品牌、年龄、性别、八大人群和榜单限制；未填写的筛选项保持云图默认，不擅自补充。
+- `分析周期`：榜单和素材详情共用。填写“近7天”时，两端分别传入云图原生枚举 `LAST_7_DAYS`；填写“近30天”时，两端分别传入 `LAST_30_DAYS`。相对周期不换算为自定义日期，云图界面展示的起止日期仅作展示与核对。用户明确填写起止日期时，才使用 `CUSTOM`，且两端传入相同的闭区间。未填写时，二者均使用云图默认“近七天”（`LAST_7_DAYS`）。
+- `指定品牌`：按需填写；填写时必须提供 3 至 10 个品牌，并使用 `SPECIFIED_BRANDS` 品牌范围。未填写时保持云图默认品牌范围。
+- `截取方式`：按需填写，仅支持“曝光量TOP1000”、“CTRTOP1000”、“互动率TOP1000”或“完播率TOP1000”；未填写时保持云图默认。
+- `年龄`、`性别`、`八大人群`：均为可选筛选；不填写时不传对应筛选参数，即全选。
 - `品牌榜单Top素材数`：从本次已获取的合并 TOP1000 榜单中按用户输入品牌筛选后，每个品牌纳入 01 章的榜单素材数；未填写时为 `30`。
 - `秒级拆解素材数`：最终希望完成秒级拆解并纳入 04/05 章的素材数；未填写时为 `10`。它不参与 01 章的行业或品牌榜单分析。
 
-时间范围必须以云图界面当次实际显示的日期为准，且首尾日期均包含在内。用户写“近七天”或其他相对周期时，执行前先在云图界面确认并在运行记录中写明对应的真实起止日期。榜单和素材详情必须使用同一时间范围：用户给出明确起止日时，二者均使用该闭区间；不得以执行机本地日期自行推算或将示例日期当作固定默认值。
+相对周期必须使用云图的原生定义，不得以执行机本地日期自行推算或改写为 `CUSTOM`。榜单和素材详情必须使用同一分析周期：用户给出明确起止日时，二者均使用该闭区间；日期首尾均包含在内。
 
-默认映射如下：未指定时间范围时，榜单和详情均使用 `LAST_7_DAYS`。提供真实起止日期时，榜单使用 `--time-range-type CUSTOM --custom-start-date/--custom-end-date`，详情同时使用 `--detail-date-range-type CUSTOM --detail-custom-start-date/--detail-custom-end-date`，两端传入相同的起止日期。
+周期映射如下：用户填写“近7天”时，榜单使用 `--time-range-type LAST_7_DAYS`，详情使用 `--detail-date-range-type LAST_7_DAYS`；填写“近30天”时，两端分别使用 `LAST_30_DAYS`；未填写时，两端均使用 `LAST_7_DAYS`。提供明确起止日期时，榜单使用 `--time-range-type CUSTOM --custom-start-date/--custom-end-date`，详情同时使用 `--detail-date-range-type CUSTOM --detail-custom-start-date/--detail-custom-end-date`，两端传入相同的起止日期。
 
 本技能使用固定连接器：
 
@@ -33,7 +35,7 @@ metadata:
 - `references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_list.md`
 - `references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_detail.md`
 
-主流程是：列表取数 -> 按响应顺序挑选唯一数字型 `material_id` -> 拉取秒级详情 -> 规范化 -> 准备分析事实包 -> 生成小仙炖结构化洞察 -> 渲染最终报告。RPA 大概率返回 `files-envelope` 和 CSV 文件；脚本会下载原始 CSV、转换为 `normalized` JSON records，再基于规范化数据生成分析事实包和报告。
+主流程是：列表取数 -> 按响应顺序挑选唯一数字型 `material_id` -> 拉取秒级详情 -> 规范化 -> 准备分析事实包 -> 生成结构化洞察 -> 渲染最终报告。RPA 大概率返回 `files-envelope` 和 CSV 文件；脚本会下载原始 CSV、转换为 `normalized` JSON records，再基于规范化数据生成分析事实包和报告。
 
 一次 `fetch` 执行只允许调用一次列表连接器：先调用
 `rpa.conn.juliang.yt.industry.content.rankings.list`，再从列表响应中按顺序选取
@@ -199,7 +201,7 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 4. `materialComparison`：素材表现对比
 5. `materialDiagnoses`：单素材秒级诊断
 6. `competitorPatterns`：竞品创意模式
-7. `xiaoxianDunOpportunityMap`：小仙炖机会地图
+7. `xiaoxianDunOpportunityMap`：机会地图
 8. `experimentMatrix`：下一轮实验矩阵
 
 `topMaterialCombination` 包含 `overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。`overallConclusions` 必须且只能包含 `data`、`people`、`marketing` 三个维度；`brandConclusions` 的每个品牌必须包含 `dataSummary`、`peopleSummary`、`marketingSummary`；`brandComparisonConclusion` 必须基于同一合并 TOP1000 中各品牌榜单 Top N 的指标证据总结横向差异。01 章的数据维度只分析曝光、CTR、CVR、3s 播放率和 CPM；CPM 未由 RPA 提供时显示不可用，不得推算。品牌名在 RPA 请求中保留用户输入的完整形式；列表落盘后，仅在当前运行中将包含 `/` 的品牌参数拆为匹配词，Tab 和事实中的品牌名称始终保留完整用户参数。标题匹配是业务分类，不是 RPA 原生品牌字段；未知品牌和歧义标题不进入品牌 Top N，但保留在行业 TOP1000 事实中。

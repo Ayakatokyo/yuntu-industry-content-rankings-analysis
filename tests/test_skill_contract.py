@@ -32,8 +32,8 @@ class AnalysisSkillContractTests(unittest.TestCase):
         frontmatter = re.match(r"\A---\n(.*?)\n---", skill, re.DOTALL)
 
         self.assertIsNotNone(frontmatter)
-        self.assertRegex(frontmatter.group(1), r"(?m)^argument_hint: .+时间范围")
-        self.assertRegex(frontmatter.group(1), r"(?m)^  pre_input: .+时间范围")
+        self.assertRegex(frontmatter.group(1), r"(?m)^argument_hint: .+分析周期")
+        self.assertRegex(frontmatter.group(1), r"(?m)^  pre_input: .+分析周期")
         for phrase in (
             "近七天",
             "云图界面",
@@ -41,14 +41,42 @@ class AnalysisSkillContractTests(unittest.TestCase):
             "品牌榜单Top素材数",
             "秒级拆解素材数",
             "默认",
-            "同一时间范围",
+            "同一分析周期",
         ):
             self.assertIn(phrase, skill)
+
+    def test_documents_relative_periods_as_yuntu_enums(self):
+        skill = self.read_skill()
+
+        for phrase in (
+            "近7天",
+            "LAST_7_DAYS",
+            "近30天",
+            "LAST_30_DAYS",
+            "不换算为自定义日期",
+        ):
+            self.assertIn(phrase, skill)
+
+    def test_documents_optional_filters_and_generic_user_facing_copy(self):
+        skill = self.read_skill()
+        prompt = (ROOT / "prompts" / "yuntu-analysis-prompt.md").read_text(
+            encoding="utf-8"
+        )
+
+        for phrase in (
+            "指定品牌是 ____（至少3个品牌）",
+            "年龄是 ____（可选；不填写则不筛选，即全选）",
+            "性别是 ____（可选；不填写则不筛选，即全选）",
+            "八大人群是 ____（可选；不填写则不筛选，即全选）",
+        ):
+            self.assertIn(phrase, skill)
+        self.assertNotIn("小仙炖", skill)
+        self.assertNotIn("小仙炖", prompt)
 
     def test_requires_the_same_time_range_for_ranking_and_detail(self):
         skill = self.read_skill()
 
-        self.assertIn("榜单和素材详情必须使用同一时间范围", skill)
+        self.assertIn("榜单和素材详情必须使用同一分析周期", skill)
         self.assertRegex(
             skill,
             r'(?s)--time-range-type "LAST_7_DAYS".{0,80}'
@@ -209,14 +237,14 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertIn("python <skill-root>/scripts/rpa_connector.py status", skill)
         self.assertNotIn("--highlight-trends", skill)
 
-    def test_documents_xiaoxian_dun_closed_loop_report(self):
+    def test_documents_closed_loop_report(self):
         skill = self.read_skill()
         for chapter in (
             "榜单机会总览",
             "素材表现对比",
             "单素材秒级诊断",
             "竞品创意模式",
-            "小仙炖机会地图",
+            "机会地图",
             "下一轮实验矩阵",
         ):
             self.assertIn(chapter, skill)

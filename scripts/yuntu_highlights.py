@@ -328,6 +328,133 @@ def extract_frame(video_path, second, destination, *, ffmpeg_bin=None):
         partial.unlink(missing_ok=True)
 
 
+def _validate_jpeg(path, *, ffmpeg_bin=None):
+    """Reject empty, malformed, or undecodable JPEG output."""
+    image = Path(path)
+    if not image.is_file() or image.stat().st_size == 0:
+        raise HighlightFrameError("JPEG output is empty")
+    with image.open("rb") as handle:
+        header = handle.read(2)
+        handle.seek(-2, os.SEEK_END)
+        trailer = handle.read(2)
+    if header != b"\xff\xd8" or trailer != b"\xff\xd9":
+        raise HighlightFrameError("JPEG markers are invalid")
+
+    try:
+        completed = subprocess.run(
+            [
+                _resolve_ffmpeg(ffmpeg_bin),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-i",
+                str(image),
+                "-f",
+                "null",
+                "-",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=VIDEO_DOWNLOAD_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise HighlightFrameError(f"JPEG decode validation failed: {error}") from error
+    if completed.returncode != 0:
+        raise HighlightFrameError("JPEG decode validation failed")
+
+
+def _batch_filter_graph(seconds):
+    labels = "".join(f"[s{index}]" for index in range(len(seconds)))
+    branches = [f"[0:v]split={len(seconds)}{labels}"]
+    branches.extend(
+        f"[s{index}]trim=start={second:g},setpts=PTS-STARTPTS[out{index}]"
+        for index, second in enumerate(seconds)
+    )
+    return ";".join(branches)
+
+
+def extract_frames_batch(video_path, requests, *, ffmpeg_bin=None):
+    """Extract a material's unique target seconds in one FFmpeg process."""
+    staged = []
+    seen_seconds = set()
+    for request in requests:
+        second = request["second"]
+        target = Path(request["destination"])
+        if second in seen_seconds:
+            continue
+        seen_seconds.add(second)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            prefix="yuntu-frame-", suffix=".jpg", dir=target.parent, delete=False
+        ) as handle:
+            staged.append((second, target, Path(handle.name)))
+    if not staged:
+        raise HighlightFrameError("no frame requests")
+
+    command = [
+        _resolve_ffmpeg(ffmpeg_bin),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-y",
+        "-threads",
+        "1",
+        "-filter_threads",
+        "1",
+        "-i",
+        str(video_path),
+        "-filter_complex",
+        _batch_filter_graph([second for second, _, _ in staged]),
+    ]
+    for index, (_, _, staging) in enumerate(staged):
+        command.extend(
+            [
+                "-map",
+                f"[out{index}]",
+                "-frames:v",
+                "1",
+                "-an",
+                "-sn",
+                "-dn",
+                "-q:v",
+                "2",
+                "-f",
+                "image2",
+                str(staging),
+            ]
+        )
+
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=VIDEO_DOWNLOAD_TIMEOUT_SECONDS,
+            check=False,
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or "").strip().splitlines()
+            suffix = f": {detail[-1][:240]}" if detail else ""
+            raise HighlightFrameError(f"ffmpeg batch frame extraction failed{suffix}")
+        for _, _, staging in staged:
+            _validate_jpeg(staging, ffmpeg_bin=ffmpeg_bin)
+        for _, target, staging in staged:
+            staging.replace(target)
+        return [target for _, target, _ in staged]
+    except HighlightFrameError:
+        raise
+    except (OSError, subprocess.SubprocessError) as error:
+        raise HighlightFrameError(f"ffmpeg batch frame extraction failed: {error}") from error
+    finally:
+        for _, _, staging in staged:
+            staging.unlink(missing_ok=True)
+
+
 def _write_json_atomically(payload, destination):
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -402,7 +529,45 @@ def _failed_frames_with_local_reuse(candidates, *, material_id, root, failure_re
     return frames
 
 
-def _material_frames(detail, candidates, root, downloader, frame_extractor, ffmpeg_bin):
+def _extract_frames_individually(
+    video_path, candidates, root, material_id, material_root, frame_extractor, ffmpeg_bin
+):
+    frames = []
+    for index, candidate in enumerate(candidates, start=1):
+        filename = _highlight_filename(index, candidate)
+        target = material_root / filename
+        relative_path = str(target.relative_to(root))
+        try:
+            frame_extractor(video_path, candidate["second"], target, ffmpeg_bin=ffmpeg_bin)
+            frames.append(
+                _frame_record(
+                    candidate,
+                    material_id=material_id,
+                    available=True,
+                    relative_path=relative_path,
+                )
+            )
+        except Exception:
+            frames.append(
+                _reused_frame_record(
+                    candidate,
+                    material_id=material_id,
+                    root=root,
+                    index=index,
+                )
+                or _frame_record(
+                    candidate,
+                    material_id=material_id,
+                    available=False,
+                    failure_reason="extract_failed",
+                )
+            )
+    return frames
+
+
+def _material_frames(
+    detail, candidates, root, downloader, frame_extractor, ffmpeg_bin, batch_extractor=None
+):
     material_id = str(detail.get("material_id") or "")
     video_url = detail.get("video_url")
     if not isinstance(video_url, str) or not video_url.strip():
@@ -419,37 +584,36 @@ def _material_frames(detail, candidates, root, downloader, frame_extractor, ffmp
             video_path = Path(temporary_directory) / "source-video"
             downloader(video_url, video_path)
             material_root.mkdir(parents=True, exist_ok=True)
-            frames = []
-            for index, candidate in enumerate(candidates, start=1):
-                filename = _highlight_filename(index, candidate)
-                target = material_root / filename
-                relative_path = str(target.relative_to(root))
-                try:
-                    frame_extractor(video_path, candidate["second"], target, ffmpeg_bin=ffmpeg_bin)
-                    frames.append(
-                        _frame_record(
-                            candidate,
-                            material_id=material_id,
-                            available=True,
-                            relative_path=relative_path,
-                        )
-                    )
-                except Exception:
-                    frames.append(
-                        _reused_frame_record(
-                            candidate,
-                            material_id=material_id,
-                            root=root,
-                            index=index,
-                        )
-                        or _frame_record(
-                            candidate,
-                            material_id=material_id,
-                            available=False,
-                            failure_reason="extract_failed",
-                        )
-                    )
-            return frames
+            requests = [
+                {
+                    "second": candidate["second"],
+                    "destination": material_root / _highlight_filename(index, candidate),
+                }
+                for index, candidate in enumerate(candidates, start=1)
+            ]
+            try:
+                (batch_extractor or extract_frames_batch)(
+                    video_path, requests, ffmpeg_bin=ffmpeg_bin
+                )
+            except Exception:
+                return _extract_frames_individually(
+                    video_path,
+                    candidates,
+                    root,
+                    material_id,
+                    material_root,
+                    frame_extractor,
+                    ffmpeg_bin,
+                )
+            return [
+                _frame_record(
+                    candidate,
+                    material_id=material_id,
+                    available=True,
+                    relative_path=str(request["destination"].relative_to(root)),
+                )
+                for candidate, request in zip(candidates, requests)
+            ]
     except Exception:
         return _failed_frames_with_local_reuse(
             candidates,
@@ -554,6 +718,7 @@ def generate_standard_highlights_for_detail(
     *,
     downloader=download_video,
     frame_extractor=extract_frame,
+    batch_extractor=None,
     ffmpeg_bin=None,
 ):
     """Generate or reuse the report's standard highlighter set for one material."""
@@ -568,6 +733,7 @@ def generate_standard_highlights_for_detail(
         downloader,
         frame_extractor,
         ffmpeg_bin,
+        batch_extractor,
     )
 
 
@@ -578,6 +744,7 @@ def generate_highlights(
     *,
     downloader=download_video,
     frame_extractor=extract_frame,
+    batch_extractor=None,
     ffmpeg_bin=None,
 ):
     """Create non-blocking highlight JPEGs and return their manifest frame records."""
@@ -595,6 +762,7 @@ def generate_highlights(
             downloader,
             frame_extractor,
             ffmpeg_bin,
+            batch_extractor,
         )
         results[material_id] = frames
         materials.append(
@@ -616,6 +784,7 @@ def generate_standard_highlights(
     *,
     downloader=download_video,
     frame_extractor=extract_frame,
+    batch_extractor=None,
     ffmpeg_bin=None,
 ):
     """Create the standard cover plus click-index Top5 frames for the report."""
@@ -629,6 +798,7 @@ def generate_standard_highlights(
             root,
             downloader=downloader,
             frame_extractor=frame_extractor,
+            batch_extractor=batch_extractor,
             ffmpeg_bin=ffmpeg_bin,
         )
         results[material_id] = frames

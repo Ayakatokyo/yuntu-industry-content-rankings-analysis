@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -350,6 +351,116 @@ class YuntuHighlightTests(unittest.TestCase):
 
         self.assertTrue(result["101"][0]["available"])
         self.assertEqual(result["101"][0]["frame_source"], "reused_local_extracted_frame")
+
+    def test_extract_frames_batch_uses_one_exact_decode_graph_with_limited_threads(self):
+        highlights = load_module()
+
+        def run(command, **_kwargs):
+            for index, token in enumerate(command):
+                if token == "image2":
+                    Path(command[index + 1]).write_bytes(b"\xff\xd8ok\xff\xd9")
+            return mock.Mock(returncode=0, stderr="")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            requests = [
+                {"second": 0, "destination": root / "cover.jpg"},
+                {"second": 2, "destination": root / "peak.jpg"},
+            ]
+            with mock.patch.object(highlights, "_resolve_ffmpeg", return_value="ffmpeg"), \
+                 mock.patch.object(highlights.subprocess, "run", side_effect=run) as invoke, \
+                 mock.patch.object(highlights, "_validate_jpeg", return_value=None):
+                targets = highlights.extract_frames_batch(root / "source.mp4", requests)
+
+            command = invoke.call_args.args[0]
+            graph = command[command.index("-filter_complex") + 1]
+            self.assertEqual(command.count("-i"), 1)
+            self.assertEqual(command[command.index("-threads") + 1], "1")
+            self.assertEqual(command[command.index("-filter_threads") + 1], "1")
+            self.assertIn("[0:v]split=2[s0][s1]", graph)
+            self.assertIn("[s0]trim=start=0,setpts=PTS-STARTPTS[out0]", graph)
+            self.assertIn("[s1]trim=start=2,setpts=PTS-STARTPTS[out1]", graph)
+            self.assertEqual(command.count("-frames:v"), 2)
+            self.assertEqual(targets, [root / "cover.jpg", root / "peak.jpg"])
+            self.assertTrue(all(path.is_file() for path in targets))
+
+    def test_validate_jpeg_rejects_empty_and_truncated_files(self):
+        highlights = load_module()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            empty = root / "empty.jpg"
+            empty.touch()
+            truncated = root / "truncated.jpg"
+            truncated.write_bytes(b"\xff\xd8not-complete")
+
+            with self.assertRaisesRegex(highlights.HighlightFrameError, "empty"):
+                highlights._validate_jpeg(empty)
+            with self.assertRaisesRegex(highlights.HighlightFrameError, "JPEG markers"):
+                highlights._validate_jpeg(truncated)
+
+    def test_standard_highlights_extract_all_frames_in_one_batch_call(self):
+        highlights = load_module()
+        calls = []
+
+        def downloader(_url, destination):
+            Path(destination).write_bytes(b"video")
+
+        def batch_extractor(_video, requests, *, ffmpeg_bin=None):
+            calls.append(requests)
+            for request in requests:
+                Path(request["destination"]).write_bytes(b"\xff\xd8ok\xff\xd9")
+
+        detail = {
+            "material_id": "101",
+            "video_url": "https://video.example/101.mp4",
+            "trend_series": [{
+                "trend_name": "点击指数",
+                "series": [
+                    {"second": 0, "value": 0}, {"second": 1, "value": 9},
+                    {"second": 2, "value": 0}, {"second": 3, "value": 8},
+                    {"second": 4, "value": 0}, {"second": 5, "value": 7},
+                    {"second": 6, "value": 0}, {"second": 7, "value": 6},
+                    {"second": 8, "value": 0}, {"second": 9, "value": 5},
+                    {"second": 10, "value": 0},
+                ],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            frames = highlights.generate_standard_highlights_for_detail(
+                detail, directory, downloader=downloader, batch_extractor=batch_extractor
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([request["second"] for request in calls[0]], [0, 1, 3, 5, 7, 9])
+        self.assertTrue(all(frame["available"] for frame in frames))
+
+    def test_batch_extraction_failure_falls_back_to_each_frame(self):
+        highlights = load_module()
+        extracted_seconds = []
+
+        def downloader(_url, destination):
+            Path(destination).write_bytes(b"video")
+
+        def failed_batch(*_args, **_kwargs):
+            raise highlights.HighlightFrameError("batch failed")
+
+        def frame_extractor(_video, second, destination, *, ffmpeg_bin=None):
+            extracted_seconds.append(second)
+            Path(destination).write_bytes(b"\xff\xd8ok\xff\xd9")
+
+        detail = {"material_id": "101", "video_url": "https://video.example/101.mp4", "trend_series": []}
+        with tempfile.TemporaryDirectory() as directory:
+            frames = highlights.generate_standard_highlights_for_detail(
+                detail,
+                directory,
+                downloader=downloader,
+                frame_extractor=frame_extractor,
+                batch_extractor=failed_batch,
+            )
+
+        self.assertEqual(extracted_seconds, [0])
+        self.assertTrue(frames[0]["available"])
 
     def test_download_video_rejects_response_larger_than_limit(self):
         highlights = load_module()

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 让当前云图批次可选择性输出 `0s` 封面帧与各指标 Top 3 波峰帧，并把帧证据呈现在样式化的小仙炖六章 HTML 报告中。
+**Goal:** 让当前云图批次可选择性输出 `0s` 封面帧与各指标 Top 3 波峰帧，并把帧证据呈现在样式化的目标品牌六章 HTML 报告中。
 
 **Architecture:** 新建 `scripts/yuntu_highlights.py` 封装趋势选峰、视频下载、FFmpeg 截图和清单写入；`prepare_analysis` 可选调用它并把元数据写入事实包。报告渲染器从 AI JSON 与事实包输出语义化 HTML，不改变六章 AI 契约或 Markdown 输出。
 

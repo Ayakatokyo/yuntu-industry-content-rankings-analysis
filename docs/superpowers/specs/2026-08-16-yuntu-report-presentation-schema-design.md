@@ -24,7 +24,7 @@
 
 ### 本阶段不包含
 
-- 不修改 `/Users/shuzida/Desktop/FDE客户/小仙炖/qianchuan-video-peak-frames` 的任何文件。
+- 不修改 `/Users/shuzida/Desktop/FDE客户/目标品牌/qianchuan-video-peak-frames` 的任何文件。
 - 不修改云图当前 `final-report-template.html`、CSS 或浏览器交互。
 - 不改变第 01 章的分析口径或现有 `chapter02Facts` / `chapter02AiFacts` 数据生成逻辑。
 - 不重跑 RPA，不改 AI 提示词，不重新分类营销标签。

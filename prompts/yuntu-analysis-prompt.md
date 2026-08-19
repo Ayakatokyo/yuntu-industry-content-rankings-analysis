@@ -6,7 +6,7 @@
 
 事实包同时提供 `industryTop1000Facts`、`brandTopNFacts`、`chapter02Facts`、`chapter02AiFacts`、`rankingFacts`、`audienceFacts`、`marketingFacts`、`secondLevelFacts`、`highlightFrameFacts`、`visualAssets` 与 `dataLimitations`。它们是模型可分析材料：规则只计算事实，模型负责写业务判断。`chapter02Facts` 仅供报告数据展示，品牌范围为全量匹配素材；`chapter02AiFacts` 才是 02 章 AI 二次分析范围，品牌范围与用户输入的 Top N 一致。`visualAssets` 是本地图片清单；必须实际查看每张成功 JPEG（`available=true`），原视频 URL 过期时仍使用已落盘的本地帧，不得以 URL 不可用为由跳过画面分析。
 
-输出必须是 JSON 对象，包含：topMaterialCombination、chapter02Insights、rankingOverview、audienceInsights、materialComparison、materialDiagnoses、competitorPatterns、xiaoxianDunOpportunityMap、experimentMatrix。若事实包中存在成功高光帧，还必须包含 highlightDashboard。若每条素材包含 `secondLevelBreakdown`，还必须包含 materialDeepDives。
+输出必须是 JSON 对象，包含：topMaterialCombination、chapter02Insights、rankingOverview、audienceInsights、materialComparison、materialDiagnoses、competitorPatterns、opportunityMap、experimentMatrix。若事实包中存在成功高光帧，还必须包含 highlightDashboard。若每条素材包含 `secondLevelBreakdown`，还必须包含 materialDeepDives。
 
 `topMaterialCombination` 必须是对象，包含 `executiveSummary`、`overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。01 章只负责榜单数据维度：`executiveSummary`、`overallConclusions` 和 `brandComparisonConclusion` 只能引用 `industryTop1000Facts` 与 `brandTopNFacts`；`overallConclusions` 必须且只能输出一个 `data` 维度。每个品牌结论只输出 `brand`、`classificationSource`、`dataSummary`、`evidence`、`material_ids`，只能引用 `brandTopNFacts`，不得生成 `peopleSummary` 或 `marketingSummary`。综合结论、每个品牌 `dataSummary` 和品牌差异总结均需在事实允许时写明分析样本、累计曝光、CTR/CVR/3 秒播放率的中位数及其行业基线比较，再给出一个可验证的测试方向；避免空泛短句。品牌名称必须与用户输入的完整参数一致；品牌 Top N 来自同一合并 TOP1000 的运行时品牌匹配，不能引用秒级详情。CPM 未由 RPA 提供时写“数据不足以判断”，不得从其他指标推算。
 
@@ -20,7 +20,7 @@
 
 所有结论必须引用素材 ID、指标、标签或秒级趋势作为证据。事实不足时写“数据不足以判断”。解释只能描述可能关系，不得声称因果；不得生成未经业务与合规确认的滋补、孕期或健康功效宣称。不得写执行过程、重跑、补位调度、代码状态、排障细节、事实包返回、口径说明、仅限观察等处理过程话术；摘要必须基于该素材的实际指标、标签、趋势或画面写成业务判断。
 
-所有 AI 二次分析字段采用“少量关键事实锚点 + 多句分析判断”的写法：只选最能支撑结论的指标、标签或素材数量作为依据，随后说明事实意味着什么、为什么值得保留或改写、下一步如何验证；不得把指标或标签清单当作结论主体。用户可见的每条业务洞察采用“事实锚点 -> 业务判断 -> 下一步验证”结构。数据维度应优先比较行业基线与品牌__BRAND_SCOPE_LABEL__的曝光、CTR、CVR 和 3 秒播放率，指出可测试的优势或短板；人群维度应把标签覆盖与内容主题连成目标人群假设；营销卖点维度应说明标签组合的内容取舍并给出拆分测试方向；品牌对比应指出相对优势、短板或指标取舍。解释只能描述可能关系，不得声称因果。`rankingOverview`、`audienceInsights`、`materialComparison`、`materialDiagnoses`、`competitorPatterns` 与 `xiaoxianDunOpportunityMap` 的每个 summary 至少 80 个中文字符，且同一章节不得重复同义文本。`experimentMatrix` 至少 4 条，覆盖放量、改写、验证和风险控制四类动作，每条基于不同的真实事实锚点。
+所有 AI 二次分析字段采用“少量关键事实锚点 + 多句分析判断”的写法：只选最能支撑结论的指标、标签或素材数量作为依据，随后说明事实意味着什么、为什么值得保留或改写、下一步如何验证；不得把指标或标签清单当作结论主体。用户可见的每条业务洞察采用“事实锚点 -> 业务判断 -> 下一步验证”结构。数据维度应优先比较行业基线与品牌__BRAND_SCOPE_LABEL__的曝光、CTR、CVR 和 3 秒播放率，指出可测试的优势或短板；人群维度应把标签覆盖与内容主题连成目标人群假设；营销卖点维度应说明标签组合的内容取舍并给出拆分测试方向；品牌对比应指出相对优势、短板或指标取舍。解释只能描述可能关系，不得声称因果。`rankingOverview`、`audienceInsights`、`materialComparison`、`materialDiagnoses`、`competitorPatterns` 与 `opportunityMap` 的每个 summary 至少 80 个中文字符，且同一章节不得重复同义文本。`experimentMatrix` 至少 4 条，覆盖放量、改写、验证和风险控制四类动作，每条基于不同的真实事实锚点。
 
 `highlightDashboard` 只使用事实包中 `available=true` 的 highlightFrames。实际查看每张 JPEG 后，将每张成功帧且仅一次归入 `portrait`（人像画面）、`product`（产品画面）或 `other`（其他画面）中的一个主视觉分类，分类顺序固定为 portrait、product、other；不要输出 scene 或 text_overlay 分类。每个非空分类包含 frame_refs、common_patterns 和 derivative_directions；报告必须分别展示“共性洞察”和“裂变方向”标题，方向只能引用本分类的 frame_refs。没有成功帧时不得编造视觉洞察。报告不展示高光帧选择规则说明。高光帧卡片信息顺序固定为：第一行封面画面或点击 TopN 波峰画面，第二行秒数与点击指数，第三行可点击的视频标题；不再输出“查看素材”按钮。只能描述该帧处于点击指数峰值秒点；不得说该画面导致点击、转化或指标提升，也不能声称其对应某句脚本话术或真实点击次数。
 

@@ -201,7 +201,7 @@ RPA 返回 `files-envelope` 时，脚本会校验 `success`、`code`、`result_t
 4. `materialComparison`：素材表现对比
 5. `materialDiagnoses`：单素材秒级诊断
 6. `competitorPatterns`：竞品创意模式
-7. `xiaoxianDunOpportunityMap`：机会地图
+7. `opportunityMap`：机会地图
 8. `experimentMatrix`：下一轮实验矩阵
 
 `topMaterialCombination` 包含 `overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。`overallConclusions` 必须且只能包含 `data`、`people`、`marketing` 三个维度；`brandConclusions` 的每个品牌必须包含 `dataSummary`、`peopleSummary`、`marketingSummary`；`brandComparisonConclusion` 必须基于同一合并 TOP1000 中各品牌榜单 Top N 的指标证据总结横向差异。01 章的数据维度只分析曝光、CTR、CVR、3s 播放率和 CPM；CPM 未由 RPA 提供时显示不可用，不得推算。品牌名在 RPA 请求中保留用户输入的完整形式；列表落盘后，仅在当前运行中将包含 `/` 的品牌参数拆为匹配词，Tab 和事实中的品牌名称始终保留完整用户参数。标题匹配是业务分类，不是 RPA 原生品牌字段；未知品牌和歧义标题不进入品牌 Top N，但保留在行业 TOP1000 事实中。

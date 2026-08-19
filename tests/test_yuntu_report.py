@@ -237,7 +237,7 @@ class YuntuReportTests(unittest.TestCase):
             "materialComparison": [{"material_id": "101", "summary": "CTR 位于候选池高位。", "evidence": [{"metric": "ctr", "value": 0.7}]}],
             "materialDiagnoses": [{"material_id": "101", "summary": "第 1-2 秒出现点击高点。", "evidence": [{"trend_name": "点击指数", "start_sec": 1, "end_sec": 2}]}],
             "competitorPatterns": [{"summary": "价格利益点前置。", "material_ids": ["101"], "evidence": [{"tag": "限时抢购"}]}],
-            "xiaoxianDunOpportunityMap": [{"summary": "测试通勤滋补场景。", "material_ids": ["101"], "evidence": [{"tag": "商品展示(有语音)"}]}],
+            "opportunityMap": [{"summary": "测试通勤场景。", "material_ids": ["101"], "evidence": [{"tag": "商品展示(有语音)"}]}],
             "experimentMatrix": [{"priority": "P1", "hypothesis": "测试通勤开场的 3 秒播放率表现", "creative_variable": "前 3 秒场景钩子", "target_audience": "新锐白领", "success_metric": "play_3s_rate", "control": "现有商品直展示素材", "review_action": "按人群拆分复盘", "evidence": [{"material_id": "101", "metric": "play_3s_rate"}]}],
         }
 
@@ -324,7 +324,7 @@ class YuntuReportTests(unittest.TestCase):
                 "peak_frame_reading": "点击峰值秒点中人物与产品同框，说明该画面组合值得保留为候选版本，但需要与其他开场变量分组验证。",
                 "second_level_reading": "五类指数只使用已返回秒级点位描述，点击高点与前段画面同时出现，可作为后续分镜测试的观察锚点。",
                 "audience_fit": "人群标签与日常场景主题存在可测试的匹配线索，不能视为真实分布；应在投放定向与素材版本交叉下验证。",
-                "xiaoxian_dun_reference": "小仙炖可测试产品主体和日常场景的组合，以清晰包装和单一利益点降低理解成本，并以短时播放与点击共同复盘。",
+                "replication_advice": "可测试产品主体和日常场景的组合，以清晰包装和单一利益点降低理解成本，并以短时播放与点击共同复盘。",
                 "do_not_copy": "不直接照搬竞品的健康功效、特定人群承诺或未验证状态暗示；仅借鉴人物、产品与日常场景的视觉组织方式。",
                 "second_level_observations": [{"trend_name": "点击指数", "summary": "第 2 秒为已返回的点击高点秒数，前段产品与人物同框可作为下一轮开场变量的对照锚点。", "evidence_seconds": [2]}],
             }
@@ -1168,7 +1168,7 @@ class YuntuReportTests(unittest.TestCase):
             "visual_summary", "data_summary", "audience_summary", "marketing_summary",
             "replication_advice", "risk_notes", "opening_judgment", "visual_rhythm",
             "peak_frame_reading", "second_level_reading", "audience_fit",
-            "xiaoxian_dun_reference", "do_not_copy",
+            "do_not_copy",
         )
         for dive in analysis["materialDeepDives"]:
             for field in summary_fields:
@@ -1553,7 +1553,7 @@ class YuntuReportTests(unittest.TestCase):
         fact_pack = {
             "filters": {
                 "industry": "食品饮料",
-                "brands": ["小仙炖", "诺特兰德"],
+                "brands": ["品牌甲", "品牌乙"],
                 "custom_start_date": "2026-07-26",
                 "custom_end_date": "2026-08-01",
             }
@@ -1564,7 +1564,7 @@ class YuntuReportTests(unittest.TestCase):
             analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
-        self.assertIn("食品饮料行业｜小仙炖、诺特兰德｜2026-07-26 至 2026-08-01", rendered)
+        self.assertIn("食品饮料行业｜品牌甲、品牌乙｜2026-07-26 至 2026-08-01", rendered)
         self.assertNotIn("好丽友、香飘飘", rendered)
 
     def test_render_report_keeps_evidence_in_json_without_rendering_it(self):
@@ -1576,7 +1576,7 @@ class YuntuReportTests(unittest.TestCase):
             "materialComparison": analysis["materialComparison"],
             "materialDiagnoses": analysis["materialDiagnoses"],
             "competitorPatterns": analysis["competitorPatterns"],
-            "xiaoxianDunOpportunityMap": analysis["xiaoxianDunOpportunityMap"],
+            "opportunityMap": analysis["opportunityMap"],
         }
         for name, entries in evidence_sections.items():
             entries[0]["evidence"] = [{"hidden": f"evidence-sentinel-{name}"}]

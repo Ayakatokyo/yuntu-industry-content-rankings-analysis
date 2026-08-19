@@ -1,10 +1,10 @@
-# 小仙炖云图行业内容榜单分析闭环 Implementation Plan
+# 目标品牌云图行业内容榜单分析闭环 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Convert real Yuntu RPA CSV exports into complete normalized facts and render evidence-backed Xiaoxian Dun content-strategy reports.
+**Goal:** Convert real Yuntu RPA CSV exports into complete normalized facts and render evidence-backed industry content analysis content-strategy reports.
 
-**Architecture:** Keep file download and batch orchestration unchanged. Extend `rpa_io.py` to safely decode Python-literal CSV cells, make the normalizer attach field-level availability metadata, then calculate comparison and video-trend facts in `yuntu_analysis.py`. A stricter analysis JSON contract supplies the six fixed Xiaoxian Dun report chapters to `yuntu_report.py`; rendering remains presentation-only.
+**Architecture:** Keep file download and batch orchestration unchanged. Extend `rpa_io.py` to safely decode Python-literal CSV cells, make the normalizer attach field-level availability metadata, then calculate comparison and video-trend facts in `yuntu_analysis.py`. A stricter analysis JSON contract supplies the six fixed industry content analysis report chapters to `yuntu_report.py`; rendering remains presentation-only.
 
 **Tech Stack:** Python 3 standard library (`ast`, `csv`, `statistics`, `json`, `unittest`), existing `requests` connector, Markdown and HTML.
 
@@ -14,9 +14,9 @@
 
 - Modify: `scripts/rpa_io.py` - safely decode JSON and Python-literal nested CSV cells.
 - Modify: `scripts/yuntu_normalizer.py` - normalize source fields and record availability/missing reasons.
-- Modify: `scripts/yuntu_analysis.py` - create per-material, candidate-pool, tag, trend, and Xiaoxian Dun opportunity facts.
+- Modify: `scripts/yuntu_analysis.py` - create per-material, candidate-pool, tag, trend, and industry content analysis opportunity facts.
 - Modify: `scripts/yuntu_report.py` - validate structured conclusions and render the confirmed six chapters.
-- Modify: `SKILL.md` - document the Xiaoxian Dun closed-loop process and analysis JSON contract.
+- Modify: `SKILL.md` - document the industry content analysis closed-loop process and analysis JSON contract.
 - Modify: `tests/test_rpa_io.py`, `tests/test_yuntu_normalizer.py`, `tests/test_yuntu_analysis.py`, `tests/test_yuntu_report.py`, `tests/test_skill_contract.py`.
 - Create: `tests/fixtures/yuntu_rpa_export_sample.csv` - scrubbed representative rows using the observed `\x01` delimiter and Python literals; no credentials or time-limited URLs.
 
@@ -226,7 +226,7 @@ Implement companion helpers that aggregate tags as `{count, materialCount, selec
 
 Set `schemaVersion` to `2`; add `candidatePool`, `dataAvailabilitySummary`, `tagInsights`, `trendSummary`, and per-material `metricComparison`, while retaining raw metrics, tags, high points, and loss points. Use all list records as the pool and selected materials as the detail-diagnosis subset.
 
-Require six model keys in `_prompt_text()`: `rankingOverview`, `materialComparison`, `materialDiagnoses`, `competitorPatterns`, `xiaoxianDunOpportunityMap`, and `experimentMatrix`. Require evidence and material IDs for material conclusions. Require every experiment to have `priority`, `hypothesis`, `creative_variable`, `target_audience`, `success_metric`, `control`, and `review_action`. Require “数据不足以判断” for absent facts and prohibit unverified health or efficacy claims.
+Require six model keys in `_prompt_text()`: `rankingOverview`, `materialComparison`, `materialDiagnoses`, `competitorPatterns`, `opportunityMap`, and `experimentMatrix`. Require evidence and material IDs for material conclusions. Require every experiment to have `priority`, `hypothesis`, `creative_variable`, `target_audience`, `success_metric`, `control`, and `review_action`. Require “数据不足以判断” for absent facts and prohibit unverified health or efficacy claims.
 
 - [ ] **Step 5: Run analysis tests**
 
@@ -236,9 +236,9 @@ Expected: PASS with deterministic means, medians, percentiles, sample-size gates
 
 - [ ] **Step 6: Commit commercial facts**
 
-Run: `git add scripts/yuntu_analysis.py tests/test_yuntu_analysis.py && git commit -m "feat: add xiaoxian dun commercial analysis facts"`
+Run: `git add scripts/yuntu_analysis.py tests/test_yuntu_analysis.py && git commit -m "feat: add industry content analysis commercial analysis facts"`
 
-### Task 4: Validate and render the six-chapter Xiaoxian Dun report
+### Task 4: Validate and render the six-chapter industry content analysis report
 
 **Files:**
 
@@ -255,7 +255,7 @@ Make `analysis_json()` return:
     "materialComparison": [{"material_id": "101", "summary": "CTR 位于候选池高位。", "evidence": [{"metric": "ctr", "value": 0.7}]}],
     "materialDiagnoses": [{"material_id": "101", "summary": "第 1-2 秒出现点击高点。", "evidence": [{"trend_name": "点击指数", "start_sec": 1, "end_sec": 2}]}],
     "competitorPatterns": [{"summary": "价格利益点前置。", "material_ids": ["101"], "evidence": [{"tag": "限时抢购"}]}],
-    "xiaoxianDunOpportunityMap": [{"summary": "测试通勤滋补场景。", "material_ids": ["101"], "evidence": [{"tag": "商品展示(有语音)"}]}],
+    "opportunityMap": [{"summary": "测试通勤滋补场景。", "material_ids": ["101"], "evidence": [{"tag": "商品展示(有语音)"}]}],
     "experimentMatrix": [{"priority": "P1", "hypothesis": "通勤开场提升 3 秒播放率", "creative_variable": "前 3 秒场景钩子", "target_audience": "新锐白领", "success_metric": "play_3s_rate", "control": "现有商品直展示素材", "review_action": "按人群拆分复盘"}],
 }
 ```
@@ -273,8 +273,8 @@ Expected: FAIL because the old generic eight-key contract is still enforced.
 Replace the top-level fields and titles with:
 
 ```python
-REQUIRED_FIELDS = ("rankingOverview", "materialComparison", "materialDiagnoses", "competitorPatterns", "xiaoxianDunOpportunityMap", "experimentMatrix")
-SECTION_TITLES = (("01｜榜单机会总览", "rankingOverview"), ("02｜素材表现对比", "materialComparison"), ("03｜单素材秒级诊断", "materialDiagnoses"), ("04｜竞品创意模式", "competitorPatterns"), ("05｜小仙炖机会地图", "xiaoxianDunOpportunityMap"), ("06｜下一轮实验矩阵", "experimentMatrix"))
+REQUIRED_FIELDS = ("rankingOverview", "materialComparison", "materialDiagnoses", "competitorPatterns", "opportunityMap", "experimentMatrix")
+SECTION_TITLES = (("01｜榜单机会总览", "rankingOverview"), ("02｜素材表现对比", "materialComparison"), ("03｜单素材秒级诊断", "materialDiagnoses"), ("04｜竞品创意模式", "competitorPatterns"), ("05｜目标品牌机会地图", "opportunityMap"), ("06｜下一轮实验矩阵", "experimentMatrix"))
 ```
 
 Add `_validate_evidence_section(items, field)` to require a nonempty list, an `evidence` list, and either numeric-string `material_id` or a nonempty `material_ids` list in the first five sections. Add `_validate_experiments(items)` to require the seven experiment keys from Task 3, each with a nonblank string. Call both from `_load_analysis`. Render only these six sections; remove the separate “秒级趋势洞察” appendix.
@@ -287,7 +287,7 @@ Expected: PASS; Markdown and HTML contain exactly six business chapters and reje
 
 - [ ] **Step 5: Commit the report contract**
 
-Run: `git add scripts/yuntu_report.py tests/test_yuntu_report.py && git commit -m "feat: render xiaoxian dun strategy report"`
+Run: `git add scripts/yuntu_report.py tests/test_yuntu_report.py && git commit -m "feat: render industry content analysis strategy report"`
 
 ### Task 5: Document the complete skill workflow and run regression
 
@@ -302,11 +302,11 @@ Run: `git add scripts/yuntu_report.py tests/test_yuntu_report.py && git commit -
 Add this method to `AnalysisSkillContractTests`:
 
 ```python
-def test_documents_xiaoxian_dun_closed_loop_report(self):
+def test_documents_industry_content_closed_loop_report(self):
     skill = self.read_skill()
     for chapter in (
         "榜单机会总览", "素材表现对比", "单素材秒级诊断",
-        "竞品创意模式", "小仙炖机会地图", "下一轮实验矩阵",
+        "竞品创意模式", "目标品牌机会地图", "下一轮实验矩阵",
     ):
         self.assertIn(chapter, skill)
     self.assertIn("Python 字面量", skill)
@@ -317,13 +317,13 @@ def test_documents_xiaoxian_dun_closed_loop_report(self):
 
 - [ ] **Step 2: Run the new contract test and verify failure**
 
-Run: `python -m unittest tests.test_skill_contract.AnalysisSkillContractTests.test_documents_xiaoxian_dun_closed_loop_report -v`
+Run: `python -m unittest tests.test_skill_contract.AnalysisSkillContractTests.test_documents_industry_content_closed_loop_report -v`
 
-Expected: FAIL because `SKILL.md` documents a generic fact/report flow without the six Xiaoxian Dun chapters or literal-cell behavior.
+Expected: FAIL because `SKILL.md` documents a generic fact/report flow without the six industry content analysis chapters or literal-cell behavior.
 
 - [ ] **Step 3: Document the operator workflow in `SKILL.md`**
 
-Update the description and workflow prose to state that the skill produces a Xiaoxian Dun competitive-content strategy report. Add a `## 商业分析与报告` section with the six confirmed chapter titles, safe support for standard JSON and Python literals in CSV nested fields, the mandatory fallback “数据不足以判断”, and the six-key AI JSON contract before `render-report`. Do not add the two excluded chapter names anywhere in `SKILL.md`.
+Update the description and workflow prose to state that the skill produces a industry content analysis competitive-content strategy report. Add a `## 商业分析与报告` section with the six confirmed chapter titles, safe support for standard JSON and Python literals in CSV nested fields, the mandatory fallback “数据不足以判断”, and the six-key AI JSON contract before `render-report`. Do not add the two excluded chapter names anywhere in `SKILL.md`.
 
 - [ ] **Step 4: Run contractual and offline end-to-end regression**
 
@@ -343,10 +343,10 @@ Expected: all tests PASS, no whitespace errors, and the pre-existing untracked `
 
 - [ ] **Step 6: Commit operator documentation**
 
-Run: `git add SKILL.md tests/test_skill_contract.py && git commit -m "docs: complete xiaoxian dun analysis workflow"`
+Run: `git add SKILL.md tests/test_skill_contract.py && git commit -m "docs: complete industry content analysis analysis workflow"`
 
 ## Plan Self-Review
 
-- Spec coverage: Tasks 1-2 cover safe CSV conversion and field-level availability. Task 3 covers candidate-pool comparison, tag and trend analysis, degradation, and the Xiaoxian Dun prompt contract. Task 4 implements evidence-based six-section report validation and rendering. Task 5 documents the operator flow and runs the complete regression suite.
+- Spec coverage: Tasks 1-2 cover safe CSV conversion and field-level availability. Task 3 covers candidate-pool comparison, tag and trend analysis, degradation, and the industry content analysis prompt contract. Task 4 implements evidence-based six-section report validation and rendering. Task 5 documents the operator flow and runs the complete regression suite.
 - Placeholder scan: every task specifies exact target files, assertions, functions or fields, commands, expected outcomes, and commit boundaries.
 - Type consistency: CSV parsing emits only safely decoded `dict`/`list` nested values; normalizers write `data_availability`; the fact pack consumes that structure and requires the six analysis keys; the renderer validates and renders those same keys.

@@ -68,14 +68,14 @@ flowchart TD
 
 ### 榜单
 
-文件：[scripts/yuntu_analysis.py](/Users/shuzida/Desktop/FDE客户/小仙炖/yuntu-industry-content-rankings-analysis/scripts/yuntu_analysis.py)
+文件：[scripts/yuntu_analysis.py](/Users/shuzida/Desktop/FDE客户/目标品牌/yuntu-industry-content-rankings-analysis/scripts/yuntu_analysis.py)
 
 - `_candidate_pool()`：全量榜单指标的 count、mean、median。
 - `_ranking_scope_facts()`：按范围生成指标摘要和素材投影。
 - `_metric_comparison()`：成功详情素材相对全量榜单的 percentile/tier。
 - `_report_scopes()`：区分榜单范围和成功详情范围。
 
-文件：[scripts/yuntu_top_materials.py](/Users/shuzida/Desktop/FDE客户/小仙炖/yuntu-industry-content-rankings-analysis/scripts/yuntu_top_materials.py)
+文件：[scripts/yuntu_top_materials.py](/Users/shuzida/Desktop/FDE客户/目标品牌/yuntu-industry-content-rankings-analysis/scripts/yuntu_top_materials.py)
 
 - `select_top_materials()`：按曝光、rank、material_id 选择 Top N。
 - `classify_brand()`：按用户输入品牌的标题匹配结果归类。
@@ -126,7 +126,7 @@ flowchart LR
 
 ### Presentation
 
-文件：[scripts/yuntu_presentation.py](/Users/shuzida/Desktop/FDE客户/小仙炖/yuntu-industry-content-rankings-analysis/scripts/yuntu_presentation.py)
+文件：[scripts/yuntu_presentation.py](/Users/shuzida/Desktop/FDE客户/目标品牌/yuntu-industry-content-rankings-analysis/scripts/yuntu_presentation.py)
 
 - 第 01 章使用 AI 结论和 `brandTopNFacts` 范围。
 - 第 02 章图表使用 `chapter02Facts`，AI 文本使用 `chapter02Insights`。
@@ -135,7 +135,7 @@ flowchart LR
 
 ### Report
 
-文件：[scripts/yuntu_report.py](/Users/shuzida/Desktop/FDE客户/小仙炖/yuntu-industry-content-rankings-analysis/scripts/yuntu_report.py)
+文件：[scripts/yuntu_report.py](/Users/shuzida/Desktop/FDE客户/目标品牌/yuntu-industry-content-rankings-analysis/scripts/yuntu_report.py)
 
 主要读取 `candidatePool`、`summaryMetrics`、`tagInsights`、`trendSummary`、`reportScopes`、`materialFacts`、`chapter02Facts`、`audienceDashboard` 和 presentation 投影，并复制本地高光图片到最终报告资产目录。
 

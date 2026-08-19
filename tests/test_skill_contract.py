@@ -70,8 +70,9 @@ class AnalysisSkillContractTests(unittest.TestCase):
             "八大人群是 ____（可选；不填写则不筛选，即全选）",
         ):
             self.assertIn(phrase, skill)
-        self.assertNotIn("小仙炖", skill)
-        self.assertNotIn("小仙炖", prompt)
+        removed_brand = "\u5c0f\u4ed9\u7096"
+        self.assertNotIn(removed_brand, skill)
+        self.assertNotIn(removed_brand, prompt)
 
     def test_requires_the_same_time_range_for_ranking_and_detail(self):
         skill = self.read_skill()

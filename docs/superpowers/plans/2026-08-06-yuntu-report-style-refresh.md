@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在不改变六章、数据口径或 JSON 契约的前提下，将云图 HTML 报告升级为适合小仙炖抖音内容团队复盘的暖色、可下钻、离线可交付页面。
+**Goal:** 在不改变六章、数据口径或 JSON 契约的前提下，将云图 HTML 报告升级为适合目标品牌抖音内容团队复盘的暖色、可下钻、离线可交付页面。
 
 **Architecture:** 仅改动 `scripts/yuntu_report.py` 的 HTML 视图层：洞察卡拆分结论、素材引用和可折叠证据，统一封面、章节、指标、标签与高光帧交互样式。`_load_analysis`、Markdown、事实包读取及图片路径判断不改变。
 
@@ -41,7 +41,7 @@ def test_render_report_separates_insight_evidence_into_details(self):
 
 - [ ] **Step 2: 运行测试并确认失败**
 
-Run: `python -m unittest tests.test_yuntu_report.YuntuReportTests.test_render_report_separates_insight_evidence_into_details -v`  
+Run: `python -m unittest tests.test_yuntu_report.YuntuReportTests.test_render_report_separates_insight_evidence_into_details -v`
 Expected: FAIL，因为尚无 `insight-card-primary`、`material-reference` 和 `evidence-details`。
 
 - [ ] **Step 3: 实现 HTML 辅助函数并接入非素材章节**
@@ -66,7 +66,7 @@ def _render_evidence(evidence, esc):
 
 - [ ] **Step 4: 运行定向测试并确认通过**
 
-Run: `python -m unittest tests.test_yuntu_report.YuntuReportTests.test_render_report_separates_insight_evidence_into_details -v`  
+Run: `python -m unittest tests.test_yuntu_report.YuntuReportTests.test_render_report_separates_insight_evidence_into_details -v`
 Expected: PASS。
 
 - [ ] **Step 5: 提交本项变更**
@@ -102,7 +102,7 @@ def test_render_report_uses_template_style_tokens_and_accessible_gallery(self):
 
 - [ ] **Step 2: 运行测试并确认失败**
 
-Run: `python -m unittest tests.test_yuntu_report.YuntuReportTests.test_render_report_uses_template_style_tokens_and_accessible_gallery -v`  
+Run: `python -m unittest tests.test_yuntu_report.YuntuReportTests.test_render_report_uses_template_style_tokens_and_accessible_gallery -v`
 Expected: FAIL，因为帧按钮和关闭按钮尚无匹配的 aria 标签。
 
 - [ ] **Step 3: 替换内嵌样式并更新帧标记**
@@ -120,7 +120,7 @@ Expected: FAIL，因为帧按钮和关闭按钮尚无匹配的 aria 标签。
 
 - [ ] **Step 4: 运行样式与画廊测试**
 
-Run: `python -m unittest tests.test_yuntu_report.YuntuReportTests.test_render_report_uses_template_style_tokens_and_accessible_gallery tests.test_yuntu_report.YuntuReportTests.test_render_report_renders_styled_cover_and_highlight_gallery -v`  
+Run: `python -m unittest tests.test_yuntu_report.YuntuReportTests.test_render_report_uses_template_style_tokens_and_accessible_gallery tests.test_yuntu_report.YuntuReportTests.test_render_report_renders_styled_cover_and_highlight_gallery -v`
 Expected: PASS。
 
 - [ ] **Step 5: 提交本项变更**
@@ -155,7 +155,7 @@ def test_render_report_omits_failed_frame_but_keeps_diagnosis(self):
 
 - [ ] **Step 2: 运行测试并确认失败**
 
-Run: `python -m unittest tests.test_yuntu_report.YuntuReportTests.test_render_report_omits_failed_frame_but_keeps_diagnosis -v`  
+Run: `python -m unittest tests.test_yuntu_report.YuntuReportTests.test_render_report_omits_failed_frame_but_keeps_diagnosis -v`
 Expected: FAIL，因为降级文本和诊断尚未同时得到验证。
 
 - [ ] **Step 3: 保留可用帧过滤并更新技能交付规范**
@@ -172,12 +172,12 @@ gallery = "".join(frame_buttons) or '<p class="muted highlight-unavailable">暂�
 
 - [ ] **Step 4: 运行全量报告单测和真实数据离线渲染**
 
-Run: `python -m unittest tests.test_yuntu_report -v && python scripts/rpa_connector.py render-report --analysis-json "/Users/shuzida/Downloads/RPA数据汇总 5/yuntu-rankings-analysis/diagnostic-analysis/yuntu-ai-analysis.json" --output-dir "/Users/shuzida/Downloads/RPA数据汇总 5/yuntu-rankings-analysis/final-report-style-refresh"`  
+Run: `python -m unittest tests.test_yuntu_report -v && python scripts/rpa_connector.py render-report --analysis-json "/Users/shuzida/Downloads/RPA数据汇总 5/yuntu-rankings-analysis/diagnostic-analysis/yuntu-ai-analysis.json" --output-dir "/Users/shuzida/Downloads/RPA数据汇总 5/yuntu-rankings-analysis/final-report-style-refresh"`
 Expected: 所有单测通过，且输出 HTML、Markdown 与 `final-report-data.json`。
 
 - [ ] **Step 5: 执行静态交付与双视口检查**
 
-Run: `REPORT='/Users/shuzida/Downloads/RPA数据汇总 5/yuntu-rankings-analysis/final-report-style-refresh/final-report.html'; rg -n 'https?://|fetch\(|XMLHttpRequest|NaN|Infinity|normalized/|raw-csv/|diagnostic-analysis/' "$REPORT"`  
+Run: `REPORT='/Users/shuzida/Downloads/RPA数据汇总 5/yuntu-rankings-analysis/final-report-style-refresh/final-report.html'; rg -n 'https?://|fetch\(|XMLHttpRequest|NaN|Infinity|normalized/|raw-csv/|diagnostic-analysis/' "$REPORT"`
 Expected: 无匹配行。浏览器分别在 `1440x1000` 与 `390x844` 检查封面、六章、证据、标签、帧网格与 lightbox：无正文横向溢出、遮挡或失焦控件。
 
 - [ ] **Step 6: 提交最终实现和文档**

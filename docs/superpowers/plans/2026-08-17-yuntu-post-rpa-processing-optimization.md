@@ -138,7 +138,7 @@ python -m unittest tests.test_yuntu_highlights tests.test_yuntu_analysis tests.t
 
 - [ ] **Step 1: 为八个基础键、证据引用和数据范围写契约测试**
 
-AI JSON 必须包含 `topMaterialCombination`、`rankingOverview`、`audienceInsights`、`materialComparison`、`materialDiagnoses`、`competitorPatterns`、`xiaoxianDunOpportunityMap`、`experimentMatrix`；每条洞察必须引用事实包中存在的素材 ID、指标、秒级点或 `frame_ref`。
+AI JSON 必须包含 `topMaterialCombination`、`rankingOverview`、`audienceInsights`、`materialComparison`、`materialDiagnoses`、`competitorPatterns`、`opportunityMap`、`experimentMatrix`；每条洞察必须引用事实包中存在的素材 ID、指标、秒级点或 `frame_ref`。
 
 - [ ] **Step 2: 运行 AI 契约测试确认缺失输出被拒绝**
 

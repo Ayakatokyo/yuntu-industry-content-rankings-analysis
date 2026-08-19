@@ -1,4 +1,4 @@
-"""Build auditable Xiaoxian Dun analysis fact packs from normalized records."""
+"""Build auditable industry content analysis fact packs from normalized records."""
 
 import json
 from pathlib import Path

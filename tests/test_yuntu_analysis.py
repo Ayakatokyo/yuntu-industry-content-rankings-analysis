@@ -141,7 +141,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertTrue(data["tagInsights"]["eligibleForAssociation"])
         self.assertEqual(data["trendSummary"]["byTrendName"]["点击指数"]["highPointCount"], 2)
         self.assertEqual(data["trendSummary"]["byTrendName"]["流失指数"]["lossPointCount"], 2)
-        self.assertIn("xiaoxianDunOpportunityMap", prompt)
+        self.assertIn("opportunityMap", prompt)
         self.assertIn("experimentMatrix", prompt)
         self.assertIn("数据不足以判断", prompt)
 

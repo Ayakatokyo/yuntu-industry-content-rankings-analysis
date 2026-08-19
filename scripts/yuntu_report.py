@@ -80,14 +80,14 @@ REQUIRED_FIELDS = (
     "materialComparison",
     "materialDiagnoses",
     "competitorPatterns",
-    "xiaoxianDunOpportunityMap",
+    "opportunityMap",
     "experimentMatrix",
 )
 
 SECTION_TITLES = (
     ("02｜榜单竞争格局", "rankingOverview"),
     ("03｜内容表现地图", "materialComparison"),
-    ("04｜内容与人群机会", "xiaoxianDunOpportunityMap"),
+    ("04｜内容与人群机会", "opportunityMap"),
     ("05｜竞品内容模式", "competitorPatterns"),
     ("06｜秒级创意结构", "materialDiagnoses"),
     ("07｜机会与实验", "experimentMatrix"),
@@ -989,7 +989,7 @@ def _copy_highlight_assets(fact_pack, output_dir, source_root=None):
 
 
 def _generic_text(value):
-    return str(value or "").replace("小仙炖", "目标品牌")
+    return str(value or "")
 
 
 def _render_html(analysis, material_frames, fact_pack, presentation=None):
@@ -1212,7 +1212,7 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None):
         presentation={**((presentation or {}).get("chapters", {}).get("chapter02") or {}), "scopeDefinitions": (presentation or {}).get("scopes", [])} if isinstance(presentation, dict) else None,
     )
     performance = insight_cards(analysis.get("materialComparison", []))
-    opportunities = insight_cards(analysis.get("xiaoxianDunOpportunityMap", []))
+    opportunities = insight_cards(analysis.get("opportunityMap", []))
     competitor_patterns = analysis.get("competitorPatterns", [])
     competitor_cards = []
     for brand in ("五个女博士", "万益蓝", "燕之屋"):

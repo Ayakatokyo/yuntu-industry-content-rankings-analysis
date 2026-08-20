@@ -121,6 +121,27 @@ class YuntuBatchTests(unittest.TestCase):
             },
         }
 
+    def test_list_context_accepts_display_formatted_custom_dates(self):
+        batch = load_batch()
+
+        result = batch._validate_list_context(
+            [
+                {
+                    "list_context": {
+                        "custom_date_range": "2026-07-30 ~ 2026-08-05",
+                    }
+                }
+            ],
+            {
+                "time_range_type": "CUSTOM",
+                "custom_start_date": "20260730",
+                "custom_end_date": "20260805",
+            },
+        )
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["issues"], [])
+
     def test_fetch_batch_runs_two_detail_rpas_concurrently(self):
         batch = load_batch()
 

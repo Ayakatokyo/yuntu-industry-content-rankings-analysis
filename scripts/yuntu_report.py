@@ -435,29 +435,6 @@ def _brand_scope_label(fact_pack):
     return f"Top {requested}" if isinstance(requested, int) and requested > 0 else "全量匹配素材"
 
 
-def _markdown_value(value):
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        lines = []
-        for item in value:
-            if isinstance(item, dict):
-                if "hypothesis" in item:
-                    text = (
-                        f"{item['priority']}｜假设：{item['hypothesis']}；变量："
-                        f"{item['creative_variable']}；目标人群：{item['target_audience']}；"
-                        f"成功指标：{item['success_metric']}；对照：{item['control']}；"
-                        f"复盘：{item['review_action']}"
-                    )
-                else:
-                    text = str(item.get("summary") or item.get("body") or "")
-            else:
-                text = str(item)
-            lines.append(f"- {text}")
-        return "\n".join(lines)
-    return json.dumps(value, ensure_ascii=False, indent=2)
-
-
 def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
     lines = ["# 云图行业内容榜单分析报告", ""]
     combination = analysis["topMaterialCombination"]

@@ -14,6 +14,9 @@ class AnalysisSkillContractTests(unittest.TestCase):
     def read_skill(self):
         return SKILL_PATH.read_text(encoding="utf-8")
 
+    def test_skill_keeps_the_operating_guide_concise(self):
+        self.assertLessEqual(len(self.read_skill().splitlines()), 170)
+
     def test_frontmatter_identifies_a_standalone_analysis_skill(self):
         skill = self.read_skill()
         frontmatter = re.match(r"\A---\n(.*?)\n---", skill, re.DOTALL)

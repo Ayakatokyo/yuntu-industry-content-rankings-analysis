@@ -22,6 +22,10 @@ def load_module():
 
 
 class YuntuReportTests(unittest.TestCase):
+    def test_unused_markdown_value_helper_is_removed(self):
+        report = load_module()
+        self.assertFalse(hasattr(report, "_markdown_value"))
+
     def test_render_report_writes_valid_presentation_projection(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:

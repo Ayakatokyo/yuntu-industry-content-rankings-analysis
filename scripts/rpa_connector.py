@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import sys
-import tempfile
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
@@ -456,62 +455,6 @@ def invoke_detail(shop_id, business_params, environ=None, session=None):
     )
 
 
-def write_json_atomically(result, output_path):
-    target = Path(output_path)
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            suffix=".tmp",
-            dir=target.parent,
-            delete=False,
-        ) as staging_file:
-            staging_path = Path(staging_file.name)
-            json.dump(result, staging_file, ensure_ascii=False, indent=2)
-            staging_file.write("\n")
-        os.replace(staging_path, target)
-    except Exception as exc:
-        if "staging_path" in locals():
-            try:
-                staging_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        raise RpaConnectorError(f"unable to write JSON output: {exc}") from exc
-    return target
-
-
-def select_material_ids(result, top_n):
-    if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n <= 0:
-        raise RpaConnectorError("top_n must be a positive integer")
-
-    selected = []
-    seen = set()
-
-    def visit(value):
-        if len(selected) >= top_n:
-            return
-        if isinstance(value, dict):
-            for key, nested_value in value.items():
-                if key == "material_id" and isinstance(nested_value, str) and nested_value.isdigit():
-                    if nested_value not in seen:
-                        seen.add(nested_value)
-                        selected.append(nested_value)
-                        if len(selected) >= top_n:
-                            return
-                visit(nested_value)
-                if len(selected) >= top_n:
-                    return
-        elif isinstance(value, list):
-            for nested_value in value:
-                visit(nested_value)
-                if len(selected) >= top_n:
-                    return
-
-    visit(result)
-    return selected
-
-
 def _validate_top_n(top_n):
     if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n <= 0:
         raise RpaConnectorError("top_n must be a positive integer")
@@ -534,128 +477,6 @@ def _safe_error_summary(error, environ):
         if value:
             message = message.replace(value, "[redacted]")
     return message
-
-
-def _manifest(*, status, filters, detail_date_range, list_response_path,
-              selected_material_ids, details, error=None):
-    result = {
-        "status": status,
-        "filters": filters,
-        "detail_date_range": detail_date_range,
-        "list_response_path": list_response_path,
-        "selected_material_ids": selected_material_ids,
-        "details": details,
-    }
-    if error:
-        result["error"] = error
-    return result
-
-
-def fetch_analysis(
-    shop_id,
-    raw_list_params,
-    raw_detail_params,
-    *,
-    top_n=10,
-    output_dir,
-    environ=None,
-    session=None,
-):
-    """Fetch a rankings list, then retain seconds-level details for its materials.
-
-    A failed list is terminal. Detail failures are recorded and do not stop the
-    remaining material requests; callers receive 1 when any terminal or detail
-    failure occurs and 0 only when every selected material succeeds.
-    """
-    list_params = validate_list_business_params(raw_list_params)
-    detail_date_params = _validate_detail_date_params(raw_detail_params)
-    top_n = _validate_top_n(top_n)
-    if not isinstance(shop_id, str) or not shop_id.strip():
-        raise RpaConnectorError("shop_id is required")
-
-    output = Path(output_dir)
-    manifest_path = output / "manifest.json"
-    list_response_path = output / "list-response.json"
-    detail_date_range = {
-        key: value for key, value in detail_date_params.items() if key != "material_id"
-    }
-
-    try:
-        list_result = invoke_list(
-            shop_id, list_params, environ=environ, session=session
-        )
-    except RpaConnectorError as exc:
-        write_json_atomically(
-            _manifest(
-                status="list_failed",
-                filters=list_params,
-                detail_date_range=detail_date_range,
-                list_response_path=None,
-                selected_material_ids=[],
-                details=[],
-                error=_safe_error_summary(exc, environ),
-            ),
-            manifest_path,
-        )
-        return 1
-
-    write_json_atomically(list_result, list_response_path)
-    material_ids = select_material_ids(list_result, top_n)
-    if not material_ids:
-        write_json_atomically(
-            _manifest(
-                status="no_material_ids",
-                filters=list_params,
-                detail_date_range=detail_date_range,
-                list_response_path="list-response.json",
-                selected_material_ids=[],
-                details=[],
-                error="list response contained no valid material_id values",
-            ),
-            manifest_path,
-        )
-        return 1
-
-    details = []
-    for material_id in material_ids:
-        relative_path = f"details/{material_id}.json"
-        try:
-            detail_result = invoke_detail(
-                shop_id,
-                {**detail_date_range, "material_id": material_id},
-                environ=environ,
-                session=session,
-            )
-            write_json_atomically(detail_result, output / relative_path)
-            details.append(
-                {
-                    "material_id": material_id,
-                    "status": "success",
-                    "path": relative_path,
-                }
-            )
-        except RpaConnectorError as exc:
-            details.append(
-                {
-                    "material_id": material_id,
-                    "status": "failed",
-                    "error": _safe_error_summary(exc, environ),
-                }
-            )
-
-    has_failures = any(item["status"] == "failed" for item in details)
-    write_json_atomically(
-        _manifest(
-            status="details_failed" if has_failures else "success",
-            filters=list_params,
-            detail_date_range=detail_date_range,
-            list_response_path="list-response.json",
-            selected_material_ids=material_ids,
-            details=details,
-        ),
-        manifest_path,
-    )
-    return 1 if has_failures else 0
 
 
 def fetch_batch_analysis(
@@ -819,8 +640,6 @@ def _cmd_self_test():
     validate_detail_business_params(
         {"material_id": "1", "date_range_type": "LAST_7_DAYS"}
     )
-    if select_material_ids({"material_id": "1"}, 10) != ["1"]:
-        raise RpaConnectorError("unexpected material ID selection")
     print("self-test passed")
 
 

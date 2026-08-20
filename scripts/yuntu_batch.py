@@ -389,6 +389,13 @@ def _brand_tokens(value):
     }
 
 
+def _display_date(value):
+    text = str(value or "")
+    if len(text) == 8 and text.isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    return text
+
+
 def _validate_list_context(list_records, list_params):
     if not list_records:
         return {"valid": False, "issues": ["list records are empty"], "observed": {}}
@@ -399,7 +406,8 @@ def _validate_list_context(list_records, list_params):
         issues.append("industry")
     if list_params.get("time_range_type") == "CUSTOM":
         expected = (
-            f"{list_params['custom_start_date']} ~ {list_params['custom_end_date']}"
+            f"{_display_date(list_params['custom_start_date'])} ~ "
+            f"{_display_date(list_params['custom_end_date'])}"
         )
         if context.get("custom_date_range") != expected:
             issues.append("custom_date_range")

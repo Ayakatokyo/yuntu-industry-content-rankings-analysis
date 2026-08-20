@@ -56,21 +56,6 @@ class RaisingSession:
         raise self.error
 
 
-class SequencedSession:
-    """Offline session that returns or raises each configured outcome in order."""
-
-    def __init__(self, outcomes):
-        self.outcomes = list(outcomes)
-        self.posts = []
-
-    def post(self, url, **kwargs):
-        self.posts.append((url, kwargs))
-        outcome = self.outcomes.pop(0)
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome
-
-
 class RpaConnectorTest(unittest.TestCase):
     def connector(self):
         self.assertTrue(SCRIPT_PATH.exists(), "analysis connector has not been implemented")
@@ -82,6 +67,12 @@ class RpaConnectorTest(unittest.TestCase):
             "YUCE_AUTHORIZATION": "authorization-token",
             "YUCE_SESSION_ID": "agent-session-123",
         }
+
+    def test_legacy_serial_fetch_helpers_are_removed(self):
+        connector = self.connector()
+        for name in ("fetch_analysis", "select_material_ids", "_manifest", "write_json_atomically"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(connector, name))
 
     def test_connector_script_exists(self):
         self.assertTrue(SCRIPT_PATH.exists(), "analysis connector has not been implemented")
@@ -443,190 +434,6 @@ class RpaConnectorTest(unittest.TestCase):
                     )
                 self.assertNotIn("authorization-token", str(context.exception))
                 self.assertFalse(output.exists())
-
-    def test_write_json_atomically_preserves_existing_file_when_replace_fails(self):
-        connector = self.connector()
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "nested" / "result.json"
-            output.parent.mkdir()
-            output.write_text(json.dumps({"existing": True}), encoding="utf-8")
-            with mock.patch.object(connector.os, "replace", side_effect=OSError("replace failed")):
-                with self.assertRaisesRegex(connector.RpaConnectorError, "write"):
-                    connector.write_json_atomically({"new": True}, output)
-            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), {"existing": True})
-            self.assertEqual(list(output.parent.glob("*.tmp")), [])
-
-    def test_extract_material_ids_is_recursive_order_preserving_and_top_n_bounded(self):
-        connector = self.connector()
-        payload = {
-            "data": {
-                "items": [
-                    {"material_id": "101"},
-                    {"nested": [{"material_id": "202"}, {"material_id": "101"}]},
-                    {"material_id": 303},
-                    {"material_id": "not-numeric"},
-                    {"material_id": "004"},
-                    {"other": {"material_id": "505"}},
-                ]
-            }
-        }
-        self.assertEqual(connector.select_material_ids(payload, top_n=3), ["101", "202", "004"])
-        self.assertEqual(connector.select_material_ids(payload, top_n=10), ["101", "202", "004", "505"])
-        for invalid_top_n in (0, -1, True, "3"):
-            with self.subTest(top_n=invalid_top_n):
-                with self.assertRaisesRegex(connector.RpaConnectorError, "top_n"):
-                    connector.select_material_ids(payload, top_n=invalid_top_n)
-
-    def test_fetch_analysis_uses_default_top_n_and_fixed_list_detail_payloads(self):
-        connector = self.connector()
-        list_result = {
-            "success": True,
-            "data": {"items": [{"material_id": "11"}, {"material_id": "12"}, {"material_id": "13"}]},
-        }
-        session = SequencedSession(
-            [
-                FakeResponse(list_result),
-                FakeResponse({"success": True, "data": {"id": "11"}}),
-                FakeResponse({"success": True, "data": {"id": "12"}}),
-                FakeResponse({"success": True, "data": {"id": "13"}}),
-            ]
-        )
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "analysis"
-            status = connector.fetch_analysis(
-                shop_id="shop-42",
-                raw_list_params={"industry": "食品饮料"},
-                raw_detail_params={"date_range_type": "LAST_7_DAYS"},
-                output_dir=output,
-                environ=self.runtime_environment(),
-                session=session,
-            )
-
-            self.assertEqual(status, 0)
-            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["filters"], {"industry": "食品饮料"})
-            self.assertEqual(manifest["list_response_path"], "list-response.json")
-            self.assertEqual(manifest["selected_material_ids"], ["11", "12", "13"])
-            self.assertEqual([item["status"] for item in manifest["details"]], ["success", "success", "success"])
-            self.assertTrue((output / "list-response.json").exists())
-            self.assertTrue((output / "details" / "11.json").exists())
-            self.assertEqual(len(session.posts), 4)
-            self.assertEqual(session.posts[0][1]["json"]["function_code"], connector.LIST_FUNCTION_CODE)
-            self.assertTrue(all(post[1]["json"]["function_code"] == connector.DETAIL_FUNCTION_CODE for post in session.posts[1:]))
-
-    def test_fetch_analysis_deduplicates_valid_ids_in_response_order_and_honors_explicit_top_n(self):
-        connector = self.connector()
-        session = SequencedSession(
-            [
-                FakeResponse({"success": True, "data": {"items": [{"material_id": "11"}, {"material_id": "11"}, {"material_id": 12}, {"material_id": "bad"}, {"material_id": "004"}, {"material_id": "22"}]}}),
-                FakeResponse({"success": True, "data": {}}),
-                FakeResponse({"success": True, "data": {}}),
-            ]
-        )
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "analysis"
-            status = connector.fetch_analysis(
-                "shop-42",
-                {},
-                {"date_range_type": "LAST_30_DAYS"},
-                top_n=2,
-                output_dir=output,
-                environ=self.runtime_environment(),
-                session=session,
-            )
-            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-
-        self.assertEqual(status, 0)
-        self.assertEqual(manifest["selected_material_ids"], ["11", "004"])
-        self.assertEqual([post[1]["json"]["business_params"]["material_id"] for post in session.posts[1:]], ["11", "004"])
-
-    def test_fetch_analysis_stops_after_list_failure_or_missing_ids_and_writes_safe_manifest(self):
-        connector = self.connector()
-        cases = (
-            ("list-failure", [FakeResponse({"success": False})], False),
-            ("missing-ids", [FakeResponse({"success": True, "data": {"items": [{"material_id": "bad"}]}})], True),
-        )
-        for name, outcomes, list_file_expected in cases:
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary_directory:
-                output = Path(temporary_directory) / "analysis"
-                session = SequencedSession(outcomes)
-                status = connector.fetch_analysis(
-                    "shop-42",
-                    {"industry": "食品饮料"},
-                    {"date_range_type": "LAST_7_DAYS"},
-                    output_dir=output,
-                    environ=self.runtime_environment(),
-                    session=session,
-                )
-                manifest_text = (output / "manifest.json").read_text(encoding="utf-8")
-                manifest = json.loads(manifest_text)
-
-                self.assertEqual(status, 1)
-                self.assertEqual(len(session.posts), 1)
-                self.assertEqual((output / "list-response.json").exists(), list_file_expected)
-                self.assertEqual(manifest["details"], [])
-                self.assertEqual(manifest["selected_material_ids"], [])
-                self.assertIn(manifest["status"], {"list_failed", "no_material_ids"})
-                self.assertNotIn("authorization-token", manifest_text)
-                self.assertNotIn("agent-session-123", manifest_text)
-
-    def test_fetch_analysis_continues_after_detail_failures_and_leaves_no_temporary_outputs(self):
-        connector = self.connector()
-        session = SequencedSession(
-            [
-                FakeResponse({"success": True, "data": {"items": [{"material_id": "11"}, {"material_id": "22"}, {"material_id": "33"}]}}),
-                RaisingSession(RuntimeError("authorization-token agent-session-123 unavailable")).error,
-                FakeResponse({"success": True, "data": {"id": "22"}}),
-                FakeResponse({"success": False, "error": "authorization-token"}),
-            ]
-        )
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "analysis"
-            status = connector.fetch_analysis(
-                "shop-42",
-                {},
-                {"date_range_type": "LAST_7_DAYS"},
-                top_n=3,
-                output_dir=output,
-                environ=self.runtime_environment(),
-                session=session,
-            )
-            manifest_text = (output / "manifest.json").read_text(encoding="utf-8")
-            manifest = json.loads(manifest_text)
-
-            self.assertEqual(status, 1)
-            self.assertEqual([item["status"] for item in manifest["details"]], ["failed", "success", "failed"])
-            self.assertTrue((output / "details" / "22.json").exists())
-            self.assertFalse((output / "details" / "11.json").exists())
-            self.assertFalse((output / "details" / "33.json").exists())
-            self.assertEqual(list(output.rglob("*.tmp")), [])
-            self.assertNotIn("authorization-token", manifest_text)
-            self.assertNotIn("agent-session-123", manifest_text)
-            self.assertEqual(len(session.posts), 4)
-
-    def test_fetch_analysis_validates_every_input_before_any_network_request(self):
-        connector = self.connector()
-        session = SequencedSession([])
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "analysis"
-            invalid_cases = (
-                ({"industry": ""}, {"date_range_type": "LAST_7_DAYS"}, 1),
-                ({}, {"date_range_type": "LAST_90_DAYS"}, 1),
-                ({}, {"date_range_type": "LAST_7_DAYS"}, 0),
-            )
-            for list_params, detail_params, top_n in invalid_cases:
-                with self.subTest(list_params=list_params, detail_params=detail_params, top_n=top_n):
-                    with self.assertRaises(connector.RpaConnectorError):
-                        connector.fetch_analysis(
-                            "shop-42",
-                            list_params,
-                            detail_params,
-                            top_n=top_n,
-                            output_dir=output,
-                            environ=self.runtime_environment(),
-                            session=session,
-                        )
-            self.assertEqual(session.posts, [])
 
     def test_main_prepare_analysis_uses_fixed_standard_highlight_selection(self):
         connector = self.connector()

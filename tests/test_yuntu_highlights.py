@@ -368,11 +368,10 @@ class YuntuHighlightTests(unittest.TestCase):
                 {"second": 2, "destination": root / "peak.jpg"},
             ]
             with mock.patch.object(highlights, "_resolve_ffmpeg", return_value="ffmpeg"), \
-                 mock.patch.object(highlights.subprocess, "run", side_effect=run) as invoke, \
-                 mock.patch.object(highlights, "_validate_jpeg", return_value=None):
+                 mock.patch.object(highlights.subprocess, "run", side_effect=run) as invoke:
                 targets = highlights.extract_frames_batch(root / "source.mp4", requests)
 
-            command = invoke.call_args.args[0]
+            command = invoke.call_args_list[0].args[0]
             graph = command[command.index("-filter_complex") + 1]
             self.assertEqual(command.count("-i"), 1)
             self.assertEqual(command[command.index("-threads") + 1], "1")
@@ -381,6 +380,7 @@ class YuntuHighlightTests(unittest.TestCase):
             self.assertIn("[s0]trim=start=0,setpts=PTS-STARTPTS[out0]", graph)
             self.assertIn("[s1]trim=start=2,setpts=PTS-STARTPTS[out1]", graph)
             self.assertEqual(command.count("-frames:v"), 2)
+            self.assertEqual(invoke.call_count, 1)
             self.assertEqual(targets, [root / "cover.jpg", root / "peak.jpg"])
             self.assertTrue(all(path.is_file() for path in targets))
 

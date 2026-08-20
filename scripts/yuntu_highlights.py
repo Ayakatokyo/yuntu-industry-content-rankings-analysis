@@ -329,7 +329,7 @@ def extract_frame(video_path, second, destination, *, ffmpeg_bin=None):
 
 
 def _validate_jpeg(path, *, ffmpeg_bin=None):
-    """Reject empty, malformed, or undecodable JPEG output."""
+    """Reject empty or structurally malformed JPEG output without spawning FFmpeg."""
     image = Path(path)
     if not image.is_file() or image.stat().st_size == 0:
         raise HighlightFrameError("JPEG output is empty")
@@ -339,31 +339,6 @@ def _validate_jpeg(path, *, ffmpeg_bin=None):
         trailer = handle.read(2)
     if header != b"\xff\xd8" or trailer != b"\xff\xd9":
         raise HighlightFrameError("JPEG markers are invalid")
-
-    try:
-        completed = subprocess.run(
-            [
-                _resolve_ffmpeg(ffmpeg_bin),
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-nostdin",
-                "-i",
-                str(image),
-                "-f",
-                "null",
-                "-",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=VIDEO_DOWNLOAD_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise HighlightFrameError(f"JPEG decode validation failed: {error}") from error
-    if completed.returncode != 0:
-        raise HighlightFrameError("JPEG decode validation failed")
 
 
 def _batch_filter_graph(seconds):

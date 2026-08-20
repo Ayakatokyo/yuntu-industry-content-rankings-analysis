@@ -107,6 +107,38 @@ def detail_result(material_id):
 
 
 class YuntuBatchTests(unittest.TestCase):
+    def test_persist_detail_returns_common_selected_material_entry(self):
+        batch = load_batch()
+        item = {"rank": 1, "material_id": "101", "selectionGroupId": "default"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contract = batch.run_state.collection_contract(
+                shop_id="shop-42",
+                list_params={},
+                detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                target_top_n=1,
+                candidate_top_n=1,
+            )
+            summary = batch.run_state.new_collection_summary(contract)
+
+            detail, entry = batch._persist_detail(
+                root=root,
+                summary=summary,
+                item=item,
+                gateway_result=detail_result("101"),
+                downloader=FakeDownloader({}),
+                detail_fetch_sec=0.25,
+            )
+
+        self.assertEqual(detail["material_id"], "101")
+        self.assertEqual(entry["material_id"], "101")
+        self.assertEqual(
+            entry["detailRecordPath"], "normalized/detail-records/101.json"
+        )
+        self.assertEqual(entry["rawDetailPath"], "raw-json/details/101.json")
+        self.assertEqual(entry["timingsSec"], {"detailFetchSec": 0.25})
+        self.assertIn("detailRecord:101", summary["artifacts"])
+
     def test_manifest_selection_group_round_trips_to_detail_request(self):
         batch = load_batch()
         candidate = {

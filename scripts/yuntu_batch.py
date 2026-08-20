@@ -527,6 +527,39 @@ def _invoke_detail_result(*, item, shop_id, detail_date_params, invoker):
         return {"item": item, "result": None, "started": started, "error": exc}
 
 
+def _persist_detail(*, root, summary, item, gateway_result, downloader, detail_fetch_sec):
+    """Normalize a successful detail response and build its durable manifest entry."""
+    material_id = item["material_id"]
+    raw_detail, detail_source = _materialize_records(
+        gateway_result,
+        csv_path=root / "raw-csv" / "details" / f"{material_id}.csv",
+        json_path=root / "raw-json" / "details" / f"{material_id}.json",
+        downloader=downloader,
+    )
+    detail_record = normalize_detail_records(
+        raw_detail,
+        material_id=material_id,
+        source_path=_relative(root, detail_source),
+        expected_selection_group=_expected_selection_group(item),
+    )
+    detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
+    write_json_atomically(detail_record, detail_output)
+    _record_artifact(
+        summary,
+        root,
+        f"detailRecord:{material_id}",
+        detail_output,
+        "normalized_detail",
+    )
+    return detail_record, {
+        **_manifest_material(item),
+        "listRecordPath": "normalized/list-records.json",
+        "detailRecordPath": _relative(root, detail_output),
+        "rawDetailPath": _relative(root, detail_source),
+        "timingsSec": {"detailFetchSec": detail_fetch_sec},
+    }
+
+
 def _generate_highlight_result(detail, root):
     """Run a material's video download and frame extraction in a worker."""
     started = time.monotonic()
@@ -832,37 +865,16 @@ def fetch_batch(
                     try:
                         if result["error"] is not None:
                             raise result["error"]
-                        raw_detail, detail_source = _materialize_records(
-                            result["result"],
-                            csv_path=root / "raw-csv" / "details" / f"{material_id}.csv",
-                            json_path=root / "raw-json" / "details" / f"{material_id}.json",
+                        detail_record, selected_entry = _persist_detail(
+                            root=root,
+                            summary=summary,
+                            item=item,
+                            gateway_result=result["result"],
                             downloader=downloader,
+                            detail_fetch_sec=_elapsed(result["started"]),
                         )
-                        detail_record = normalize_detail_records(
-                            raw_detail,
-                            material_id=material_id,
-                            source_path=_relative(root, detail_source),
-                            expected_selection_group=_expected_selection_group(item),
-                        )
-                        detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
-                        write_json_atomically(detail_record, detail_output)
-                        _record_artifact(
-                            summary,
-                            root,
-                            f"detailRecord:{material_id}",
-                            detail_output,
-                            "normalized_detail",
-                        )
-                        manifest["selectedMaterials"].append(
-                            {
-                                **_manifest_material(item),
-                                "listRecordPath": "normalized/list-records.json",
-                                "detailRecordPath": _relative(root, detail_output),
-                                "rawDetailPath": _relative(root, detail_source),
-                                "timingsSec": {"detailFetchSec": _elapsed(result["started"])},
-                                "postprocessStatus": "pending",
-                            }
-                        )
+                        selected_entry["postprocessStatus"] = "pending"
+                        manifest["selectedMaterials"].append(selected_entry)
                         selected_ids.add(material_id)
                         selected_by_group[item["selectionGroupId"]] = (
                             selected_by_group.get(item["selectionGroupId"], 0) + 1
@@ -1025,39 +1037,18 @@ def _retry_batch_items(*, shop_id, output_dir, invoker, item_key, downloader=Non
         rank = item.get("rank")
         detail_started = time.monotonic()
         try:
-            raw_detail, detail_source = _materialize_records(
-                invoker.invoke_detail(
+            _, selected_entry = _persist_detail(
+                root=root,
+                summary=summary,
+                item=item,
+                gateway_result=invoker.invoke_detail(
                     shop_id, _detail_request(item, detail_date_params)
                 ),
-                csv_path=root / "raw-csv" / "details" / f"{material_id}.csv",
-                json_path=root / "raw-json" / "details" / f"{material_id}.json",
                 downloader=downloader,
-            )
-            detail_record = normalize_detail_records(
-                raw_detail,
-                material_id=material_id,
-                source_path=_relative(root, detail_source),
-                expected_selection_group=_expected_selection_group(item),
-            )
-            detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
-            write_json_atomically(detail_record, detail_output)
-            _record_artifact(
-                summary,
-                root,
-                f"detailRecord:{material_id}",
-                detail_output,
-                "normalized_detail",
+                detail_fetch_sec=_elapsed(detail_started),
             )
             if material_id not in selected_ids:
-                manifest.setdefault("selectedMaterials", []).append(
-                    {
-                        **_manifest_material(item),
-                        "listRecordPath": "normalized/list-records.json",
-                        "detailRecordPath": _relative(root, detail_output),
-                        "rawDetailPath": _relative(root, detail_source),
-                        "timingsSec": {"detailFetchSec": _elapsed(detail_started)},
-                    }
-                )
+                manifest.setdefault("selectedMaterials", []).append(selected_entry)
                 selected_ids.add(material_id)
         except Exception as exc:
             retry_count = int(item.get("retryCount", 0)) + 1

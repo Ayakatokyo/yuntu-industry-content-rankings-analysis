@@ -107,6 +107,33 @@ def detail_result(material_id):
 
 
 class YuntuBatchTests(unittest.TestCase):
+    def test_manifest_selection_group_round_trips_to_detail_request(self):
+        batch = load_batch()
+        candidate = {
+            "rank": 1,
+            "material_id": "101",
+            "selectionGroupId": "brand-a:feed",
+            "selectionGroup": {
+                "id": "brand-a:feed",
+                "brand_id": "brand-a",
+                "brand_name": "品牌 A",
+                "touchpoint_code": "feed",
+                "touchpoint_name": "信息流",
+            },
+        }
+        detail_range = {"date_range_type": "LAST_7_DAYS"}
+
+        manifest_item = batch._manifest_material(candidate)
+
+        self.assertEqual(
+            batch._detail_request(manifest_item, detail_range),
+            batch._detail_request(candidate, detail_range),
+        )
+        self.assertEqual(
+            batch._expected_selection_group(manifest_item),
+            candidate["selectionGroup"],
+        )
+
     def files_result(self, url):
         return {
             "success": True,

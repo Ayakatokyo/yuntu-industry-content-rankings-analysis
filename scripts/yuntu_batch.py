@@ -27,6 +27,13 @@ class YuntuBatchError(RuntimeError):
 
 DETAIL_WAVE_CONCURRENCY = 2
 HIGHLIGHT_CONCURRENCY = 3
+SELECTION_GROUP_FIELDS = {
+    "selectionGroupId": "id",
+    "brandId": "brand_id",
+    "brandName": "brand_name",
+    "touchpointCode": "touchpoint_code",
+    "touchpointName": "touchpoint_name",
+}
 
 
 class ConnectorInvoker:
@@ -95,43 +102,43 @@ def _candidate_materials_from_list(records, candidate_top_n):
 
 
 def _manifest_material(item):
-    result = {"rank": item["rank"], "material_id": item["material_id"]}
-    if item["selectionGroupId"] != "default":
-        result["selectionGroupId"] = item["selectionGroupId"]
-        result["brandId"] = item["selectionGroup"]["brand_id"]
-        result["brandName"] = item["selectionGroup"]["brand_name"]
-        result["touchpointCode"] = item["selectionGroup"]["touchpoint_code"]
-        result["touchpointName"] = item["selectionGroup"]["touchpoint_name"]
-    return result
+    return {
+        "rank": item["rank"],
+        "material_id": item["material_id"],
+        **_selection_group_fields(item),
+    }
+
+
+def _selection_group_fields(item):
+    """Return the durable manifest shape for an optional selection group."""
+    group_id = item.get("selectionGroupId")
+    if not group_id or group_id == "default":
+        return {}
+    group = item.get("selectionGroup")
+    if isinstance(group, dict):
+        return {
+            field: group.get(key, "")
+            for field, key in SELECTION_GROUP_FIELDS.items()
+        }
+    return {
+        field: item.get(field, "")
+        for field in SELECTION_GROUP_FIELDS
+    }
+
+
+def _expected_selection_group(item):
+    fields = _selection_group_fields(item)
+    if not fields:
+        return None
+    return {key: fields[field] for field, key in SELECTION_GROUP_FIELDS.items()}
 
 
 def _detail_request(item, detail_date_params):
-    request = {"material_id": item["material_id"], **detail_date_params}
-    if item["selectionGroupId"] != "default":
-        request.update(
-            {
-                "selectionGroupId": item["selectionGroupId"],
-                "brandId": item["selectionGroup"]["brand_id"],
-                "brandName": item["selectionGroup"]["brand_name"],
-                "touchpointCode": item["selectionGroup"]["touchpoint_code"],
-                "touchpointName": item["selectionGroup"]["touchpoint_name"],
-            }
-        )
-    return request
-
-
-def _retry_detail_request(item, detail_date_params):
-    request = {"material_id": item["material_id"], **detail_date_params}
-    for key in (
-        "selectionGroupId",
-        "brandId",
-        "brandName",
-        "touchpointCode",
-        "touchpointName",
-    ):
-        if key in item:
-            request[key] = item[key]
-    return request
+    return {
+        "material_id": item["material_id"],
+        **detail_date_params,
+        **_selection_group_fields(item),
+    }
 
 
 def _target_satisfied(manifest):
@@ -477,6 +484,33 @@ def _refresh_ready_materials(root, manifest):
     )
 
 
+def _finalize_details(
+    root,
+    manifest,
+    summary,
+    manifest_path,
+    *,
+    incomplete_status="partial",
+    require_no_unresolved=True,
+):
+    """Write the shared collection handoff after fetch or either retry path."""
+    _refresh_ready_materials(root, manifest)
+    succeeded = (
+        not manifest.get("rejectedMaterials")
+        and (not require_no_unresolved or not manifest.get("unresolvedMaterials"))
+        and _target_satisfied(manifest)
+    )
+    manifest["status"] = "success" if succeeded else incomplete_status
+    summary["status"] = manifest["status"]
+    summary["stages"]["details"]["requestStatus"] = (
+        "completed" if succeeded else "partial"
+    )
+    _sync_stage_counts(summary, manifest, root)
+    write_json_atomically(manifest, manifest_path)
+    _save_summary(root, summary)
+    return 0 if succeeded else 1
+
+
 def _invoke_detail_result(*, item, shop_id, detail_date_params, invoker):
     """Run only the gateway call in a worker; the scheduler owns all writes."""
     started = time.monotonic()
@@ -695,9 +729,6 @@ def fetch_batch(
     summary["stages"]["details"]["requestStatus"] = "running"
     _sync_stage_counts(summary, manifest, root)
     _save_summary(root, summary)
-    list_by_id = {record["material_id"]: record for record in list_records}
-
-    had_rejection = bool(manifest["rejectedMaterials"])
     selected_by_group = {}
     selected_ids = _selected_ids(manifest)
     rejected_ids = {
@@ -811,11 +842,7 @@ def fetch_batch(
                             raw_detail,
                             material_id=material_id,
                             source_path=_relative(root, detail_source),
-                            expected_selection_group=(
-                                item["selectionGroup"]
-                                if item["selectionGroupId"] != "default"
-                                else None
-                            ),
+                            expected_selection_group=_expected_selection_group(item),
                         )
                         detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
                         write_json_atomically(detail_record, detail_output)
@@ -842,7 +869,6 @@ def fetch_batch(
                         )
                         submit_highlight(highlight_executor, detail_record)
                     except Exception as exc:
-                        had_rejection = True
                         rejected_ids.add(material_id)
                         manifest["rejectedMaterials"].append(
                             {
@@ -872,26 +898,14 @@ def fetch_batch(
     manifest["selectedMaterials"] = sorted(
         manifest["selectedMaterials"], key=lambda item: item.get("rank", 0)
     )
-    ready_materials = [
-        list_by_id[item["material_id"]] for item in manifest["selectedMaterials"]
-    ]
-    write_json_atomically(
-        {"materials": ready_materials},
-        root / "normalized" / "top-materials-rpa-ready.json",
-    )
-    if _target_satisfied(manifest) and not had_rejection:
-        manifest["status"] = "success"
-    else:
-        manifest["status"] = "partial"
     manifest["timingsSec"]["totalSec"] = _elapsed(started)
-    summary["status"] = manifest["status"]
-    summary["stages"]["details"]["requestStatus"] = (
-        "completed" if manifest["status"] == "success" else "partial"
+    return _finalize_details(
+        root,
+        manifest,
+        summary,
+        manifest_path,
+        require_no_unresolved=False,
     )
-    _sync_stage_counts(summary, manifest, root)
-    write_json_atomically(manifest, manifest_path)
-    _save_summary(root, summary)
-    return 0 if manifest["status"] == "success" else 1
 
 
 def collection_status(*, output_dir):
@@ -993,22 +1007,13 @@ def _retry_batch_items(*, shop_id, output_dir, invoker, item_key, downloader=Non
         raise YuntuBatchError("batch manifest detailDateRange does not match collection contract")
     retry_items = list(manifest.get(item_key, []))
     if not retry_items:
-        _refresh_ready_materials(root, manifest)
-        manifest["status"] = (
-            "success"
-            if (
-                not manifest.get("rejectedMaterials")
-                and not manifest.get("unresolvedMaterials")
-                and _target_satisfied(manifest)
-            )
-            else manifest.get("status", "partial")
+        return _finalize_details(
+            root,
+            manifest,
+            summary,
+            manifest_path,
+            incomplete_status=manifest.get("status", "partial"),
         )
-        summary["status"] = manifest["status"]
-        summary["stages"]["details"]["requestStatus"] = "completed"
-        _sync_stage_counts(summary, manifest, root)
-        write_json_atomically(manifest, manifest_path)
-        _save_summary(root, summary)
-        return 0 if manifest["status"] == "success" else 1
 
     selected_ids = _selected_ids(manifest)
     still_retry_items = []
@@ -1022,7 +1027,7 @@ def _retry_batch_items(*, shop_id, output_dir, invoker, item_key, downloader=Non
         try:
             raw_detail, detail_source = _materialize_records(
                 invoker.invoke_detail(
-                    shop_id, _retry_detail_request(item, detail_date_params)
+                    shop_id, _detail_request(item, detail_date_params)
                 ),
                 csv_path=root / "raw-csv" / "details" / f"{material_id}.csv",
                 json_path=root / "raw-json" / "details" / f"{material_id}.json",
@@ -1032,17 +1037,7 @@ def _retry_batch_items(*, shop_id, output_dir, invoker, item_key, downloader=Non
                 raw_detail,
                 material_id=material_id,
                 source_path=_relative(root, detail_source),
-                expected_selection_group=(
-                    {
-                        "id": item.get("selectionGroupId"),
-                        "brand_id": item.get("brandId"),
-                        "brand_name": item.get("brandName"),
-                        "touchpoint_code": item.get("touchpointCode"),
-                        "touchpoint_name": item.get("touchpointName"),
-                    }
-                    if item.get("selectionGroupId")
-                    else None
-                ),
+                expected_selection_group=_expected_selection_group(item),
             )
             detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
             write_json_atomically(detail_record, detail_output)
@@ -1056,11 +1051,7 @@ def _retry_batch_items(*, shop_id, output_dir, invoker, item_key, downloader=Non
             if material_id not in selected_ids:
                 manifest.setdefault("selectedMaterials", []).append(
                     {
-                        "rank": rank,
-                        "material_id": material_id,
-                        **(
-                            {key: item[key] for key in ("selectionGroupId", "brandId", "brandName", "touchpointCode", "touchpointName") if key in item}
-                        ),
+                        **_manifest_material(item),
                         "listRecordPath": "normalized/list-records.json",
                         "detailRecordPath": _relative(root, detail_output),
                         "rawDetailPath": _relative(root, detail_source),
@@ -1081,24 +1072,7 @@ def _retry_batch_items(*, shop_id, output_dir, invoker, item_key, downloader=Non
         manifest.get("selectedMaterials", []), key=lambda item: item.get("rank", 0)
     )
     manifest[item_key] = still_retry_items
-    _refresh_ready_materials(root, manifest)
-    manifest["status"] = (
-        "success"
-        if (
-            not manifest.get("rejectedMaterials")
-            and not manifest.get("unresolvedMaterials")
-            and _target_satisfied(manifest)
-        )
-        else "partial"
-    )
-    summary["status"] = manifest["status"]
-    summary["stages"]["details"]["requestStatus"] = (
-        "completed" if manifest["status"] == "success" else "partial"
-    )
-    _sync_stage_counts(summary, manifest, root)
-    write_json_atomically(manifest, manifest_path)
-    _save_summary(root, summary)
-    return 0 if manifest["status"] == "success" else 1
+    return _finalize_details(root, manifest, summary, manifest_path)
 
 
 def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):

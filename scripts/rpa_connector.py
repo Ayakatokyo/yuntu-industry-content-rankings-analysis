@@ -147,9 +147,11 @@ def runtime_config(environ=None):
     environment = os.environ if environ is None else environ
     missing = [
         name
-        for name in REQUIRED_ENVIRONMENT
+        for name in REQUIRED_ENVIRONMENT[:2]
         if not str(environment.get(name) or "").strip()
     ]
+    if not str(environment.get("YUCE_SESSION_ID") or environment.get("YCSESSIONID") or "").strip():
+        missing.append("YUCE_SESSION_ID or YCSESSIONID")
     if missing:
         raise RpaConnectorError(
             "missing RPA runtime environment variables: " + ", ".join(missing)
@@ -174,8 +176,13 @@ def runtime_config(environ=None):
         )
 
     authorization = environment["YUCE_AUTHORIZATION"].strip()
-    session_id = environment["YUCE_SESSION_ID"].strip()
-    return api_base, authorization, session_id, {"YCSESSIONID": authorization}
+    session_id = str(
+        environment.get("YUCE_SESSION_ID")
+        or environment.get("YCSESSIONID")
+        or authorization
+    ).strip()
+    cookie_session = str(environment.get("YCSESSIONID") or authorization).strip()
+    return api_base, authorization, session_id, {"YCSESSIONID": cookie_session}
 
 
 def _parse_date(value, field_name):
@@ -469,14 +476,11 @@ def _validate_detail_date_params(raw_params):
     return validate_detail_business_params({"material_id": "0", **raw_params})
 
 
-def _safe_error_summary(error, environ):
-    message = str(error).strip() or error.__class__.__name__
-    environment = os.environ if environ is None else environ
-    for name in REQUIRED_ENVIRONMENT:
-        value = str(environment.get(name) or "").strip()
-        if value:
-            message = message.replace(value, "[redacted]")
-    return message
+def _batch_invoker():
+    return ConnectorInvoker(
+        lambda sid, params: invoke_list(sid, params),
+        lambda sid, params: invoke_detail(sid, params),
+    )
 
 
 def fetch_batch_analysis(
@@ -507,10 +511,7 @@ def fetch_batch_analysis(
             target_top_n=target_top_n,
             candidate_top_n=candidate_top_n,
             output_dir=output_dir,
-            invoker=ConnectorInvoker(
-                lambda sid, params: invoke_list(sid, params),
-                lambda sid, params: invoke_detail(sid, params),
-            ),
+            invoker=_batch_invoker(),
         )
     except Exception as exc:
         raise RpaConnectorError(str(exc)) from exc
@@ -523,10 +524,7 @@ def retry_failed_batch_analysis(shop_id, *, output_dir):
         return retry_failed_batch(
             shop_id=shop_id,
             output_dir=output_dir,
-            invoker=ConnectorInvoker(
-                lambda sid, params: invoke_list(sid, params),
-                lambda sid, params: invoke_detail(sid, params),
-            ),
+            invoker=_batch_invoker(),
         )
     except Exception as exc:
         raise RpaConnectorError(str(exc)) from exc
@@ -539,10 +537,7 @@ def retry_unresolved_batch_analysis(shop_id, *, output_dir):
         return retry_unresolved_batch(
             shop_id=shop_id,
             output_dir=output_dir,
-            invoker=ConnectorInvoker(
-                lambda sid, params: invoke_list(sid, params),
-                lambda sid, params: invoke_detail(sid, params),
-            ),
+            invoker=_batch_invoker(),
         )
     except Exception as exc:
         raise RpaConnectorError(str(exc)) from exc

@@ -68,9 +68,29 @@ class RpaConnectorTest(unittest.TestCase):
             "YUCE_SESSION_ID": "agent-session-123",
         }
 
+    def test_runtime_config_accepts_explicit_cookie_session_without_agent_session_id(self):
+        connector = self.connector()
+        environment = {
+            "ENV_BACKEND_HOST": "https://gateway.example/",
+            "YUCE_AUTHORIZATION": "authorization-token",
+            "YCSESSIONID": "cookie-session-456",
+        }
+
+        _api_base, authorization, session_id, cookies = connector.runtime_config(environment)
+
+        self.assertEqual(authorization, "authorization-token")
+        self.assertEqual(session_id, "cookie-session-456")
+        self.assertEqual(cookies, {"YCSESSIONID": "cookie-session-456"})
+
     def test_legacy_serial_fetch_helpers_are_removed(self):
         connector = self.connector()
-        for name in ("fetch_analysis", "select_material_ids", "_manifest", "write_json_atomically"):
+        for name in (
+            "fetch_analysis",
+            "select_material_ids",
+            "_manifest",
+            "write_json_atomically",
+            "_safe_error_summary",
+        ):
             with self.subTest(name=name):
                 self.assertFalse(hasattr(connector, name))
 
@@ -92,6 +112,23 @@ class RpaConnectorTest(unittest.TestCase):
 
         self.assertEqual(status, 0)
         self.assertEqual(fetch_batch.call_args.kwargs["candidate_top_n"], 10)
+
+    def test_batch_invoker_forwards_to_current_public_invocations(self):
+        connector = self.connector()
+        with mock.patch.object(
+            connector, "invoke_list", return_value={"kind": "list"}
+        ) as invoke_list, mock.patch.object(
+            connector, "invoke_detail", return_value={"kind": "detail"}
+        ) as invoke_detail:
+            invoker = connector._batch_invoker()
+            self.assertEqual(invoker.invoke_list("shop-42", {"page": 1}), {"kind": "list"})
+            self.assertEqual(
+                invoker.invoke_detail("shop-42", {"material_id": "101"}),
+                {"kind": "detail"},
+            )
+
+        invoke_list.assert_called_once_with("shop-42", {"page": 1})
+        invoke_detail.assert_called_once_with("shop-42", {"material_id": "101"})
 
     def test_main_dispatches_explicit_unresolved_retry(self):
         connector = self.connector()
@@ -280,6 +317,16 @@ class RpaConnectorTest(unittest.TestCase):
                 )
             ],
         )
+
+    def test_list_accounts_prefers_explicit_cookie_session_for_gateway_authentication(self):
+        connector = self.connector()
+        environment = self.runtime_environment()
+        environment["YCSESSIONID"] = "cookie-session-456"
+        session = RecordingSession(FakeResponse({"success": True, "data": []}))
+
+        connector.list_accounts(environ=environment, session=session)
+
+        self.assertEqual(session.posts[0][1]["cookies"], {"YCSESSIONID": "cookie-session-456"})
 
     def test_separate_list_and_detail_invocations_use_fixed_payloads(self):
         connector = self.connector()

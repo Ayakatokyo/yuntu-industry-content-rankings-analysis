@@ -1034,7 +1034,6 @@ def _retry_batch_items(*, shop_id, output_dir, invoker, item_key, downloader=Non
         if not isinstance(material_id, str) or not material_id.isdigit():
             still_retry_items.append(item)
             continue
-        rank = item.get("rank")
         detail_started = time.monotonic()
         try:
             _, selected_entry = _persist_detail(

@@ -154,22 +154,16 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("def highlight_insights_cards():", source)
         self.assertNotIn("def material_deep_dive_cards():", source)
 
-    def test_skill_documents_unified_report_delivery_contract(self):
+    def test_skill_documents_offline_report_delivery_boundary(self):
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("assets/report/", skill)
         self.assertIn("内联", skill)
         self.assertIn("不得手工修改", skill)
-        self.assertIn("1440x1000", skill)
-        self.assertIn("390x844", skill)
-        self.assertIn("rankingFacts", skill)
-        self.assertIn("visualAssets", skill)
-        self.assertIn("当前对话模型", skill)
-        self.assertIn("scene", skill)
-        self.assertIn("text_overlay", skill)
-        self.assertIn("不再生成或渲染单素材 AI 二次分析摘要字段", skill)
-        self.assertIn("audienceInsights", skill)
-        self.assertIn("只要求逐帧观察和秒级观察", skill)
+        self.assertIn("render-report", skill)
+        self.assertIn("脚本和生成的提示词是 schema 权威", skill)
+        self.assertNotIn("rankingFacts", skill)
+        self.assertNotIn("visualAssets", skill)
 
     def analysis_json(self):
         return {

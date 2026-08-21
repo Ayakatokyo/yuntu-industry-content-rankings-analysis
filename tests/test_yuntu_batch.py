@@ -1,4 +1,5 @@
 import importlib.util
+import inspect
 import json
 import sys
 import tempfile
@@ -107,6 +108,12 @@ def detail_result(material_id):
 
 
 class YuntuBatchTests(unittest.TestCase):
+    def test_retry_batch_does_not_assign_an_unused_rank_local(self):
+        batch = load_batch()
+        source = inspect.getsource(batch._retry_batch_items)
+
+        self.assertNotIn('rank = item.get("rank")', source)
+
     def test_persist_detail_returns_common_selected_material_entry(self):
         batch = load_batch()
         item = {"rank": 1, "material_id": "101", "selectionGroupId": "default"}

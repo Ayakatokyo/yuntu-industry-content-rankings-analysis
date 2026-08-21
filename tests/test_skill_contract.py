@@ -211,70 +211,27 @@ class AnalysisSkillContractTests(unittest.TestCase):
             skill,
         )
 
-    def test_documents_rpa_run_state_and_five_section_report_scope(self):
+    def test_keeps_operational_rules_and_defers_schema_details(self):
         skill = self.read_skill()
 
         for phrase in (
             "run-summary.json",
             "status --output-dir",
             "参数指纹",
-            "不一致",
             "list_context",
-            "01｜TOP 素材组合结论",
-            "02｜人群洞察",
-            "03｜脚本洞察",
-            "04｜高光画面洞察",
-            "05｜单素材深度分析",
-            "脚本数据：未接入",
-            "点击指数",
-            "最多 5",
-            "portrait",
-            "product",
-            "other",
-            "秒级拆解",
-            "点赞指数",
-            "流失指数",
-            "互动指数",
-            "评论指数",
+            "unresolvedMaterials",
+            "status == success",
+            "prepare-analysis",
+            "attest-analysis",
+            "render-report",
+            "程序化兜底",
+            "脚本和生成的提示词是 schema 权威",
         ):
             self.assertIn(phrase, skill)
         self.assertIn("python <skill-root>/scripts/rpa_connector.py status", skill)
+        self.assertLessEqual(len(skill.splitlines()), 100)
+        self.assertNotIn("industryTop1000Facts", skill)
         self.assertNotIn("--highlight-trends", skill)
-
-    def test_documents_closed_loop_report(self):
-        skill = self.read_skill()
-        for chapter in (
-            "榜单机会总览",
-            "素材表现对比",
-            "单素材秒级诊断",
-            "竞品创意模式",
-            "机会地图",
-            "下一轮实验矩阵",
-        ):
-            self.assertIn(chapter, skill)
-        self.assertIn("Python 字面量", skill)
-        self.assertIn("数据不足以判断", skill)
-        self.assertNotIn("数据范围与可信度", skill)
-        self.assertNotIn("风险与待补数据", skill)
-
-    def test_documents_top_material_combination_and_title_brand_limits(self):
-        skill = self.read_skill()
-
-        for phrase in (
-            "TOP 素材组合结论",
-            "同一合并 TOP1000",
-            "标题匹配",
-            "未知品牌",
-            "CPM",
-            "不可相加为 100%",
-            "brandComparisonConclusion",
-            "dataSummary",
-            "peopleSummary",
-            "marketingSummary",
-            "不进入用户可读报告正文",
-        ):
-            self.assertIn(phrase, skill)
-        self.assertNotIn("数据证据以可展开区域保留", skill)
 
     def test_openai_metadata_has_required_interface_fields(self):
         metadata = OPENAI_YAML_PATH.read_text(encoding="utf-8")

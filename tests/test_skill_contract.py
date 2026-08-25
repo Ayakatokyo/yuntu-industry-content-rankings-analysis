@@ -211,6 +211,17 @@ class AnalysisSkillContractTests(unittest.TestCase):
             skill,
         )
 
+    def test_documents_html_and_zip_final_delivery(self):
+        skill = self.read_skill()
+
+        for phrase in (
+            "final-report.zip",
+            "HTML 报告",
+            "final-report/` 目录",
+            "同级",
+        ):
+            self.assertIn(phrase, skill)
+
     def test_keeps_operational_rules_and_defers_schema_details(self):
         skill = self.read_skill()
 

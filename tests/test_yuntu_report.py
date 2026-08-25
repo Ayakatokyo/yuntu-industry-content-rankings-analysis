@@ -3,6 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,6 +23,33 @@ def load_module():
 
 
 class YuntuReportTests(unittest.TestCase):
+    def test_render_report_creates_sibling_zip_with_final_report_directory(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8"
+            )
+            output_dir = root / "final-report"
+
+            status = report.render_report(
+                analysis_json=analysis_path, output_dir=output_dir
+            )
+
+            archive_path = root / "final-report.zip"
+            self.assertEqual(status, 0)
+            self.assertTrue(archive_path.is_file())
+            with zipfile.ZipFile(archive_path) as archive:
+                names = set(archive.namelist())
+            expected = {
+                f"final-report/{path.relative_to(output_dir).as_posix()}"
+                for path in output_dir.rglob("*")
+                if path.is_file()
+            }
+
+        self.assertEqual(names, expected)
+
     def test_unused_markdown_value_helper_is_removed(self):
         report = load_module()
         self.assertFalse(hasattr(report, "_markdown_value"))

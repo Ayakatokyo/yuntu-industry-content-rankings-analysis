@@ -79,9 +79,11 @@ python <skill-root>/scripts/rpa_connector.py render-report \
   --output-dir "RPA数据汇总/yuntu-rankings-analysis/final-report"
 ```
 
+`render-report` 完成后交付两个文件：可直接打开的 HTML 报告 `final-report/final-report.html`，以及与 `final-report/` 目录同级的 `final-report.zip`；ZIP 只包含 `final-report/` 目录及其内部文件，不包含批次根目录其他产物。
+
 ## 产物与失败处理
 
-主要产物：`raw-csv/list.csv`、`raw-csv/details/<material_id>.csv`、`normalized/list-records.json`、`normalized/detail-records/<material_id>.json`、`batch-manifest.json`、`run-summary.json`、`diagnostic-analysis/yuntu-analysis-data.json`、`diagnostic-analysis/yuntu-ai-analysis.json`、`final-report/final-report-data.json`、`final-report/final-report.md`、`final-report/final-report.html`。兼容路径可保留旧版 `list-response.json`、`details/<material_id>.json`、`manifest.json`；CSV 为主路径，兼容 JSON 与安全的 Python 字面量。
+主要产物：`raw-csv/list.csv`、`raw-csv/details/<material_id>.csv`、`normalized/list-records.json`、`normalized/detail-records/<material_id>.json`、`batch-manifest.json`、`run-summary.json`、`diagnostic-analysis/yuntu-analysis-data.json`、`diagnostic-analysis/yuntu-ai-analysis.json`、`final-report/final-report-data.json`、`final-report/final-report.md`、`final-report/final-report.html`、同级 `final-report.zip`。兼容路径可保留旧版 `list-response.json`、`details/<material_id>.json`、`manifest.json`；CSV 为主路径，兼容 JSON 与安全的 Python 字面量。
 
 分析阶段只读 `normalized/` 和 `diagnostic-analysis/`，不读原始 CSV、RPA response 或临时 `fileUrl`。`files-envelope` 校验成功后才下载 CSV；解析失败的嵌套字段保留原文并标记缺失。列表请求失败或无有效素材时写清单、非零退出且不发详情；详情请求失败记录后继续，最终非零但保留成功文件。报告前确认 `status == success`、`selectedCount == targetTopN`、`rejectedCount == 0`，否则按部分完成交付。
 

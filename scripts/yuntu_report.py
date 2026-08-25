@@ -5,6 +5,7 @@ import json
 import math
 import re
 import shutil
+import zipfile
 from pathlib import Path
 from string import Template
 
@@ -71,6 +72,23 @@ def _validate_rendered_sections(rendered_html):
             raise YuntuReportError(
                 f"rendered report is missing current section title: {title}"
             )
+
+
+def _archive_report_directory(output):
+    """Package only the rendered report directory under its directory name."""
+    archive_path = output.parent / f"{output.name}.zip"
+    temporary_path = archive_path.with_name(f".{archive_path.name}.tmp")
+    try:
+        with zipfile.ZipFile(
+            temporary_path, "w", compression=zipfile.ZIP_DEFLATED
+        ) as archive:
+            for path in sorted(path for path in output.rglob("*") if path.is_file()):
+                relative_path = path.relative_to(output).as_posix()
+                archive.write(path, f"{output.name}/{relative_path}")
+        temporary_path.replace(archive_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return archive_path
 
 
 REQUIRED_FIELDS = (
@@ -1320,4 +1338,5 @@ def render_report(
     write_json_atomically(data, output / "final-report-data.json")
     (output / "final-report.md").write_text(markdown, encoding="utf-8")
     (output / "final-report.html").write_text(rendered_html, encoding="utf-8")
+    _archive_report_directory(output)
     return 0

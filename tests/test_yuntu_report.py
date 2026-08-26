@@ -23,6 +23,16 @@ def load_module():
 
 
 class YuntuReportTests(unittest.TestCase):
+    LEGACY_UNUSED_ANALYSIS_FIELDS = (
+        "rankingOverview",
+        "audienceInsights",
+        "materialComparison",
+        "materialDiagnoses",
+        "competitorPatterns",
+        "opportunityMap",
+        "experimentMatrix",
+    )
+
     def test_render_report_creates_sibling_zip_with_final_report_directory(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:
@@ -266,6 +276,58 @@ class YuntuReportTests(unittest.TestCase):
             "opportunityMap": [{"summary": "测试通勤场景。", "material_ids": ["101"], "evidence": [{"tag": "商品展示(有语音)"}]}],
             "experimentMatrix": [{"priority": "P1", "hypothesis": "测试通勤开场的 3 秒播放率表现", "creative_variable": "前 3 秒场景钩子", "target_audience": "新锐白领", "success_metric": "play_3s_rate", "control": "现有商品直展示素材", "review_action": "按人群拆分复盘", "evidence": [{"material_id": "101", "metric": "play_3s_rate"}]}],
         }
+
+    def test_render_report_accepts_slim_analysis_without_unused_fields(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        for field in self.LEGACY_UNUSED_ANALYSIS_FIELDS:
+            analysis.pop(field)
+        analysis["topMaterialCombination"].pop("overallConclusions")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+
+            status = report.render_report(
+                analysis_json=analysis_path, output_dir=root / "final-report"
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(rendered.count('class="section"'), 5)
+        for section_id in (
+            "top-material-combination",
+            "audience-insights",
+            "script-insights",
+            "highlight-insights",
+            "material-deep-dive",
+        ):
+            self.assertIn(f'id="{section_id}"', rendered)
+
+    def test_render_report_ignores_unused_fields_in_legacy_analysis(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        for field in self.LEGACY_UNUSED_ANALYSIS_FIELDS:
+            analysis[field] = None
+        analysis["topMaterialCombination"]["overallConclusions"] = None
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+
+            status = report.render_report(
+                analysis_json=analysis_path, output_dir=root / "final-report"
+            )
+
+        self.assertEqual(status, 0)
 
     def highlight_dashboard(self):
         return {
@@ -926,43 +988,26 @@ class YuntuReportTests(unittest.TestCase):
     def test_render_report_rejects_evidence_less_conclusion(self):
         report = load_module()
         analysis = self.analysis_json()
-        del analysis["materialComparison"][0]["evidence"]
+        del analysis["topMaterialCombination"]["executiveSummary"]["evidence"]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "analysis.json"
             path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
             with self.assertRaisesRegex(report.YuntuReportError, "evidence"):
                 report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
 
-    def test_render_report_rejects_top_material_conclusion_without_evidence(self):
+    def test_render_report_rejects_incomplete_top_material_contract(self):
         report = load_module()
         analysis = self.analysis_json()
-        del analysis["topMaterialCombination"]["overallConclusions"][0]["evidence"]
+        analysis["topMaterialCombination"].pop("brandComparisonConclusion")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "analysis.json"
             path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(report.YuntuReportError, "topMaterialCombination.*evidence"):
-                report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
-
-    def test_render_report_rejects_incomplete_top_material_contract(self):
-        report = load_module()
-        for mutation, error in (
-            (
-                lambda analysis: analysis["topMaterialCombination"]["overallConclusions"][0].update({"dimension": "unknown"}),
-                "dimension",
-            ),
-            (
-                lambda analysis: analysis["topMaterialCombination"].pop("brandComparisonConclusion"),
-                "brandComparisonConclusion",
-            ),
-        ):
-            with self.subTest(error=error):
-                analysis = self.analysis_json()
-                mutation(analysis)
-                with tempfile.TemporaryDirectory() as directory:
-                    path = Path(directory) / "analysis.json"
-                    path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-                    with self.assertRaisesRegex(report.YuntuReportError, error):
-                        report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
+            with self.assertRaisesRegex(
+                report.YuntuReportError, "brandComparisonConclusion"
+            ):
+                report.render_report(
+                    analysis_json=path, output_dir=Path(directory) / "report"
+                )
 
     def test_render_report_rejects_audit_content_in_user_readable_summaries(self):
         report = load_module()
@@ -973,7 +1018,7 @@ class YuntuReportTests(unittest.TestCase):
             with self.subTest(field=field):
                 analysis = self.analysis_json()
                 target = (
-                    analysis["topMaterialCombination"]["overallConclusions"][0]
+                    analysis["topMaterialCombination"]["executiveSummary"]
                     if field == "summary"
                     else analysis["topMaterialCombination"]["brandConclusions"][0]
                 )
@@ -1241,21 +1286,6 @@ class YuntuReportTests(unittest.TestCase):
                 ),
                 0,
             )
-
-    def test_render_report_rejects_experiment_without_fact_reference(self):
-        report = load_module()
-        analysis = self.deep_dive_analysis()
-        del analysis["experimentMatrix"][0]["evidence"]
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            path = root / "analysis.json"
-            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(report.YuntuReportError, "experimentMatrix.*reference"):
-                report.render_report(
-                    analysis_json=path,
-                    output_dir=root / "report",
-                    fact_pack=self.deep_dive_fact_pack(),
-                )
 
     def test_render_report_renders_classified_highlight_frames(self):
         report = load_module()
@@ -1540,16 +1570,6 @@ class YuntuReportTests(unittest.TestCase):
                     output_dir=Path(directory) / "report",
                     fact_pack=fact_pack,
                 )
-
-    def test_render_report_rejects_incomplete_experiment(self):
-        report = load_module()
-        analysis = self.analysis_json()
-        del analysis["experimentMatrix"][0]["control"]
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "analysis.json"
-            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(report.YuntuReportError, "control"):
-                report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
 
     def test_render_report_rejects_brand_comparison_without_each_brand_evidence(self):
         report = load_module()

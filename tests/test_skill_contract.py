@@ -222,6 +222,13 @@ class AnalysisSkillContractTests(unittest.TestCase):
         ):
             self.assertIn(phrase, skill)
 
+    def test_report_acceptance_is_automated_without_browser_visual_check(self):
+        skill = self.read_skill()
+
+        self.assertIn("报告验收只执行自动化产物校验", skill)
+        self.assertIn("不要启动实际浏览器", skill)
+        self.assertIn("不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤", skill)
+
     def test_keeps_operational_rules_and_defers_schema_details(self):
         skill = self.read_skill()
 
@@ -243,6 +250,14 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertLessEqual(len(skill.splitlines()), 100)
         self.assertNotIn("industryTop1000Facts", skill)
         self.assertNotIn("--highlight-trends", skill)
+
+    def test_documents_slim_analysis_output_and_legacy_json_compatibility(self):
+        skill = self.read_skill()
+
+        self.assertIn("只生成当前报告实际展示的分析模块", skill)
+        self.assertIn("旧版完整 JSON", skill)
+        self.assertIn("额外字段", skill)
+        self.assertIn("兼容渲染", skill)
 
     def test_openai_metadata_has_required_interface_fields(self):
         metadata = OPENAI_YAML_PATH.read_text(encoding="utf-8")

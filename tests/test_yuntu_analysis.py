@@ -141,8 +141,27 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertTrue(data["tagInsights"]["eligibleForAssociation"])
         self.assertEqual(data["trendSummary"]["byTrendName"]["点击指数"]["highPointCount"], 2)
         self.assertEqual(data["trendSummary"]["byTrendName"]["流失指数"]["lossPointCount"], 2)
-        self.assertIn("opportunityMap", prompt)
-        self.assertIn("experimentMatrix", prompt)
+        output_contract = next(
+            line for line in prompt.splitlines() if line.startswith("输出必须是 JSON 对象")
+        )
+        for field in (
+            "rankingOverview",
+            "audienceInsights",
+            "materialComparison",
+            "materialDiagnoses",
+            "competitorPatterns",
+            "opportunityMap",
+            "experimentMatrix",
+            "overallConclusions",
+        ):
+            self.assertNotIn(field, output_contract)
+        for field in (
+            "topMaterialCombination",
+            "chapter02Insights",
+            "highlightDashboard",
+            "materialDeepDives",
+        ):
+            self.assertIn(field, prompt)
         self.assertIn("数据不足以判断", prompt)
 
     def test_prepare_analysis_degrades_when_candidate_pool_is_too_small(self):
@@ -426,8 +445,8 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("标点", prompt)
         self.assertIn("编号", prompt)
         self.assertIn("固定提示词模板", prompt)
-        self.assertIn("至少 80 个中文字符", prompt)
-        self.assertIn("至少 4 条", prompt)
+        self.assertNotIn("至少 80 个中文字符", prompt)
+        self.assertNotIn("至少 4 条", prompt)
         self.assertIn("portrait、product、other", prompt)
         self.assertIn("共性洞察", prompt)
         self.assertIn("裂变方向", prompt)

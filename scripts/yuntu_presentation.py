@@ -285,7 +285,10 @@ def _project_chapter01(analysis, fact_pack):
     requested_top_n = (fact_pack.get("brandTopNFacts") or {}).get("requested_top_n")
     top_n = requested_top_n if isinstance(requested_top_n, int) and requested_top_n > 0 else None
     executive = _chapter01_insight(combination.get("executiveSummary", {}))
-    overall = [_chapter01_insight(item) for item in combination.get("overallConclusions", [])]
+    overall = [
+        _chapter01_insight(item)
+        for item in (combination.get("overallConclusions") or [])
+    ]
     brands = combination.get("brandConclusions", [])
     if not isinstance(brands, list):
         raise YuntuPresentationError("chapter01 brand conclusions are invalid")

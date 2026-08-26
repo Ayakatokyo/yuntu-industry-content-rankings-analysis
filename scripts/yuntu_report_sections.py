@@ -197,7 +197,9 @@ def _render_audience_scope(
             )
         return f'<article class="chart-card audience-chart"><h3>{esc(label)}分布</h3><p class="data-note">暂无可视化数据。</p></article>'
 
-    ai_insights = insight_cards(insights if isinstance(insights, list) else analysis["audienceInsights"])
+    ai_insights = insight_cards(
+        insights if isinstance(insights, list) else (analysis.get("audienceInsights") or [])
+    )
     if not isinstance(value, dict):
         return ('<section class="section" id="audience-insights"><header class="section-header">'
                 '<h2>02｜人群洞察</h2>' + scope + '</header>' + ai_insights + '<p class="data-note">暂无人群汇总数据。</p></section>')

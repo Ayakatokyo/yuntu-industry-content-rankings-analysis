@@ -93,46 +93,11 @@ def _archive_report_directory(output):
 
 REQUIRED_FIELDS = (
     "topMaterialCombination",
-    "rankingOverview",
-    "audienceInsights",
-    "materialComparison",
-    "materialDiagnoses",
-    "competitorPatterns",
-    "opportunityMap",
-    "experimentMatrix",
 )
-
-SECTION_TITLES = (
-    ("02｜榜单竞争格局", "rankingOverview"),
-    ("03｜内容表现地图", "materialComparison"),
-    ("04｜内容与人群机会", "opportunityMap"),
-    ("05｜竞品内容模式", "competitorPatterns"),
-    ("06｜秒级创意结构", "materialDiagnoses"),
-    ("07｜机会与实验", "experimentMatrix"),
-)
-
-EVIDENCE_FIELDS = tuple(field for _, field in SECTION_TITLES[:-1]) + (
-    "audienceInsights",
-)
-EXPERIMENT_FIELDS = (
-    "priority",
-    "hypothesis",
-    "creative_variable",
-    "target_audience",
-    "success_metric",
-    "control",
-    "review_action",
-)
-TOP_MATERIAL_DIMENSIONS = ("data", "people", "marketing")
 TOP_MATERIAL_LABELS = {
     "data": "从数据维度看",
     "people": "从人群维度看",
     "marketing": "从营销卖点维度看",
-}
-BRAND_SUMMARY_FIELDS = {
-    "data": "dataSummary",
-    "people": "peopleSummary",
-    "marketing": "marketingSummary",
 }
 TOP_MATERIAL_BRAND_ORDER = ("万益蓝/WONDERLAB", "五个女博士", "燕之屋")
 AUDIENCE_DIMENSION_LABELS = {
@@ -178,26 +143,13 @@ def _load_analysis(path):
         raise YuntuReportError(
             "analysis JSON is missing required fields: " + ", ".join(missing)
         )
-    for field in EVIDENCE_FIELDS:
-        _validate_evidence_section(analysis[field], field)
     _validate_top_material_combination(analysis["topMaterialCombination"])
     if "chapter02Insights" in analysis:
         analysis["chapter02Insights"] = _normalize_chapter02_insights(
             analysis["chapter02Insights"]
         )
         _validate_chapter02_insights(analysis["chapter02Insights"])
-    _validate_experiments(analysis["experimentMatrix"])
     return analysis
-
-
-def _validate_evidence_section(items, field):
-    if not isinstance(items, list) or not items:
-        raise YuntuReportError(f"{field} must be a nonempty list")
-    for item in items:
-        if not isinstance(item, dict):
-            raise YuntuReportError(f"{field} items must be objects")
-        _validate_summary(item.get("summary"), f"{field} items summary")
-        _validate_evidence_and_material_ids(item, f"{field} items")
 
 
 def _validate_summary(value, field):
@@ -255,33 +207,6 @@ def _validate_top_material_combination(value):
     _validate_evidence_and_material_ids(
         executive_summary, "topMaterialCombination.executiveSummary"
     )
-    overall = value.get("overallConclusions")
-    if not isinstance(overall, list) or not overall:
-        raise YuntuReportError(
-            "topMaterialCombination.overallConclusions must contain at least one dimension"
-        )
-    dimensions = []
-    for item in overall:
-        if not isinstance(item, dict):
-            raise YuntuReportError(
-                "topMaterialCombination.overallConclusions items must be objects"
-            )
-        dimension = item.get("dimension")
-        if dimension not in TOP_MATERIAL_DIMENSIONS:
-            raise YuntuReportError(
-                "topMaterialCombination.overallConclusions dimension must be data, people, or marketing"
-            )
-        dimensions.append(dimension)
-        _validate_summary(
-            item.get("summary"), "topMaterialCombination.overallConclusions summary"
-        )
-        _validate_evidence_and_material_ids(
-            item, "topMaterialCombination.overallConclusions items"
-        )
-    if set(dimensions) != {"data"}:
-        raise YuntuReportError(
-            "topMaterialCombination.overallConclusions must contain data only"
-        )
     brands = value.get("brandConclusions")
     if not isinstance(brands, list):
         raise YuntuReportError("topMaterialCombination.brandConclusions must be a list")
@@ -324,26 +249,6 @@ def _validate_top_material_combination(value):
         raise YuntuReportError(
             "topMaterialCombination.brandComparisonConclusion evidence must include each brand and metric"
         )
-
-
-def _validate_experiments(items):
-    if not isinstance(items, list) or not items:
-        raise YuntuReportError("experimentMatrix must be a nonempty list")
-    for item in items:
-        if not isinstance(item, dict):
-            raise YuntuReportError("experimentMatrix items must be objects")
-        for field in EXPERIMENT_FIELDS:
-            if not isinstance(item.get(field), str) or not item[field].strip():
-                raise YuntuReportError(
-                    f"experimentMatrix items must include {field}"
-                )
-        evidence = item.get("evidence")
-        if not isinstance(evidence, list) or not evidence or not all(
-            isinstance(entry, dict) for entry in evidence
-        ):
-            raise YuntuReportError("experimentMatrix items require a real fact reference")
-
-
 def _validate_chapter02_insights(value):
     if not isinstance(value, dict):
         raise YuntuReportError("chapter02Insights must be an object")
@@ -514,7 +419,7 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
                 tags = "、".join(f"{tag['tag']}（{tag['count']}）" for tag in category.get("topTags", [])[:5])
                 lines.extend([f"- {category.get('category')}：{category.get('occurrenceCount', 0)} 次；Top：{tags}", ""])
     else:
-        for insight in analysis["audienceInsights"]:
+        for insight in (analysis.get("audienceInsights") or []):
             lines.extend([insight["summary"], ""])
     if not (isinstance(chapter02, dict) and chapter02.get("scopeOrder")) and isinstance(audience_dashboard, dict):
         sample = audience_dashboard.get("sample", {})
@@ -842,63 +747,6 @@ def _validate_material_deep_dives(analysis, fact_pack):
         raise YuntuReportError("materialDeepDives must cover every selected material")
 
 
-def _is_v4_fact_pack(fact_pack):
-    return isinstance(fact_pack, dict) and fact_pack.get("schemaVersion") == 4
-
-
-def _validate_experiment_fact_references(analysis, fact_pack):
-    if not _is_v4_fact_pack(fact_pack):
-        return
-    facts = {
-        str(fact.get("material_id")): fact
-        for fact in fact_pack.get("materialFacts", [])
-        if isinstance(fact, dict) and fact.get("material_id")
-    }
-    known_material_ids = set(facts)
-    known_frame_refs = {
-        frame["frame_ref"] for frame in _available_highlight_frames(fact_pack)
-    }
-    known_metrics = {
-        metric_name
-        for fact in facts.values()
-        for metric_name in fact.get("metrics", {})
-    }
-    known_metrics.update(
-        metric.get("trend_name")
-        for fact in facts.values()
-        for metric in fact.get("secondLevelBreakdown", {}).get("metrics", [])
-        if isinstance(metric, dict) and isinstance(metric.get("trend_name"), str)
-    )
-    for item in analysis["experimentMatrix"]:
-        valid = False
-        for evidence in item["evidence"]:
-            material_id = str(evidence.get("material_id", ""))
-            frame_ref = evidence.get("frame_ref")
-            metric = evidence.get("metric") or evidence.get("trend_name")
-            if material_id and material_id in known_material_ids:
-                valid = True
-            if isinstance(frame_ref, str) and frame_ref in known_frame_refs:
-                valid = True
-            if isinstance(metric, str) and metric in known_metrics:
-                valid = True
-            if "second" in evidence:
-                fact = facts.get(material_id)
-                points = {
-                    point.get("second")
-                    for trend in fact.get("secondLevelBreakdown", {}).get("metrics", [])
-                    if isinstance(trend, dict)
-                    and trend.get("trend_name") == metric
-                    for point in trend.get("points", [])
-                    if isinstance(point, dict)
-                } if fact else set()
-                if evidence.get("second") not in points:
-                    valid = False
-        if not valid:
-            raise YuntuReportError(
-                "experimentMatrix items require a real fact reference"
-            )
-
-
 METRIC_LABELS = {
     "show_cnt": "曝光量",
     "ctr": "CTR",
@@ -1117,10 +965,6 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None):
         f'<div class="trend-summary"><span>{esc(name)}</span><b>{esc(data.get("highPointCount", 0))}</b><small>高点</small><b>{esc(data.get("lossPointCount", 0))}</b><small>流失点</small></div>'
         for name, data in trend_summary.items()
     )
-    diagnosis_items = "".join(
-        f'<details class="diagnosis" id="material-{esc(item.get("material_id"))}"><summary><span class="rank">#{esc(facts.get(str(item.get("material_id")), {}).get("rank", "-"))}</span><strong>{esc(facts.get(str(item.get("material_id")), {}).get("title", item.get("material_id")))}</strong><span>展开秒级诊断</span></summary><p>{esc(_generic_text(item.get("summary", "")))}</p></details>'
-        for item in analysis.get("materialDiagnoses", [])
-    )
     frame_buttons = []
     for item in selected:
         material_id = str(item.get("material_id"))
@@ -1175,7 +1019,6 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None):
         presentation=(presentation or {}).get("chapters", {}).get("chapter05") if isinstance(presentation, dict) else None,
     )
 
-    landscape = insight_cards(analysis.get("rankingOverview", []))
     report_dimensions = ("data",)
     report_brand_fields = {"data": "dataSummary"}
     top_material_combination = render_top_material_combination(
@@ -1206,24 +1049,6 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None):
         chapter02_facts=fact_pack.get("chapter02Facts"),
         presentation={**((presentation or {}).get("chapters", {}).get("chapter02") or {}), "scopeDefinitions": (presentation or {}).get("scopes", [])} if isinstance(presentation, dict) else None,
     )
-    performance = insight_cards(analysis.get("materialComparison", []))
-    opportunities = insight_cards(analysis.get("opportunityMap", []))
-    competitor_patterns = analysis.get("competitorPatterns", [])
-    competitor_cards = []
-    for brand in ("五个女博士", "万益蓝", "燕之屋"):
-        item = next((entry for entry in competitor_patterns if brand in str(entry.get("summary", ""))), None)
-        if item:
-            competitor_cards.append(
-                f'<article class="competitor-card"><h3>{esc(brand)}</h3><p>{esc(_generic_text(item.get("summary", "")))}</p></article>'
-            )
-    if not competitor_cards:
-        competitor_cards.append('<p class="data-note">当前数据未识别出可归属到指定竞品的结论。</p>')
-    competitor = "".join(competitor_cards)
-    experiments = "".join(
-        f'<article class="experiment"><span>{esc(item.get("priority", ""))}</span><div><h3>{esc(_generic_text(item.get("hypothesis", "")))}</h3><dl><div><dt>创意变量</dt><dd>{esc(_generic_text(item.get("creative_variable", "")))}</dd></div><div><dt>目标人群</dt><dd>{esc(_generic_text(item.get("target_audience", "")))}</dd></div><div><dt>成功指标</dt><dd>{esc(_generic_text(item.get("success_metric", "")))}</dd></div><div><dt>对照组</dt><dd>{esc(_generic_text(item.get("control", "")))}</dd></div></dl><details><summary>查看复盘动作</summary><p>{esc(_generic_text(item.get("review_action", "")))}</p></details></div></article>'
-        for item in analysis.get("experimentMatrix", [])
-    )
-
     style = """
 :root{--bg:#170d09;--paper:#fff8ec;--surface:#fffdf8;--ink:#2a170f;--muted:#705c50;--accent:#d79a4b;--accent-dark:#8e5528;--line:#dfcfbd;--line-dark:#4a2a1b;--positive:#406955;--focus:#f0bc64}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;font-size:16px;line-height:1.55}button,select,input{font:inherit}button,select{min-height:44px}.skip-link{position:fixed;left:12px;top:-60px;background:var(--paper);color:var(--ink);padding:10px;z-index:5}.skip-link:focus{top:12px}.page{width:min(1240px,calc(100% - 32px));margin:auto;padding:28px 0 72px}.report-cover{color:#fff;border-bottom:1px solid rgba(255,255,255,.24);padding:8px 0 28px}.report-cover p{max-width:68ch;color:#ead9c9;margin:0}.report-cover h1{font-size:2.6rem;line-height:1.1;margin:10px 0 12px;text-wrap:balance}.report-cover .cover-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}.cover-meta span,.source-label{font-size:.75rem;font-weight:700}.cover-meta span{color:#f9d79b;border:1px solid rgba(249,215,155,.38);padding:4px 8px;border-radius:4px}.report-shell{display:grid;grid-template-columns:184px minmax(0,900px);gap:26px;align-items:start;margin-top:24px}.report-nav{position:sticky;top:18px;display:grid;gap:4px;padding:10px 0}.report-nav a{color:#dfc7ae;text-decoration:none;border-left:1px solid rgba(223,199,174,.35);padding:8px 10px;font-size:.875rem}.report-nav a:hover,.report-nav a:focus-visible,.report-nav a.active{color:#fff;background:#2a170f;border-left-color:var(--accent)}.report-nav small{color:#ac8970;padding:8px 10px}.report-content{min-width:0}.section{scroll-margin-top:18px;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:24px;margin-bottom:18px}.section-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:18px}.section-header h2{font-size:1.5rem;line-height:1.2;margin:0;text-wrap:balance}.section-header p{color:var(--muted);font-size:.875rem;margin:6px 0 0}.source-label{display:inline-block;color:var(--accent-dark);background:#f7e6cb;padding:4px 7px;border-radius:4px;white-space:nowrap}.insight-stack{display:grid;gap:0}.insight-row{padding:16px 0;border-bottom:1px solid var(--line)}.insight-row:last-child{border:0;padding-bottom:0}.insight-row p{margin:0;max-width:72ch}.material-references{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.material-reference{color:var(--accent-dark);font-size:.8125rem;font-weight:700;text-decoration:none;border-bottom:1px solid currentColor}.evidence-details,.diagnosis details,.experiment details{margin-top:10px}.evidence-details summary,.diagnosis summary,.experiment summary{cursor:pointer;color:var(--accent-dark);font-weight:700}.evidence-details ul{padding-left:18px;color:var(--muted);font-size:.875rem}.baseline-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:18px}.baseline{background:#f7ebd9;padding:10px;border-radius:6px}.baseline span,.baseline small{display:block;color:var(--muted);font-size:.75rem}.baseline b{display:block;font-size:1.05rem;font-variant-numeric:tabular-nums;margin:2px 0}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}.toolbar label{font-size:.8125rem;font-weight:700;color:var(--muted)}.toolbar select,.toolbar input{border:1px solid #ba9c7d;background:var(--surface);color:var(--ink);border-radius:5px;padding:6px 8px}.toolbar input{min-width:220px}.toolbar button{border:1px solid var(--accent-dark);background:transparent;color:var(--accent-dark);padding:6px 10px;border-radius:5px;cursor:pointer}.data-table{width:100%;border-collapse:collapse;font-size:.8125rem;overflow:hidden}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:6px}.data-table th{background:#f1dfc8;color:#5e3820;text-align:right;padding:9px 8px;white-space:nowrap}.data-table th:nth-child(2),.data-table td:nth-child(2){text-align:left}.data-table td{border-top:1px solid var(--line);padding:9px 8px;text-align:right;font-variant-numeric:tabular-nums}.data-table td small,.material-title span{display:block;color:var(--muted);font-size:.72rem;font-weight:400}.material-title{min-width:240px;max-width:360px}.rank{color:var(--accent-dark);font-weight:800}.tag-table td:first-child{text-align:left}.selection-bar{display:block;width:84px;height:6px;background:#ecd9c2;border-radius:99px;overflow:hidden}.selection-bar i{display:block;height:100%;background:var(--accent)}.trend-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:18px}.trend-summary{border-bottom:2px solid var(--accent);padding:8px 0}.trend-summary span,.trend-summary small{display:block;color:var(--muted);font-size:.72rem}.trend-summary b{font-size:1.125rem;font-variant-numeric:tabular-nums;margin-right:4px}.diagnosis{border-top:1px solid var(--line);padding:12px 0}.diagnosis summary{display:grid;grid-template-columns:52px 1fr auto;gap:10px;align-items:start;color:var(--ink)}.diagnosis summary span:last-child{color:var(--accent-dark);font-size:.8125rem}.diagnosis p{margin:12px 0 0;color:#483025}.frame-library{margin-top:26px;border-top:1px solid var(--line);padding-top:18px}.frame-library-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.frame-library h3{margin:0;font-size:1.125rem}.frame-library select{border:1px solid #ba9c7d;background:var(--surface);padding:6px 8px;border-radius:5px}.highlight-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:8px;margin-top:14px}.frame-button{border:1px solid var(--line);background:var(--surface);padding:4px;border-radius:6px;color:var(--muted);cursor:pointer;text-align:left;transition:border-color .18s ease,transform .18s ease}.frame-button img{display:block;width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:3px}.frame-button span{display:block;font-size:.7rem;padding:4px 2px 1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.frame-button:hover{border-color:var(--accent-dark);transform:translateY(-1px)}.experiment{display:grid;grid-template-columns:48px 1fr;gap:12px;padding:16px 0;border-top:1px solid var(--line)}.experiment:first-of-type{border-top:0;padding-top:0}.experiment>span{color:var(--accent-dark);font-weight:800;font-size:.875rem}.experiment h3{font-size:1rem;line-height:1.45;margin:0}.experiment dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:14px 0 0}.experiment dl div{border-top:1px solid var(--line);padding-top:7px}.experiment dt{color:var(--muted);font-size:.72rem}.experiment dd{margin:3px 0 0;font-size:.875rem}.data-note{color:var(--muted);font-size:.8125rem;margin:10px 0 0}.data-note strong{color:var(--ink)}dialog{border:0;padding:0;max-width:min(720px,92vw);background:transparent}dialog::backdrop{background:rgba(13,7,4,.88)}.lightbox{position:relative;background:#fff;padding:10px;border-radius:8px}.lightbox img{display:block;max-width:min(680px,88vw);max-height:82vh}.lightbox button{position:absolute;right:8px;top:8px;border:0;background:var(--ink);color:#fff;border-radius:5px;padding:6px 9px;cursor:pointer}.lightbox p{margin:7px 2px 0;font-size:.8125rem;color:var(--muted)}button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--focus);outline-offset:2px}@media(max-width:900px){.report-shell{grid-template-columns:1fr}.report-nav{position:sticky;top:0;z-index:2;background:var(--bg);grid-auto-flow:column;grid-auto-columns:max-content;overflow:auto;padding:8px 0}.report-nav small{display:none}.report-nav a{border-left:0;border-bottom:1px solid rgba(223,199,174,.35);white-space:nowrap}.report-nav a.active{border-bottom-color:var(--accent)}.section{padding:18px}.baseline-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.trend-grid{grid-template-columns:repeat(3,minmax(0,1fr)}}@media(max-width:560px){.page{width:min(100% - 20px,1240px);padding-top:16px}.report-cover h1{font-size:2rem}.section-header{display:block}.source-label{margin-top:10px}.baseline-strip{grid-template-columns:1fr 1fr}.toolbar input{min-width:0;width:100%}.trend-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.diagnosis summary{grid-template-columns:42px 1fr}.diagnosis summary span:last-child{grid-column:2}.experiment dl{grid-template-columns:1fr}.highlight-gallery{grid-template-columns:repeat(3,minmax(0,1fr))}}
@@ -1286,18 +1111,12 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None):
         script_insights=script_insights,
         highlight_insights=highlight_insights,
         material_deep_dive=material_deep_dive,
-        landscape=landscape,
         baseline=baseline,
-        performance=performance,
         material_tag_chart=material_tag_chart,
         people_tag_chart=people_tag_chart,
-        competitor=competitor,
         trend_items=trend_items,
-        diagnoses=diagnosis_items,
         frame_options=frame_options,
         frames="".join(frame_buttons),
-        opportunities=opportunities,
-        experiments=experiments,
     )
     _validate_rendered_sections(rendered)
     return rendered
@@ -1316,7 +1135,6 @@ def render_report(
     _validate_ranking_scope_contract(analysis, fact_pack)
     _validate_highlight_dashboard(analysis, fact_pack)
     _validate_material_deep_dives(analysis, fact_pack)
-    _validate_experiment_fact_references(analysis, fact_pack)
     presentation = build_yuntu_presentation(analysis, fact_pack)
     data = {"status": "complete", "analysis": analysis, "presentation": presentation}
     if analysis_provenance is not None:

@@ -58,7 +58,7 @@ python <skill-root>/scripts/rpa_connector.py fetch \
 
 ## 分析与报告
 
-先运行 `prepare-analysis` 生成事实包和固定提示词，再由当前对话模型生成 `yuntu-ai-analysis.json`；固定规则只做统计、归类、聚合和图表数据，不生成业务结论。脚本和生成的提示词是 schema 权威，入口不重复维护字段枚举。完成后登记来源回执：
+先运行 `prepare-analysis` 生成事实包和固定提示词，再由当前对话模型生成 `yuntu-ai-analysis.json`；固定规则只做统计、归类、聚合和图表数据，不生成业务结论。新模型输出只生成当前报告实际展示的分析模块；旧版完整 JSON 中的额外字段会被忽略并继续兼容渲染。脚本和生成的提示词是 schema 权威，入口不重复维护字段枚举。完成后登记来源回执：
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py prepare-analysis \
@@ -80,6 +80,8 @@ python <skill-root>/scripts/rpa_connector.py render-report \
 ```
 
 `render-report` 完成后交付两个文件：可直接打开的 HTML 报告 `final-report/final-report.html`，以及与 `final-report/` 目录同级的 `final-report.zip`；ZIP 只包含 `final-report/` 目录及其内部文件，不包含批次根目录其他产物。
+
+报告验收只执行自动化产物校验：确认 HTML、Markdown、报告数据和 presentation JSON 均已生成；章节 ID 与导航目标完整且唯一；本地高光帧存在、非空且引用可解析；成品不含未替换占位符，也不把 `undefined` 或 `None` 作为报告数据值输出；ZIP 仅包含 `final-report/`；presentation JSON 通过 schema 校验。不要启动实际浏览器，也不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤。
 
 ## 产物与失败处理
 

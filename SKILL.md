@@ -11,7 +11,7 @@ metadata:
 ## 输入与时间
 
 - `行业`必填；`指定品牌`可选，填写时提供 3 至 10 个品牌并使用 `SPECIFIED_BRANDS`。
-- `截取方式`支持曝光量TOP1000、CTRTOP1000、互动率TOP1000、完播率TOP1000；年龄、性别、八大人群不填写时不传筛选参数（全选）。品牌榜单 Top 素材数默认 30，秒级拆解素材数默认 10。
+- `截取方式`支持曝光量TOP1000、CTRTOP1000、互动率TOP1000、完播率TOP1000；年龄、性别、八大人群不填写时不传筛选参数（全选）。两个数量参数属于不同阶段：品牌榜单 Top 素材数默认 30，仅控制分析阶段每个品牌的 Top N（`prepare-analysis --brand-top-n`）；秒级拆解素材数默认 10，控制 RPA 详情实际拉取并做秒级拆解的目标素材数（`fetch --target-top-n`）。二者不得互换。
 - 榜单和素材详情必须使用同一分析周期：近7天=`LAST_7_DAYS`，近30天=`LAST_30_DAYS`，不换算为自定义日期；未填写时默认近七天。明确起止日时，两端均使用 `CUSTOM` 和相同闭区间（首尾包含）。云图界面日期只作展示核对。
 
 ## 连接器与安全边界
@@ -39,17 +39,18 @@ python <skill-root>/scripts/rpa_connector.py status --output-dir "RPA数据汇�
 python <skill-root>/scripts/rpa_connector.py fetch \
   --shop-id "<shop_id>" --industry "食品饮料" \
   --time-range-type "LAST_7_DAYS" --detail-date-range-type "LAST_7_DAYS" \
-  --target-top-n 10 --candidate-top-n 30 \
+  --target-top-n 10 --candidate-top-n 20 \
   --output-dir "RPA数据汇总/yuntu-rankings-analysis"
 ```
 
-自定义范围时，两端改为 `CUSTOM` 并传入 `--custom-start-date`、`--custom-end-date`、`--detail-custom-start-date`、`--detail-custom-end-date`。`--target-top-n` 是最终成功素材数，`--candidate-top-n` 默认是其 2 倍；`--top-n` 默认 10 仅为兼容旧用法。列表筛选使用 `--industry`、时间范围、`--ages`、`--genders`、`--crowd-groups`、`--brand-scope-type`、`--brands`、`--ranking-limit-type`。
+自定义范围时，两端改为 `CUSTOM` 并传入 `--custom-start-date`、`--custom-end-date`、`--detail-custom-start-date`、`--detail-custom-end-date`。上例中的 `--target-top-n 10` 表示秒级拆解素材数为 10；`--candidate-top-n` 是候选池数量，默认是目标数的 2 倍，不是品牌榜单 Top 数。品牌榜单 Top 数只在后续 `prepare-analysis --brand-top-n` 传入。`--top-n` 默认 10 仅为兼容旧用法。列表筛选使用 `--industry`、时间范围、`--ages`、`--genders`、`--crowd-groups`、`--brand-scope-type`、`--brands`、`--ranking-limit-type`。
 
 `fetch` 是长任务：通过异步会话和 `status` 观察落盘，单次 RPA 最多等待 300 秒。列表只调用一次，完成后先写 `normalized/list-records.json` 和 `normalized/detail-request-params.json`，详情只消费后者。详情每波最多并行 2 个素材；本波详情与高光任务全部终态后才启动下一波。高光处理失败只记录原因，不补拉详情。
 
 ## 批次门禁与恢复
 
 - 业务条件变化必须新建带日期和 TopN 的输出目录；指定品牌必须成对传入 `--brand-scope-type SPECIFIED_BRANDS` 与单个逗号分隔的 `--brands`。
+- 启动 `fetch` 前必须先复述参数映射并核对：`fetch --target-top-n = 秒级拆解素材数`，`prepare-analysis --brand-top-n = 品牌榜单 Top 素材数`；例如用户填写“秒级 6、品牌 Top 30”时，只能执行 `fetch --target-top-n 6` 和 `prepare-analysis --brand-top-n 30`。未完成映射核对时不得启动 RPA 长任务。
 - `run-summary.json` 保存运行 ID、参数指纹、不可变契约和阶段计数；`batch-manifest.json` 保存候选、提交、选中、拒绝、`unresolvedMaterials` 和取消项。续跑契约包含 `shop_id`、全部列表筛选、详情日期、`targetTopN`、`candidateTopN`；不一致或缺少可验证摘要就新建目录。
 - `status --output-dir` 同时核对摘要、manifest、规范化列表、详情请求和详情文件。已落盘详情不重复提交；manifest 仍为 running 但文件已落盘时不重跑或覆盖。
 - 中断且无本地详情的项目进入 `unresolvedMaterials`，不等同于 RPA 失败；用户确认可能重复请求后才运行 `retry-unresolved`。`retry-failed` 只重试 `rejectedMaterials`。

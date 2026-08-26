@@ -48,6 +48,37 @@ class AnalysisSkillContractTests(unittest.TestCase):
         ):
             self.assertIn(phrase, skill)
 
+    def test_documents_distinct_collection_and_brand_analysis_counts(self):
+        skill = self.read_skill()
+        frontmatter = re.match(r"\A---\n(.*?)\n---", skill, re.DOTALL)
+
+        self.assertIsNotNone(frontmatter)
+        self.assertNotIn("fetch --target-top-n", frontmatter.group(1))
+        self.assertNotIn("prepare-analysis --brand-top-n", frontmatter.group(1))
+        self.assertIn("秒级拆解素材数默认 10，控制 RPA 详情实际拉取并做秒级拆解的目标素材数（`fetch --target-top-n`）", skill)
+        self.assertIn("品牌榜单 Top 素材数默认 30，仅控制分析阶段每个品牌的 Top N（`prepare-analysis --brand-top-n`）", skill)
+        self.assertIn("二者不得互换", skill)
+        self.assertIn("未完成映射核对时不得启动 RPA 长任务", skill)
+
+    def test_fetch_and_prepare_cli_help_explain_count_ownership(self):
+        result = subprocess.run(
+            [sys.executable, str(CONNECTOR_PATH), "fetch", "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("second-level breakdown", result.stdout)
+        self.assertIn("not the brand analysis Top N", result.stdout)
+
+        result = subprocess.run(
+            [sys.executable, str(CONNECTOR_PATH), "prepare-analysis", "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("Analysis-only brand Top N", result.stdout)
+        self.assertIn("not the RPA detail count", result.stdout)
+
     def test_documents_relative_periods_as_yuntu_enums(self):
         skill = self.read_skill()
 

@@ -570,7 +570,7 @@ def _parser():
         "--brand-top-n",
         type=_positive_int_argument,
         default=30,
-        help="Limit each brand's chapter 01 and AI analysis to its highest-exposure N materials; defaults to 30",
+        help="Analysis-only brand Top N; limit each brand's chapter 01 and AI analysis to its highest-exposure N materials (not the RPA detail count); defaults to 30",
     )
     attest_parser = commands.add_parser(
         "attest-analysis", help="Record the source of a model-authored analysis JSON"
@@ -605,8 +605,16 @@ def _parser():
     )
     fetch_parser.add_argument("--shop-id", required=True)
     fetch_parser.add_argument("--top-n", type=_positive_int_argument, default=10)
-    fetch_parser.add_argument("--target-top-n", type=_positive_int_argument)
-    fetch_parser.add_argument("--candidate-top-n", type=_positive_int_argument)
+    fetch_parser.add_argument(
+        "--target-top-n",
+        type=_positive_int_argument,
+        help="Target number of materials whose details are fetched for second-level breakdown; defaults to --top-n (10)",
+    )
+    fetch_parser.add_argument(
+        "--candidate-top-n",
+        type=_positive_int_argument,
+        help="Candidate-pool size for detail selection; defaults to 2x --target-top-n, not the brand analysis Top N",
+    )
     fetch_parser.add_argument("--output-dir", required=True)
     fetch_parser.add_argument("--industry")
     fetch_parser.add_argument("--time-range-type")

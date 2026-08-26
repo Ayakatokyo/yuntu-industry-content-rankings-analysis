@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from rpa_io import file_sha256, write_json_atomically
+from yuntu_report import YuntuReportError, validate_analysis_input
 
 
 class YuntuAnalysisProvenanceError(RuntimeError):
@@ -53,6 +54,23 @@ def _verify_analysis_unit_manifest(path):
             raise YuntuAnalysisProvenanceError(
                 "analysis unit does not match manifest"
             )
+    return manifest
+
+
+def _validate_single_call_analysis(analysis_json, manifest_path):
+    report_data_path = Path(manifest_path).parent.parent / "report-data.json"
+    try:
+        fact_pack = json.loads(report_data_path.read_text(encoding="utf-8"))
+        if not isinstance(fact_pack, dict):
+            raise ValueError("report-data.json must be an object")
+        validate_analysis_input(
+            analysis_json=analysis_json,
+            fact_pack=fact_pack,
+        )
+    except (OSError, json.JSONDecodeError, ValueError, YuntuReportError) as exc:
+        raise YuntuAnalysisProvenanceError(
+            f"analysis validation failed: {exc}"
+        ) from exc
 
 
 def attest_analysis(
@@ -79,13 +97,15 @@ def attest_analysis(
     for label, path in paths.items():
         if not path.is_file() or not path.stat().st_size:
             raise YuntuAnalysisProvenanceError(f"{label} must be a nonempty file")
-    _verify_analysis_unit_manifest(paths["factPack"])
+    manifest = _verify_analysis_unit_manifest(paths["factPack"])
     try:
         analysis = json.loads(paths["analysisJson"].read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise YuntuAnalysisProvenanceError("analysis JSON must be valid JSON") from exc
     if not isinstance(analysis, dict):
         raise YuntuAnalysisProvenanceError("analysis JSON must be an object")
+    if manifest is not None:
+        _validate_single_call_analysis(paths["analysisJson"], paths["factPack"])
     target = Path(output_path) if output_path else default_provenance_path(analysis_json)
     receipt = {
         "schemaVersion": 1,

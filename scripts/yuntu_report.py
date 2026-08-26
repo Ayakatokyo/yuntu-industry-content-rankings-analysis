@@ -152,6 +152,16 @@ def _load_analysis(path):
     return analysis
 
 
+def validate_analysis_input(*, analysis_json, fact_pack=None):
+    """Validate model analysis against the same contracts used by rendering."""
+    analysis = _load_analysis(analysis_json)
+    fact_pack = fact_pack or {}
+    _validate_ranking_scope_contract(analysis, fact_pack)
+    _validate_highlight_dashboard(analysis, fact_pack)
+    _validate_material_deep_dives(analysis, fact_pack)
+    return analysis
+
+
 def _validate_summary(value, field):
     if not isinstance(value, str) or not value.strip():
         raise YuntuReportError(f"{field} must be a nonempty string")
@@ -1139,11 +1149,11 @@ def render_report(
     analysis_provenance=None,
     highlight_asset_root=None,
 ):
-    analysis = _load_analysis(analysis_json)
     fact_pack = fact_pack or {}
-    _validate_ranking_scope_contract(analysis, fact_pack)
-    _validate_highlight_dashboard(analysis, fact_pack)
-    _validate_material_deep_dives(analysis, fact_pack)
+    analysis = validate_analysis_input(
+        analysis_json=analysis_json,
+        fact_pack=fact_pack,
+    )
     presentation = build_yuntu_presentation(analysis, fact_pack)
     data = {"status": "complete", "analysis": analysis, "presentation": presentation}
     if analysis_provenance is not None:

@@ -598,10 +598,33 @@ class RpaConnectorTest(unittest.TestCase):
             unit_dir.mkdir()
             analysis_path = root / "yuntu-ai-analysis.json"
             prompt_path = root / "yuntu-analysis-prompt.md"
+            report_path = root / "report-data.json"
             unit_path = unit_dir / "ranking-brand-input.json"
             manifest_path = unit_dir / "analysis-unit-manifest.json"
-            analysis_path.write_text("{}", encoding="utf-8")
+            analysis_path.write_text(
+                json.dumps(
+                    {
+                        "topMaterialCombination": {
+                            "executiveSummary": {
+                                "summary": "模型综合结论",
+                                "evidence": [{"metric": "exposure", "value": 1}],
+                                "material_ids": ["1"],
+                            },
+                            "brandConclusions": [],
+                            "brandComparisonConclusion": {
+                                "summary": "模型品牌比较结论",
+                                "evidence": [
+                                    {"brand": "示例品牌", "metric": "exposure", "value": 1}
+                                ],
+                                "material_ids": ["1"],
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
             prompt_path.write_text("prompt", encoding="utf-8")
+            report_path.write_text("{}", encoding="utf-8")
             unit_path.write_text('{"evidence":{}}', encoding="utf-8")
             digest = hashlib.sha256(unit_path.read_bytes()).hexdigest()
             manifest_path.write_text(
@@ -636,6 +659,53 @@ class RpaConnectorTest(unittest.TestCase):
                     analysis_json=analysis_path,
                     provenance_path=receipt_path,
                 )
+
+    def test_attest_analysis_validates_single_call_output_before_writing_receipt(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            unit_dir = root / "analysis-units"
+            unit_dir.mkdir()
+            analysis_path = root / "yuntu-ai-analysis.json"
+            prompt_path = root / "yuntu-analysis-prompt.md"
+            report_path = root / "report-data.json"
+            unit_path = unit_dir / "ranking-brand-input.json"
+            manifest_path = unit_dir / "analysis-unit-manifest.json"
+            analysis_path.write_text("{}", encoding="utf-8")
+            prompt_path.write_text("prompt", encoding="utf-8")
+            report_path.write_text("{}", encoding="utf-8")
+            unit_path.write_text('{"evidence":{}}', encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "executionMode": "single_model_call",
+                        "units": [
+                            {
+                                "path": "analysis-units/ranking-brand-input.json",
+                                "bytes": unit_path.stat().st_size,
+                                "sha256": hashlib.sha256(unit_path.read_bytes()).hexdigest(),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                connector.YuntuAnalysisProvenanceError,
+                "analysis validation failed",
+            ):
+                connector.attest_analysis(
+                    analysis_json=analysis_path,
+                    fact_pack_json=manifest_path,
+                    prompt_path=prompt_path,
+                    source="model_generated",
+                    generator="current-dialog-model",
+                )
+
+            self.assertFalse(
+                (root / "yuntu-ai-analysis.provenance.json").exists()
+            )
 
     def test_render_command_passes_verified_model_source_to_renderer(self):
         connector = self.connector()

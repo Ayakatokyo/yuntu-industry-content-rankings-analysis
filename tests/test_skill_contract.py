@@ -290,6 +290,15 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertIn("额外字段", skill)
         self.assertIn("兼容渲染", skill)
 
+    def test_requires_current_dialog_model_without_external_model_processes(self):
+        skill = self.read_skill()
+
+        self.assertIn("当前对话模型直接完成", skill)
+        self.assertIn("实际查看全部可用本地 JPEG", skill)
+        for forbidden_route in ("`codex exec`", "子进程", "外部模型服务"):
+            self.assertIn(forbidden_route, skill)
+        self.assertIn("不得仅凭 `--generator`", skill)
+
     def test_openai_metadata_has_required_interface_fields(self):
         metadata = OPENAI_YAML_PATH.read_text(encoding="utf-8")
         self.assertRegex(metadata, r'(?m)^interface:\s*$')

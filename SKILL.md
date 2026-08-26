@@ -59,7 +59,7 @@ python <skill-root>/scripts/rpa_connector.py fetch \
 
 ## 分析与报告
 
-先运行 `prepare-analysis`。它保留 `yuntu-analysis-data.json` 作为完整兼容快照，同时生成精简的 `report-data.json` 和 `analysis-units/` 下的榜单品牌、人群卖点、视觉高光、单素材秒级四个章节事实包。当前对话模型必须在同一次调用中读取 manifest 与四包，生成一份 `yuntu-ai-analysis.json`；不拆成四次模型调用，也不把完整兼容快照作为模型输入。固定规则只做统计、归类、聚合和图表数据，不生成业务结论。新模型输出只生成当前报告实际展示的分析模块；旧版完整 JSON 中的额外字段会被忽略并继续兼容渲染。脚本和生成的提示词是 schema 权威，入口不重复维护字段枚举。完成后登记来源回执：
+先运行 `prepare-analysis`。它保留 `yuntu-analysis-data.json` 作为完整兼容快照，同时生成精简的 `report-data.json` 和 `analysis-units/` 下的榜单品牌、人群卖点、视觉高光、单素材秒级四个章节事实包。数据和高光帧的分析理解必须由当前对话模型直接完成：在同一次调用中读取 manifest 与四包，实际查看全部可用本地 JPEG，再生成一份 `yuntu-ai-analysis.json`；不得通过 `codex exec`、子进程或外部模型服务代替当前对话模型，不得仅凭 `--generator` 文本认定模型身份。不拆成四次模型调用，也不把完整兼容快照作为模型输入。固定规则只做统计、归类、聚合和图表数据，不生成业务结论。新模型输出只生成当前报告实际展示的分析模块；旧版完整 JSON 中的额外字段会被忽略并继续兼容渲染。脚本和生成的提示词是 schema 权威，入口不重复维护字段枚举。完成后登记来源回执：
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py prepare-analysis \

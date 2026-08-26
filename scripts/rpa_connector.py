@@ -726,7 +726,16 @@ def main(argv=None):
                 )
             except YuntuAnalysisProvenanceError as exc:
                 raise RpaConnectorError(str(exc)) from exc
-            fact_pack_path = Path(args.fact_pack_json) if args.fact_pack_json else Path(args.analysis_json).with_name("yuntu-analysis-data.json")
+            if args.fact_pack_json:
+                fact_pack_path = Path(args.fact_pack_json)
+            else:
+                analysis_dir = Path(args.analysis_json).parent
+                report_projection = analysis_dir / "report-data.json"
+                fact_pack_path = (
+                    report_projection
+                    if report_projection.is_file()
+                    else analysis_dir / "yuntu-analysis-data.json"
+                )
             fact_pack = {}
             if fact_pack_path.exists():
                 fact_pack = json.loads(fact_pack_path.read_text(encoding="utf-8"))

@@ -1581,6 +1581,21 @@ class YuntuReportTests(unittest.TestCase):
             with self.assertRaisesRegex(report.YuntuReportError, "brandComparisonConclusion.*brand"):
                 report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
 
+    def test_render_report_rejects_brand_comparison_evidence_without_value(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        analysis["topMaterialCombination"]["brandComparisonConclusion"]["evidence"][0].pop("value")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(
+                report.YuntuReportError,
+                "brandComparisonConclusion.*brand, metric, and value",
+            ):
+                report.render_report(
+                    analysis_json=path, output_dir=Path(directory) / "report"
+                )
+
     def test_render_report_renders_styled_cover_without_legacy_gallery(self):
         report = load_module()
         fact_pack = {"materialFacts": [{"material_id": "101", "highlightFrames": [{"second": 0, "available": True, "relative_path": "../highlights/101/01-000s.jpg", "is_cover": True, "reasons": [{"type": "cover"}]}]}]}

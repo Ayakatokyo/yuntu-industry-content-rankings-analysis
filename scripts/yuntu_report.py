@@ -236,14 +236,23 @@ def _validate_top_material_combination(value):
     _validate_evidence_and_material_ids(
         comparison, "topMaterialCombination.brandComparisonConclusion"
     )
-    compared_brands = {
-        entry.get("brand")
+    invalid_evidence = [
+        entry
         for entry in comparison["evidence"]
-        if isinstance(entry, dict)
-        and isinstance(entry.get("brand"), str)
-        and isinstance(entry.get("metric"), str)
-        and entry["metric"].strip()
-    }
+        if not (
+            isinstance(entry, dict)
+            and isinstance(entry.get("brand"), str)
+            and entry["brand"].strip()
+            and isinstance(entry.get("metric"), str)
+            and entry["metric"].strip()
+            and "value" in entry
+        )
+    ]
+    if invalid_evidence:
+        raise YuntuReportError(
+            "topMaterialCombination.brandComparisonConclusion evidence items must include brand, metric, and value"
+        )
+    compared_brands = {entry["brand"] for entry in comparison["evidence"]}
     required_brands = {item["brand"] for item in brands}
     if not required_brands.issubset(compared_brands):
         raise YuntuReportError(

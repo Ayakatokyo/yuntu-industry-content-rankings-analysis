@@ -1,12 +1,11 @@
 """Bind model-authored Yuntu analysis JSON to its facts and prompt."""
 
-import hashlib
 import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from rpa_io import write_json_atomically
+from rpa_io import file_sha256, write_json_atomically
 
 
 class YuntuAnalysisProvenanceError(RuntimeError):
@@ -18,14 +17,6 @@ PROGRAMMATIC_FALLBACK = "programmatic_fallback"
 ALL_SOURCES = MODEL_SOURCES
 
 
-def _sha256(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def default_provenance_path(analysis_json):
     analysis_path = Path(analysis_json)
     return analysis_path.with_name(f"{analysis_path.stem}.provenance.json")
@@ -33,6 +24,35 @@ def default_provenance_path(analysis_json):
 
 def _receipt_relative_path(path, receipt_path):
     return os.path.relpath(Path(path).resolve(), receipt_path.parent.resolve())
+
+
+def _verify_analysis_unit_manifest(path):
+    manifest_path = Path(path)
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        if manifest_path.name == "analysis-unit-manifest.json":
+            raise YuntuAnalysisProvenanceError(
+                "analysis unit manifest must be valid JSON"
+            ) from exc
+        return
+    if not isinstance(manifest, dict) or manifest.get("executionMode") != "single_model_call":
+        return
+    units = manifest.get("units")
+    if not isinstance(units, list) or not units:
+        raise YuntuAnalysisProvenanceError("analysis unit manifest is missing units")
+    prompt_root = manifest_path.parent.parent
+    for unit in units:
+        unit_path = prompt_root / unit.get("path", "") if isinstance(unit, dict) else None
+        if (
+            unit_path is None
+            or not unit_path.is_file()
+            or unit.get("bytes") != unit_path.stat().st_size
+            or unit.get("sha256") != file_sha256(unit_path)
+        ):
+            raise YuntuAnalysisProvenanceError(
+                "analysis unit does not match manifest"
+            )
 
 
 def attest_analysis(
@@ -59,6 +79,7 @@ def attest_analysis(
     for label, path in paths.items():
         if not path.is_file() or not path.stat().st_size:
             raise YuntuAnalysisProvenanceError(f"{label} must be a nonempty file")
+    _verify_analysis_unit_manifest(paths["factPack"])
     try:
         analysis = json.loads(paths["analysisJson"].read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -74,7 +95,7 @@ def attest_analysis(
         "artifacts": {
             label: {
                 "path": _receipt_relative_path(path, target),
-                "sha256": _sha256(path),
+                "sha256": file_sha256(path),
             }
             for label, path in paths.items()
         },
@@ -106,7 +127,7 @@ def load_verified_provenance(
     analysis_artifact = artifacts.get("analysisJson") if isinstance(artifacts, dict) else None
     if not isinstance(analysis_artifact, dict):
         raise YuntuAnalysisProvenanceError("analysis provenance is missing analysis JSON")
-    if analysis_artifact.get("sha256") != _sha256(analysis_json):
+    if analysis_artifact.get("sha256") != file_sha256(analysis_json):
         raise YuntuAnalysisProvenanceError("analysis JSON does not match provenance receipt")
     for label in ("factPack", "prompt"):
         artifact = artifacts.get(label)
@@ -114,9 +135,11 @@ def load_verified_provenance(
         if (
             artifact_path is None
             or not artifact_path.is_file()
-            or artifact.get("sha256") != _sha256(artifact_path)
+            or artifact.get("sha256") != file_sha256(artifact_path)
         ):
             raise YuntuAnalysisProvenanceError(
                 f"analysis provenance {label} does not match receipt"
             )
+        if label == "factPack":
+            _verify_analysis_unit_manifest(artifact_path)
     return receipt

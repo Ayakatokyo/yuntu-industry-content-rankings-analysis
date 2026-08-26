@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import io
 import json
 import tempfile
@@ -589,6 +590,53 @@ class RpaConnectorTest(unittest.TestCase):
 
         self.assertEqual(receipt["analysisSource"], "model_generated")
 
+    def test_analysis_unit_manifest_receipt_rejects_a_tampered_unit(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            unit_dir = root / "analysis-units"
+            unit_dir.mkdir()
+            analysis_path = root / "yuntu-ai-analysis.json"
+            prompt_path = root / "yuntu-analysis-prompt.md"
+            unit_path = unit_dir / "ranking-brand-input.json"
+            manifest_path = unit_dir / "analysis-unit-manifest.json"
+            analysis_path.write_text("{}", encoding="utf-8")
+            prompt_path.write_text("prompt", encoding="utf-8")
+            unit_path.write_text('{"evidence":{}}', encoding="utf-8")
+            digest = hashlib.sha256(unit_path.read_bytes()).hexdigest()
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "executionMode": "single_model_call",
+                        "units": [
+                            {
+                                "path": "analysis-units/ranking-brand-input.json",
+                                "bytes": unit_path.stat().st_size,
+                                "sha256": digest,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            receipt_path = connector.attest_analysis(
+                analysis_json=analysis_path,
+                fact_pack_json=manifest_path,
+                prompt_path=prompt_path,
+                source="model_generated",
+                generator="codex",
+            )
+            unit_path.write_text('{"evidence":{"changed":true}}', encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                connector.YuntuAnalysisProvenanceError,
+                "analysis unit does not match manifest",
+            ):
+                connector.load_verified_provenance(
+                    analysis_json=analysis_path,
+                    provenance_path=receipt_path,
+                )
+
     def test_render_command_passes_verified_model_source_to_renderer(self):
         connector = self.connector()
         with tempfile.TemporaryDirectory() as directory, mock.patch(
@@ -626,6 +674,65 @@ class RpaConnectorTest(unittest.TestCase):
             render.call_args.kwargs["analysis_provenance"]["analysisSource"],
             "manual_model_generated",
         )
+
+    def test_render_command_prefers_report_projection_when_no_fact_pack_is_given(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ):
+            root = Path(directory)
+            analysis_path = root / "yuntu-ai-analysis.json"
+            complete_path = root / "yuntu-analysis-data.json"
+            report_path = root / "report-data.json"
+            prompt_path = root / "yuntu-analysis-prompt.md"
+            analysis_path.write_text("{}", encoding="utf-8")
+            complete_path.write_text('{"source":"complete"}', encoding="utf-8")
+            report_path.write_text('{"source":"report"}', encoding="utf-8")
+            prompt_path.write_text("prompt", encoding="utf-8")
+            connector.main(
+                [
+                    "attest-analysis",
+                    "--analysis-json", str(analysis_path),
+                    "--fact-pack-json", str(complete_path),
+                    "--prompt", str(prompt_path),
+                    "--source", "model_generated",
+                    "--generator", "codex",
+                ]
+            )
+            with mock.patch.object(connector, "render_report", return_value=0) as render:
+                status = connector.main(
+                    [
+                        "render-report",
+                        "--analysis-json", str(analysis_path),
+                        "--output-dir", str(root / "report"),
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(render.call_args.kwargs["fact_pack"], {"source": "report"})
+        self.assertEqual(render.call_args.kwargs["highlight_asset_root"], root.parent)
+
+    def test_render_command_falls_back_to_complete_fact_pack_for_legacy_batches(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "yuntu-ai-analysis.json"
+            complete_path = root / "yuntu-analysis-data.json"
+            analysis_path.write_text("{}", encoding="utf-8")
+            complete_path.write_text('{"source":"complete"}', encoding="utf-8")
+            with mock.patch.object(
+                connector, "load_verified_provenance", return_value={}
+            ), mock.patch.object(connector, "render_report", return_value=0) as render:
+                status = connector.main(
+                    [
+                        "render-report",
+                        "--analysis-json", str(analysis_path),
+                        "--output-dir", str(root / "report"),
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(render.call_args.kwargs["fact_pack"], {"source": "complete"})
 
     def test_programmatic_fallback_analysis_is_disabled(self):
         connector = self.connector()

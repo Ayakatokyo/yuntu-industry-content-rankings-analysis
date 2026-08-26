@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from statistics import median
 
-from rpa_io import write_json_atomically
+from rpa_io import file_sha256, write_json_atomically
 from yuntu_highlights import (
     ALLOWED_HIGHLIGHT_TRENDS,
     details_missing_standard_highlights,
@@ -26,6 +26,24 @@ class YuntuAnalysisError(RuntimeError):
 
 SECOND_LEVEL_TRENDS = ALLOWED_HIGHLIGHT_TRENDS
 RANKING_FACT_METRICS = ("show_cnt", "ctr", "cvr", "play_3s_rate")
+REPORT_DATA_FIELDS = (
+    "schemaVersion",
+    "filters",
+    "selectedMaterials",
+    "rejectedMaterials",
+    "summaryMetrics",
+    "candidatePool",
+    "reportScopes",
+    "audienceDashboard",
+    "tagInsights",
+    "trendSummary",
+    "dataAvailabilitySummary",
+    "materialFacts",
+    "chapter02Facts",
+    "chapter02AiFacts",
+    "industryTop1000Facts",
+    "brandTopNFacts",
+)
 
 
 def _load_json(path):
@@ -467,6 +485,423 @@ def _model_input_sections(
     }
 
 
+def _report_data(fact_pack):
+    """Project only facts consumed by report validation and rendering."""
+    projected = {key: fact_pack[key] for key in REPORT_DATA_FIELDS if key in fact_pack}
+    industry = fact_pack.get("industryTop1000Facts", {})
+    projected["industryTop1000Facts"] = {
+        key: industry[key]
+        for key in ("source_scope", "requested_top_n", "sample_count")
+        if key in industry
+    }
+    brand_facts = fact_pack.get("brandTopNFacts", {})
+    projected["brandTopNFacts"] = {
+        "source_scope": brand_facts.get("source_scope"),
+        "requested_top_n": brand_facts.get("requested_top_n"),
+        "brands": {
+            brand: {"source_scope": facts.get("source_scope")}
+            for brand, facts in brand_facts.get("brands", {}).items()
+            if isinstance(facts, dict)
+        },
+    }
+    chapter02_ai = fact_pack.get("chapter02AiFacts", {})
+    scope_order = chapter02_ai.get("scopeOrder", [])
+    projected["chapter02AiFacts"] = {
+        "scopeOrder": scope_order,
+        **{str(scope): {} for scope in scope_order},
+    }
+    return projected
+
+
+def _model_visual_assets(visual_assets):
+    projected = []
+    for asset in visual_assets:
+        copied = dict(asset)
+        image_path = str(copied.get("image_path") or "").replace("\\", "/")
+        copied["image_path"] = f"../{image_path}" if image_path else ""
+        projected.append(copied)
+    return projected
+
+
+def _model_material_facts(material_facts):
+    projected = []
+    for fact in material_facts:
+        copied = {
+            key: fact[key]
+            for key in (
+                "material_id",
+                "rank",
+                "title",
+                "metrics",
+                "metricComparison",
+                "people_tags",
+                "material_tags",
+                "secondLevelBreakdown",
+                "highlightFrameAvailability",
+            )
+            if key in fact
+        }
+        copied["highlightFrames"] = []
+        for frame in fact.get("highlightFrames", []):
+            frame_copy = dict(frame)
+            relative_path = str(frame_copy.get("relative_path") or "").replace("\\", "/")
+            frame_copy["image_path"] = f"../{relative_path}" if relative_path else ""
+            copied["highlightFrames"].append(frame_copy)
+        projected.append(copied)
+    return projected
+
+
+def _ranking_output_schema():
+    summary_schema = {
+        "type": "object",
+        "required": ["title", "summary", "evidence", "material_ids"],
+        "properties": {
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "evidence": {"type": "array", "items": {"type": "string"}},
+            "material_ids": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+    brand_conclusion_schema = {
+        "type": "object",
+        "required": [
+            "brand",
+            "classificationSource",
+            "dataSummary",
+            "evidence",
+            "material_ids",
+        ],
+        "properties": {
+            "brand": {"type": "string"},
+            "classificationSource": {
+                "type": "string",
+                "enum": ["title_rule", "runtime_title_rule"],
+            },
+            "dataSummary": {"type": "string"},
+            "evidence": {"type": "array", "items": {"type": "string"}},
+            "material_ids": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+    comparison_evidence_schema = {
+        "type": "object",
+        "required": ["brand", "metric", "value"],
+        "properties": {
+            "brand": {"type": "string"},
+            "metric": {"type": "string"},
+            "value": {"type": ["number", "string"]},
+        },
+    }
+    return {
+        "type": "object",
+        "required": [
+            "executiveSummary",
+            "brandConclusions",
+            "brandComparisonConclusion",
+        ],
+        "properties": {
+            "executiveSummary": summary_schema,
+            "brandConclusions": {
+                "type": "array",
+                "items": brand_conclusion_schema,
+            },
+            "brandComparisonConclusion": {
+                "type": "object",
+                "required": ["title", "summary", "evidence", "material_ids"],
+                "properties": {
+                    "title": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "evidence": {
+                        "type": "array",
+                        "items": comparison_evidence_schema,
+                    },
+                    "material_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+            },
+        },
+    }
+
+
+def _analysis_insight_schema():
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "summary", "evidence", "material_ids"],
+        "properties": {
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "evidence": {"type": "array", "items": {"type": "string"}},
+            "material_ids": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+
+
+def _chapter02_output_schema(fact_pack):
+    scope_order = [str(scope) for scope in fact_pack["chapter02AiFacts"]["scopeOrder"]]
+    scope_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "audienceSummary",
+            "audienceInsights",
+            "marketingSummary",
+            "marketingInsights",
+        ],
+        "properties": {
+            "audienceSummary": _analysis_insight_schema(),
+            "audienceInsights": {
+                "type": "array",
+                "minItems": 2,
+                "items": _analysis_insight_schema(),
+            },
+            "marketingSummary": _analysis_insight_schema(),
+            "marketingInsights": {
+                "type": "array",
+                "minItems": 2,
+                "items": _analysis_insight_schema(),
+            },
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["scopeOrder", "scopes"],
+        "properties": {
+            "scopeOrder": {
+                "type": "array",
+                "minItems": len(scope_order),
+                "maxItems": len(scope_order),
+                "items": {"type": "string", "enum": scope_order},
+            },
+            "scopes": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": scope_order,
+                "properties": {scope: scope_schema for scope in scope_order},
+            },
+        },
+    }
+
+
+def _highlight_output_schema():
+    direction_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "body", "frame_refs"],
+        "properties": {
+            "title": {"type": "string"},
+            "body": {"type": "string"},
+            "frame_refs": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["groups"],
+        "properties": {
+            "groups": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "category",
+                        "frame_refs",
+                        "common_patterns",
+                        "derivative_directions",
+                    ],
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "enum": ["portrait", "product", "other"],
+                        },
+                        "frame_refs": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {"type": "string"},
+                        },
+                        "common_patterns": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {"type": "string"},
+                        },
+                        "derivative_directions": {
+                            "type": "array",
+                            "items": direction_schema,
+                        },
+                    },
+                },
+            }
+        },
+    }
+
+
+def _material_deep_dive_output_schema(fact_pack):
+    material_ids = [
+        str(fact["material_id"])
+        for fact in fact_pack["materialFacts"]
+        if fact.get("material_id")
+    ]
+    return {
+        "type": "array",
+        "minItems": len(material_ids),
+        "maxItems": len(material_ids),
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "material_id",
+                "frame_observations",
+                "second_level_observations",
+            ],
+            "properties": {
+                "material_id": {"type": "string", "enum": material_ids},
+                "frame_observations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["frame_ref", "observation"],
+                        "properties": {
+                            "frame_ref": {"type": "string"},
+                            "observation": {"type": "string"},
+                        },
+                    },
+                },
+                "second_level_observations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["trend_name", "summary", "evidence_seconds"],
+                        "properties": {
+                            "trend_name": {
+                                "type": "string",
+                                "enum": list(SECOND_LEVEL_TRENDS),
+                            },
+                            "summary": {"type": "string"},
+                            "evidence_seconds": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+
+def _analysis_output_schema(fact_pack):
+    properties = {
+        "topMaterialCombination": _ranking_output_schema(),
+        "chapter02Insights": _chapter02_output_schema(fact_pack),
+    }
+    required = ["topMaterialCombination", "chapter02Insights"]
+    if any(asset.get("available") for asset in fact_pack.get("visualAssets", [])):
+        properties["highlightDashboard"] = _highlight_output_schema()
+        required.append("highlightDashboard")
+    if any("secondLevelBreakdown" in fact for fact in fact_pack.get("materialFacts", [])):
+        properties["materialDeepDives"] = _material_deep_dive_output_schema(fact_pack)
+        required.append("materialDeepDives")
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": False,
+        "required": required,
+        "properties": properties,
+    }
+
+
+def _write_analysis_units(fact_pack, output):
+    unit_dir = Path(output) / "analysis-units"
+    units = (
+        (
+            "ranking-brand-input.json",
+            "ranking_brand",
+            "topMaterialCombination",
+            {
+                "reportScope": fact_pack["reportScopes"]["ranking"],
+                "industryTop1000Facts": fact_pack["industryTop1000Facts"],
+                "brandTopNFacts": fact_pack["brandTopNFacts"],
+            },
+        ),
+        (
+            "audience-marketing-input.json",
+            "audience_marketing",
+            "chapter02Insights",
+            {"chapter02AiFacts": fact_pack["chapter02AiFacts"]},
+        ),
+        (
+            "highlight-input.json",
+            "highlight",
+            "highlightDashboard",
+            {
+                "reportScope": fact_pack["reportScopes"]["detail"],
+                "visualAssets": _model_visual_assets(fact_pack["visualAssets"]),
+                "dataLimitations": [
+                    item
+                    for item in fact_pack["dataLimitations"]
+                    if str(item.get("field") or "").startswith("highlightFrames.")
+                ],
+            },
+        ),
+        (
+            "material-deep-dive-input.json",
+            "material_deep_dive",
+            "materialDeepDives",
+            {
+                "reportScope": fact_pack["reportScopes"]["detail"],
+                "materialFacts": _model_material_facts(fact_pack["materialFacts"]),
+            },
+        ),
+    )
+    manifest_units = []
+    for filename, unit_name, output_field, evidence in units:
+        path = unit_dir / filename
+        payload = {
+            "schemaVersion": 2 if unit_name == "ranking_brand" else 1,
+            "unit": unit_name,
+            "outputField": output_field,
+            "evidence": evidence,
+        }
+        if unit_name == "ranking_brand":
+            payload["outputSchema"] = _ranking_output_schema()
+        write_json_atomically(payload, path, indent=None)
+        manifest_units.append(
+            {
+                "unit": unit_name,
+                "path": f"analysis-units/{filename}",
+                "outputField": output_field,
+                "bytes": path.stat().st_size,
+                "sha256": file_sha256(path),
+            }
+        )
+    output_schema_path = Path(output) / "yuntu-ai-analysis.schema.json"
+    write_json_atomically(_analysis_output_schema(fact_pack), output_schema_path)
+    manifest = {
+        "schemaVersion": 2,
+        "executionMode": "single_model_call",
+        "sharedContext": {
+            "filters": fact_pack["filters"],
+            "reportScopes": fact_pack["reportScopes"],
+            "dataAvailabilitySummary": fact_pack["dataAvailabilitySummary"],
+            "assetRoot": "..",
+        },
+        "outputSchema": {
+            "path": "yuntu-ai-analysis.schema.json",
+            "bytes": output_schema_path.stat().st_size,
+            "sha256": file_sha256(output_schema_path),
+        },
+        "units": manifest_units,
+    }
+    write_json_atomically(manifest, unit_dir / "analysis-unit-manifest.json")
+    return manifest
+
+
 PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "prompts" / "yuntu-analysis-prompt.md"
 PROMPT_PLACEHOLDERS = (
     "__BRAND_SCOPE_LABEL__",
@@ -657,6 +1092,10 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
         )
     )
     write_json_atomically(fact_pack, output / "yuntu-analysis-data.json")
+    write_json_atomically(
+        _report_data(fact_pack), output / "report-data.json", indent=None
+    )
+    _write_analysis_units(fact_pack, output)
     output.mkdir(parents=True, exist_ok=True)
     (output / "yuntu-analysis-prompt.md").write_text(
         _prompt_text(brand_top_n=brand_top_n, filters=manifest.get("filters", {})),

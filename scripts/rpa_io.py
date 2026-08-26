@@ -2,6 +2,7 @@
 
 import ast
 import csv
+import hashlib
 import io
 import json
 import os
@@ -24,6 +25,14 @@ class GatewayResult:
         self.kind = kind
         self.records = records
         self.file_url = file_url
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _decode_json_cell(value):
@@ -223,7 +232,7 @@ def parse_csv_records(path):
     return records
 
 
-def write_json_atomically(result, output_path):
+def write_json_atomically(result, output_path, *, indent=2):
     target = Path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -235,7 +244,13 @@ def write_json_atomically(result, output_path):
     ) as staging_file:
         staging_path = Path(staging_file.name)
         try:
-            json.dump(result, staging_file, ensure_ascii=False, indent=2)
+            json.dump(
+                result,
+                staging_file,
+                ensure_ascii=False,
+                indent=indent,
+                separators=(",", ":") if indent is None else None,
+            )
             staging_file.write("\n")
         except Exception:
             try:

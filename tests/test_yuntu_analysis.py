@@ -306,6 +306,212 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("实际查看每张成功 JPEG", prompt)
         self.assertIn("主体、人物、产品、动作、场景、构图和可见字幕", prompt)
 
+    def test_prepare_analysis_writes_report_projection_and_single_call_unit_inputs(self):
+        analysis = load_module()
+        records = [
+            {
+                "material_id": "1",
+                "title": "五个女博士胶原蛋白素材",
+                "rank": 1,
+                "metrics": {
+                    "show_cnt": 200,
+                    "ctr": 0.2,
+                    "cvr": 0.1,
+                    "play_3s_rate": 0.4,
+                },
+                "people_tags": ["24-30", "女"],
+                "material_tags": ["成分配方原料_胶原蛋白"],
+                "data_availability": {},
+            }
+        ]
+        selected = [
+            {
+                "rank": 1,
+                "material_id": "1",
+                "detailRecordPath": "normalized/detail-records/1.json",
+            }
+        ]
+        details = {
+            "1": {
+                "material_id": "1",
+                "trend_series": [
+                    {
+                        "trend_name": "点击指数",
+                        "series": [{"second": 0, "value": 0.5}, {"second": 1, "value": 1.0}],
+                    }
+                ],
+                "high_points": [
+                    {"trend_name": "点击指数", "start_sec": 1, "end_sec": 1}
+                ],
+                "loss_points": [],
+                "data_availability": {},
+            }
+        }
+        frame = {
+            "frame_ref": "highlight:1:cover:0",
+            "second": 0,
+            "is_cover": True,
+            "frame_type": "cover",
+            "peak_rank": None,
+            "click_value": None,
+            "reasons": [{"type": "cover"}],
+            "available": True,
+            "relative_path": "highlights/1/01-000s.jpg",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            manifest_path = root / "batch-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["filters"]["brands"] = ["五个女博士"]
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+            )
+            image = root / "highlights" / "1" / "01-000s.jpg"
+            image.parent.mkdir(parents=True)
+            image.write_bytes(b"jpeg")
+            analysis.write_highlights_manifest(root, {"1": [frame]})
+
+            analysis.prepare_analysis(
+                input_dir=root, output_dir=root / "diagnostic-analysis"
+            )
+
+            output = root / "diagnostic-analysis"
+            complete = json.loads(
+                (output / "yuntu-analysis-data.json").read_text(encoding="utf-8")
+            )
+            report = json.loads(
+                (output / "report-data.json").read_text(encoding="utf-8")
+            )
+            units = output / "analysis-units"
+            unit_manifest = json.loads(
+                (units / "analysis-unit-manifest.json").read_text(encoding="utf-8")
+            )
+            output_schema = json.loads(
+                (output / "yuntu-ai-analysis.schema.json").read_text(encoding="utf-8")
+            )
+            ranking_text = (units / "ranking-brand-input.json").read_text(
+                encoding="utf-8"
+            )
+            ranking = json.loads(ranking_text)
+            audience = json.loads(
+                (units / "audience-marketing-input.json").read_text(encoding="utf-8")
+            )
+            highlight = json.loads(
+                (units / "highlight-input.json").read_text(encoding="utf-8")
+            )
+            deep_dive = json.loads(
+                (units / "material-deep-dive-input.json").read_text(encoding="utf-8")
+            )
+            prompt = (output / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
+
+        self.assertIn("chapter02AiFacts", complete)
+        self.assertEqual(
+            report["chapter02AiFacts"]["scopeOrder"],
+            complete["chapter02AiFacts"]["scopeOrder"],
+        )
+        self.assertTrue(
+            all(
+                report["chapter02AiFacts"][scope] == {}
+                for scope in report["chapter02AiFacts"]["scopeOrder"]
+            )
+        )
+        self.assertNotIn("visualAssets", report)
+        self.assertIn("chapter02Facts", report)
+        self.assertIn("materialFacts", report)
+        self.assertNotIn("materials", report["industryTop1000Facts"])
+        self.assertEqual(
+            report["brandTopNFacts"]["brands"]["五个女博士"],
+            {"source_scope": "brand_top_n"},
+        )
+        self.assertEqual(
+            len(ranking_text.splitlines()),
+            1,
+        )
+        self.assertEqual(unit_manifest["executionMode"], "single_model_call")
+        self.assertEqual(
+            unit_manifest["outputSchema"]["path"],
+            "yuntu-ai-analysis.schema.json",
+        )
+        self.assertEqual(output_schema["type"], "object")
+        self.assertEqual(
+            output_schema["properties"]["chapter02Insights"]["required"],
+            ["scopeOrder", "scopes"],
+        )
+        self.assertEqual(
+            set(output_schema["properties"]["chapter02Insights"]["properties"]["scopes"]["properties"]),
+            {"all", "五个女博士"},
+        )
+        self.assertIn(
+            "groups",
+            output_schema["properties"]["highlightDashboard"]["properties"],
+        )
+        direction_schema = output_schema["properties"]["highlightDashboard"][
+            "properties"
+        ]["groups"]["items"]["properties"]["derivative_directions"]["items"]
+        self.assertEqual(
+            direction_schema["required"], ["title", "body", "frame_refs"]
+        )
+        self.assertEqual(
+            [item["outputField"] for item in unit_manifest["units"]],
+            [
+                "topMaterialCombination",
+                "chapter02Insights",
+                "highlightDashboard",
+                "materialDeepDives",
+            ],
+        )
+        self.assertEqual(ranking["outputField"], "topMaterialCombination")
+        self.assertEqual(ranking["schemaVersion"], 2)
+        brand_item_schema = ranking["outputSchema"]["properties"][
+            "brandConclusions"
+        ]["items"]
+        self.assertEqual(
+            brand_item_schema["properties"]["classificationSource"]["enum"],
+            ["title_rule", "runtime_title_rule"],
+        )
+        comparison_evidence_schema = ranking["outputSchema"]["properties"][
+            "brandComparisonConclusion"
+        ]["properties"]["evidence"]["items"]
+        self.assertEqual(
+            comparison_evidence_schema["required"],
+            ["brand", "metric", "value"],
+        )
+        self.assertEqual(
+            set(ranking["evidence"]),
+            {"reportScope", "industryTop1000Facts", "brandTopNFacts"},
+        )
+        self.assertIn("industryTop1000Facts", ranking["evidence"])
+        self.assertNotIn("chapter02AiFacts", ranking["evidence"])
+        self.assertEqual(audience["outputField"], "chapter02Insights")
+        self.assertEqual(set(audience["evidence"]), {"chapter02AiFacts"})
+        self.assertIn("chapter02AiFacts", audience["evidence"])
+        self.assertNotIn("industryTop1000Facts", audience["evidence"])
+        self.assertEqual(highlight["outputField"], "highlightDashboard")
+        self.assertEqual(
+            set(highlight["evidence"]),
+            {"reportScope", "visualAssets", "dataLimitations"},
+        )
+        self.assertEqual(highlight["evidence"]["visualAssets"][0]["frame_ref"], frame["frame_ref"])
+        self.assertEqual(deep_dive["outputField"], "materialDeepDives")
+        self.assertEqual(
+            set(deep_dive["evidence"]), {"reportScope", "materialFacts"}
+        )
+        self.assertEqual(deep_dive["evidence"]["materialFacts"][0]["material_id"], "1")
+        self.assertIn("analysis-unit-manifest.json", prompt)
+        self.assertIn("同一次模型调用", prompt)
+        self.assertIn("ranking-brand-input.json` 的 `outputSchema", prompt)
+        self.assertIn(
+            '`classificationSource` 只能是 `title_rule` 或 `runtime_title_rule`',
+            prompt,
+        )
+        self.assertIn(
+            '`brandComparisonConclusion.evidence` 必须是对象数组',
+            prompt,
+        )
+        self.assertIn('`brand`、`metric`、`value`', prompt)
+        self.assertNotIn("读取同目录的 `yuntu-analysis-data.json`", prompt)
+
     def test_prepare_analysis_records_standard_highlight_failure_states(self):
         analysis = load_module()
         records = [

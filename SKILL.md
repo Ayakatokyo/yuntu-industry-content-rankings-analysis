@@ -59,7 +59,7 @@ python <skill-root>/scripts/rpa_connector.py fetch \
 
 ## 分析与报告
 
-先运行 `prepare-analysis` 生成事实包和固定提示词，再由当前对话模型生成 `yuntu-ai-analysis.json`；固定规则只做统计、归类、聚合和图表数据，不生成业务结论。新模型输出只生成当前报告实际展示的分析模块；旧版完整 JSON 中的额外字段会被忽略并继续兼容渲染。脚本和生成的提示词是 schema 权威，入口不重复维护字段枚举。完成后登记来源回执：
+先运行 `prepare-analysis`。它保留 `yuntu-analysis-data.json` 作为完整兼容快照，同时生成精简的 `report-data.json` 和 `analysis-units/` 下的榜单品牌、人群卖点、视觉高光、单素材秒级四个章节事实包。当前对话模型必须在同一次调用中读取 manifest 与四包，生成一份 `yuntu-ai-analysis.json`；不拆成四次模型调用，也不把完整兼容快照作为模型输入。固定规则只做统计、归类、聚合和图表数据，不生成业务结论。新模型输出只生成当前报告实际展示的分析模块；旧版完整 JSON 中的额外字段会被忽略并继续兼容渲染。脚本和生成的提示词是 schema 权威，入口不重复维护字段枚举。完成后登记来源回执：
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py prepare-analysis \
@@ -67,7 +67,7 @@ python <skill-root>/scripts/rpa_connector.py prepare-analysis \
   --output-dir "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis"
 python <skill-root>/scripts/rpa_connector.py attest-analysis \
   --analysis-json ".../diagnostic-analysis/yuntu-ai-analysis.json" \
-  --fact-pack-json ".../diagnostic-analysis/yuntu-analysis-data.json" \
+  --fact-pack-json ".../diagnostic-analysis/analysis-units/analysis-unit-manifest.json" \
   --prompt ".../diagnostic-analysis/yuntu-analysis-prompt.md" \
   --source model_generated --generator "<模型或人工执行者>"
 ```
@@ -86,7 +86,7 @@ python <skill-root>/scripts/rpa_connector.py render-report \
 
 ## 产物与失败处理
 
-主要产物：`raw-csv/list.csv`、`raw-csv/details/<material_id>.csv`、`normalized/list-records.json`、`normalized/detail-records/<material_id>.json`、`batch-manifest.json`、`run-summary.json`、`diagnostic-analysis/yuntu-analysis-data.json`、`diagnostic-analysis/yuntu-ai-analysis.json`、`final-report/final-report-data.json`、`final-report/final-report.md`、`final-report/final-report.html`、同级 `final-report.zip`。兼容路径可保留旧版 `list-response.json`、`details/<material_id>.json`、`manifest.json`；CSV 为主路径，兼容 JSON 与安全的 Python 字面量。
+主要产物：`raw-csv/list.csv`、`raw-csv/details/<material_id>.csv`、`normalized/list-records.json`、`normalized/detail-records/<material_id>.json`、`batch-manifest.json`、`run-summary.json`、`diagnostic-analysis/yuntu-analysis-data.json`（完整兼容快照）、`diagnostic-analysis/report-data.json`（精简渲染数据）、`diagnostic-analysis/analysis-units/analysis-unit-manifest.json`、四个 `analysis-units/*-input.json`、`diagnostic-analysis/yuntu-ai-analysis.json`、`final-report/final-report-data.json`、`final-report/final-report.md`、`final-report/final-report.html`、同级 `final-report.zip`。兼容路径可保留旧版 `list-response.json`、`details/<material_id>.json`、`manifest.json`；CSV 为主路径，兼容 JSON 与安全的 Python 字面量。
 
 分析阶段只读 `normalized/` 和 `diagnostic-analysis/`，不读原始 CSV、RPA response 或临时 `fileUrl`。`files-envelope` 校验成功后才下载 CSV；解析失败的嵌套字段保留原文并标记缺失。列表请求失败或无有效素材时写清单、非零退出且不发详情；详情请求失败记录后继续，最终非零但保留成功文件。报告前确认 `status == success`、`selectedCount == targetTopN`、`rejectedCount == 0`，否则按部分完成交付。
 

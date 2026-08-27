@@ -311,30 +311,23 @@ def render_audience_insights(
             + '" data-chapter02-tab="' + esc(scope_key) + '" data-chapter02-target="' + panel_id + '">' + esc(label) + '</button>'
         )
         scope_insights = insight_scopes.get(scope_key, {}) if isinstance(insight_scopes, dict) else {}
-        def dimension_block(label, summary, insights):
+        def dimension_block(label, summary):
             summary = summary if isinstance(summary, dict) else {}
-            items = insights if isinstance(insights, list) else []
             blocks = []
-            if summary.get("title"):
-                blocks.append('<p class="chapter02-dimension-lead"><strong>' + esc(label) + '</strong><span>：' + esc(summary.get("title")) + '</span></p>')
-            for index, item in enumerate(items, start=1):
-                if not isinstance(item, dict):
-                    continue
-                title = item.get("title") or item.get("dimension") or label
-                text = item.get("summary", "")
-                if text:
-                    blocks.append(str(index) + '. ' + esc(title) + '：' + esc(text))
+            title = summary.get("title")
+            text = summary.get("summary")
+            if title:
+                blocks.append('<p class="chapter02-dimension-lead"><strong>' + esc(label) + '</strong><span>：' + esc(title) + '</span></p>')
+            if text:
+                blocks.append('<p class="chapter02-detail-insight">' + esc(text) + '</p>')
             if not blocks:
                 return ''
-            lead = blocks[0] if blocks and blocks[0].startswith('<p ') else ''
-            details = ' '.join(blocks[1:] if lead else blocks)
-            detail_html = '<p class="chapter02-detail-insight">' + details + '</p>' if details else ''
-            return '<section class="chapter02-dimension-block"><div class="chapter02-dimension-content">' + lead + detail_html + '</div></section>'
+            return '<section class="chapter02-dimension-block"><div class="chapter02-dimension-content">' + ''.join(blocks) + '</div></section>'
 
         ai_html = ''
         if isinstance(scope_insights, dict):
-            ai_html = dimension_block("人群", scope_insights.get("audienceSummary"), scope_insights.get("audienceInsights"))
-            ai_html += dimension_block("营销卖点", scope_insights.get("marketingSummary"), scope_insights.get("marketingInsights"))
+            ai_html = dimension_block("人群", scope_insights.get("audienceSummary"))
+            ai_html += dimension_block("营销卖点", scope_insights.get("marketingSummary"))
         ai_html = ai_html or '<p class="data-note">暂无该范围 AI 二次分析。</p>'
         rendered_scope = _render_audience_scope(
             scope_fact.get("audienceDashboard", {}), analysis=analysis,

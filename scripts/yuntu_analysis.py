@@ -606,25 +606,10 @@ def _chapter02_output_schema(fact_pack):
     scope_schema = {
         "type": "object",
         "additionalProperties": False,
-        "required": [
-            "audienceSummary",
-            "audienceInsights",
-            "marketingSummary",
-            "marketingInsights",
-        ],
+        "required": ["audienceSummary", "marketingSummary"],
         "properties": {
             "audienceSummary": _analysis_insight_schema(),
-            "audienceInsights": {
-                "type": "array",
-                "minItems": 2,
-                "items": _analysis_insight_schema(),
-            },
             "marketingSummary": _analysis_insight_schema(),
-            "marketingInsights": {
-                "type": "array",
-                "minItems": 2,
-                "items": _analysis_insight_schema(),
-            },
         },
     }
     return {

@@ -270,7 +270,7 @@ def _validate_chapter02_insights(value):
         for field in ("audienceSummary", "marketingSummary"):
             summary = scope.get(field)
             if summary is None:
-                continue
+                raise YuntuReportError(f"chapter02Insights {scope_key} must include {field}")
             if not isinstance(summary, dict):
                 raise YuntuReportError(f"chapter02Insights {scope_key} {field} must be an object")
             if not isinstance(summary.get("title"), str) or not summary["title"].strip():
@@ -278,17 +278,6 @@ def _validate_chapter02_insights(value):
             if summary.get("summary") not in (None, ""):
                 _validate_summary(summary.get("summary"), f"chapter02Insights {field} summary")
             _validate_evidence_and_material_ids(summary, f"chapter02Insights {field}")
-        for field in ("audienceInsights", "marketingInsights"):
-            items = scope.get(field)
-            if not isinstance(items, list) or not items:
-                raise YuntuReportError(f"chapter02Insights {scope_key} must include {field}")
-            for item in items:
-                if not isinstance(item, dict):
-                    raise YuntuReportError("chapter02Insights items must be objects")
-                _validate_summary(item.get("summary"), f"chapter02Insights {field} summary")
-                _validate_evidence_and_material_ids(item, f"chapter02Insights {field}")
-
-
 def _normalize_chapter02_insights(value):
     """Adapt attested pre-tab chapter 02 insights without changing their source file."""
     if not isinstance(value, dict) or not isinstance(value.get("scopes"), dict):
@@ -324,6 +313,27 @@ def _normalize_chapter02_insights(value):
                 converted[summary_field] = {
                     "title": legacy_section.get("title") or default_title,
                     "summary": legacy_section.get("overallSummary") or "",
+                    "evidence": evidence,
+                    "material_ids": list(dict.fromkeys(str(item) for item in material_ids if item)),
+                }
+            if summary_field not in converted and isinstance(converted.get(target), list):
+                items = [item for item in converted[target] if isinstance(item, dict)]
+                parts = []
+                material_ids, evidence = [], []
+                for item in items:
+                    title = item.get("title") or item.get("dimension")
+                    summary = item.get("summary") or item.get("conclusion")
+                    if title and summary:
+                        parts.append(f"{title}：{summary}")
+                    elif summary:
+                        parts.append(str(summary))
+                    material_ids.extend(item.get("material_ids") or [])
+                    if item.get("material_id"):
+                        material_ids.append(item["material_id"])
+                    evidence.extend(item.get("evidence") or [])
+                converted[summary_field] = {
+                    "title": default_title,
+                    "summary": " ".join(parts),
                     "evidence": evidence,
                     "material_ids": list(dict.fromkeys(str(item) for item in material_ids if item)),
                 }

@@ -234,9 +234,7 @@ def _project_chapter02(analysis, fact_pack):
             "chartFactSource": "chapter02Facts",
             "aiInsights": {
                 "audienceSummary": _copy_insight(scope_insights.get("audienceSummary")),
-                "audience": _copy_insights(scope_insights.get("audienceInsights", [])),
                 "marketingSummary": _copy_insight(scope_insights.get("marketingSummary")),
-                "marketing": _copy_insights(scope_insights.get("marketingInsights", [])),
             },
             "audienceDashboard": deepcopy(scope_fact.get("audienceDashboard", {})),
             "topMaterials": deepcopy(scope_fact.get("topMaterials", [])),

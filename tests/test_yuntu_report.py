@@ -1067,14 +1067,19 @@ class YuntuReportTests(unittest.TestCase):
                 "all": {
                     "audienceSummary": {
                         "title": "女性与 31-40 岁是主要内容入口",
-                        "summary": "人群标签在头部素材中形成稳定交集，应作为内容入口假设而非真实受众比例。",
+                        "summary": "八大人群中以新锐白领和精致妈妈为主要覆盖，同时女性与31-40岁构成核心标签，应作为内容入口假设而非真实受众比例。",
                         "evidence": [{"metric": "people_tags", "value": "女/31-40"}],
                         "material_ids": ["101"],
                     },
                     "audienceInsights": [{
-                        "title": "女性点击意愿更强",
-                        "summary": "点击样本中的女性标签更集中，可围绕女性日常场景拆分版本并观察点击承接。",
+                        "title": "旧版人群分点不应继续编号",
+                        "summary": "旧版人群分点不应继续编号。",
                         "evidence": [{"metric": "people_tags", "value": "女"}],
+                        "material_ids": ["101"],
+                    }, {
+                        "title": "旧版人群第二分点",
+                        "summary": "旧版人群第二分点也只作为兼容内容。",
+                        "evidence": [{"metric": "people_tags", "value": "31-40"}],
                         "material_ids": ["101"],
                     }],
                     "marketingSummary": {
@@ -1084,9 +1089,14 @@ class YuntuReportTests(unittest.TestCase):
                         "material_ids": ["101"],
                     },
                     "marketingInsights": [{
-                        "title": "场景与权益应分层",
-                        "summary": "场景信息和购买权益可以拆为两个版本，避免首屏信息过载。",
+                        "title": "旧版营销分点不应继续编号",
+                        "summary": "旧版营销分点不应继续编号。",
                         "evidence": [{"metric": "material_tags", "value": "使用场景/促销利益"}],
+                        "material_ids": ["101"],
+                    }, {
+                        "title": "旧版营销第二分点",
+                        "summary": "旧版营销第二分点也只作为兼容内容。",
+                        "evidence": [{"metric": "material_tags", "value": "促销利益"}],
                         "material_ids": ["101"],
                     }],
                 }
@@ -1110,17 +1120,19 @@ class YuntuReportTests(unittest.TestCase):
 
         self.assertIn("人群", html)
         self.assertIn("女性与 31-40 岁是主要内容入口", html)
-        self.assertIn("女性点击意愿更强", html)
+        self.assertIn("八大人群中以新锐白领和精致妈妈为主要覆盖", html)
         self.assertIn("营销卖点", html)
         self.assertIn("产品展示承担首屏识别", html)
-        self.assertIn("场景与权益应分层", html)
+        self.assertIn("卖点标签显示产品展示与购买信息经常并置", html)
         self.assertIn('class="chapter02-dimension-block"', html)
         self.assertIn('class="chapter02-dimension-content"', html)
         self.assertNotIn('<article class="chapter02-detail-insight"', html)
         self.assertIn('class="chapter02-dimension-lead"', html)
-        self.assertIn('女性点击意愿更强：点击样本中的女性标签更集中', html)
-        self.assertIn('1. 女性点击意愿更强：点击样本中的女性标签更集中', html)
-        self.assertIn('1. 场景与权益应分层：场景信息和购买权益可以拆为两个版本', html)
+        self.assertNotIn('旧版人群分点不应继续编号', html)
+        self.assertNotIn('旧版人群第二分点', html)
+        self.assertNotIn('旧版营销分点不应继续编号', html)
+        self.assertNotIn('旧版营销第二分点', html)
+        self.assertNotIn('audienceInsights', html)
         self.assertNotIn('。；', html)
 
     def test_render_report_keeps_unlabeled_dimension_out_of_pie_chart(self):

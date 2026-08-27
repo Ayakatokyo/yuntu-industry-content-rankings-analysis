@@ -152,6 +152,7 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertNotIn("topNControl", panels[1])
         self.assertIn("audienceSummary", panels[1]["aiInsights"])
         self.assertIn("marketingSummary", panels[1]["aiInsights"])
+        self.assertEqual(set(panels[1]["aiInsights"]), {"audienceSummary", "marketingSummary"})
         self.assertEqual(panels[1]["charts"][0]["buckets"][0]["value"], 2)
         self.assertEqual(panels[1]["topMaterials"][0]["material_id"], "102")
 

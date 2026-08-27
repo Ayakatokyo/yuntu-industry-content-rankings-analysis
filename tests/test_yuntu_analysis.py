@@ -492,6 +492,12 @@ class YuntuAnalysisTests(unittest.TestCase):
             output_schema["properties"]["chapter02Insights"]["required"],
             ["scopeOrder", "scopes"],
         )
+        scope_schema = output_schema["properties"]["chapter02Insights"]["properties"]["scopes"]["properties"]["all"]
+        self.assertEqual(scope_schema["required"], ["audienceSummary", "marketingSummary"])
+        self.assertEqual(
+            set(scope_schema["properties"]),
+            {"audienceSummary", "marketingSummary"},
+        )
         self.assertEqual(
             set(output_schema["properties"]["chapter02Insights"]["properties"]["scopes"]["properties"]),
             {"all", "五个女博士"},
@@ -564,7 +570,8 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertNotIn("brandComparisonConclusion", prompt)
         self.assertNotIn("executiveSummary", prompt)
         self.assertNotIn("peopleSummary", prompt.split("02 章必须读取", 1)[0])
-        self.assertIn("2 至 3 个短句解释整体指标组合", prompt)
+        self.assertIn("每个 `dataSummary` 控制在 4 至 6 句", prompt)
+        self.assertIn("数据陈述之外至少写 3 句分析", prompt)
         self.assertIn("第一章不输出人群维度分析", prompt)
         self.assertIn("只分析该品牌在行业 TOP1000 内匹配到的全部素材聚合结果", prompt)
         self.assertIn("不得引用单条素材的素材 ID、标题、排名或指标", prompt)
@@ -716,7 +723,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         )
         self.assertIn("不进入用户可见正文", prompt)
         self.assertIn("不得写执行过程", prompt)
-        self.assertIn("事实锚点 -> 业务判断 -> 下一步验证", prompt)
+        self.assertIn("事实锚点 -> 业务判断 -> 形成原因/内容机制 -> 内容策略 -> 下一步验证", prompt)
         self.assertIn("少量关键事实锚点 + 多句分析判断", prompt)
         self.assertIn("为什么值得保留或改写", prompt)
         self.assertIn("下一步如何验证", prompt)
@@ -724,6 +731,13 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("chapter02AiFacts", prompt)
         self.assertIn("audienceSummary", prompt)
         self.assertIn("marketingSummary", prompt)
+        self.assertIn("每个维度只输出一段", prompt)
+        self.assertIn("八大人群、性别和年龄三个维度", prompt)
+        self.assertIn("至少 4 句", prompt)
+        self.assertIn("数据陈述之外", prompt)
+        self.assertIn("为什么形成这种表现", prompt)
+        self.assertIn("如何转化为内容策略", prompt)
+        self.assertNotIn("渲染层会自动添加“1. ”、“2. ”等编号", prompt)
         self.assertIn("总结性标题", prompt)
         self.assertIn("标点", prompt)
         self.assertIn("编号", prompt)
@@ -772,7 +786,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(chapter["all"]["marketingDashboard"]["occurrenceCount"], 3)
         self.assertEqual(chapter["五个女博士"]["marketingDashboard"]["tagCount"], 2)
 
-    def test_prepare_analysis_defaults_brand_ai_scope_to_top_30(self):
+    def test_prepare_analysis_uses_full_brand_scope_for_chapter02_ai(self):
         analysis = load_module()
         records = [
             {
@@ -819,7 +833,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("行业 TOP1000 内按品牌匹配的全部素材", prompt)
         self.assertNotIn("CPM", prompt)
 
-    def test_prepare_analysis_keeps_chapter02_dashboard_full_when_brand_ai_uses_top_n(self):
+    def test_prepare_analysis_keeps_chapter02_chart_facts_full_for_brand_scope(self):
         analysis = load_module()
         records = [
             {

@@ -1091,7 +1091,6 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
             report_scopes,
         )
     )
-    write_json_atomically(fact_pack, output / "yuntu-analysis-data.json")
     write_json_atomically(
         _report_data(fact_pack), output / "report-data.json", indent=None
     )

@@ -22,6 +22,45 @@ def load_module():
 
 
 class YuntuAnalysisTests(unittest.TestCase):
+    def test_prepare_analysis_does_not_write_legacy_complete_snapshot(self):
+        analysis = load_module()
+        records = [{
+            "material_id": "1", "title": "素材", "rank": 1,
+            "metrics": {"ctr": 0.2, "show_cnt": 100},
+            "people_tags": [], "material_tags": [], "data_availability": {},
+        }]
+        selected = [{
+            "rank": 1, "material_id": "1",
+            "detailRecordPath": "normalized/detail-records/1.json",
+        }]
+        details = {
+            "1": {
+                "material_id": "1", "high_points": [], "loss_points": [],
+                "data_availability": {},
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            status = analysis.prepare_analysis(
+                input_dir=root, output_dir=root / "diagnostic-analysis"
+            )
+            output = root / "diagnostic-analysis"
+
+            self.assertEqual(status, 0)
+            self.assertFalse((output / "yuntu-analysis-data.json").exists())
+            for relative_path in (
+                "report-data.json",
+                "yuntu-analysis-prompt.md",
+                "yuntu-ai-analysis.schema.json",
+                "analysis-units/analysis-unit-manifest.json",
+                "analysis-units/ranking-brand-input.json",
+                "analysis-units/audience-marketing-input.json",
+                "analysis-units/highlight-input.json",
+                "analysis-units/material-deep-dive-input.json",
+            ):
+                self.assertTrue((output / relative_path).is_file(), relative_path)
+
     def test_prompt_template_is_loaded_and_runtime_scope_is_injected(self):
         analysis = load_module()
 
@@ -114,24 +153,15 @@ class YuntuAnalysisTests(unittest.TestCase):
             root = Path(directory)
             self._write_input(root, records, selected, details)
             status = analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
-            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+            data = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
             prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
 
         self.assertEqual(status, 0)
         self.assertEqual(data["schemaVersion"], 4)
         self.assertEqual(data["candidatePool"]["count"], 4)
-        self.assertEqual(len(data["audienceTopNRecords"]), 4)
-        audience_topn = {
-            item["material_id"]: item["people_tags"]
-            for item in data["audienceTopNRecords"]
-        }
-        self.assertEqual(audience_topn["101"], ["新锐白领"])
-        self.assertEqual(audience_topn["104"], ["都市银发"])
         self.assertEqual(data["candidatePool"]["metrics"]["ctr"]["median"], 0.25)
         self.assertEqual(data["industryTop1000Facts"]["sample_count"], 4)
         self.assertEqual(data["brandTopNFacts"]["brands"], {})
-        self.assertEqual(data["topMaterialCombination"]["overall"]["candidateCount"], 4)
-        self.assertEqual(data["topMaterialCombination"]["brands"], {})
         self.assertEqual(data["audienceDashboard"]["sample"]["recordCount"], 4)
         self.assertEqual(
             {item["label"]: item["materialCount"] for item in data["audienceDashboard"]["dimensions"]["crowd"]["buckets"]},
@@ -176,7 +206,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             root = Path(directory)
             self._write_input(root, records, selected, details)
             analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
-            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+            data = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
 
         self.assertFalse(data["tagInsights"]["eligibleForAssociation"])
         self.assertEqual(data["materialFacts"][0]["metricComparison"]["ctr"]["tier"], "observed")
@@ -210,7 +240,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             self._write_input(root, records, selected, details)
             with mock.patch.object(analysis, "generate_standard_highlights_for_detail", return_value=[]):
                 status = analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
-            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+            data = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
 
         self.assertEqual(status, 0)
         self.assertEqual(data["reportScopes"]["ranking"]["source_name"], "TOP1000 榜单素材")
@@ -233,7 +263,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             self._write_input(root, records, selected, details)
             with mock.patch.object(analysis, "generate_standard_highlights_for_detail", return_value=frames) as generate:
                 analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
-            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+            data = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
 
         generate.assert_called_once_with(mock.ANY, root)
         self.assertEqual(data["materialFacts"][0]["highlightFrames"], frames)
@@ -275,33 +305,66 @@ class YuntuAnalysisTests(unittest.TestCase):
                 analysis.prepare_analysis(
                     input_dir=root, output_dir=root / "diagnostic-analysis"
                 )
-            data = json.loads(
-                (root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(
-                    encoding="utf-8"
-                )
-            )
+            unit_dir = root / "diagnostic-analysis" / "analysis-units"
+            ranking = json.loads((unit_dir / "ranking-brand-input.json").read_text(encoding="utf-8"))
+            audience = json.loads((unit_dir / "audience-marketing-input.json").read_text(encoding="utf-8"))
+            highlight = json.loads((unit_dir / "highlight-input.json").read_text(encoding="utf-8"))
+            deep_dive = json.loads((unit_dir / "material-deep-dive-input.json").read_text(encoding="utf-8"))
             prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(
                 encoding="utf-8"
             )
 
-        self.assertEqual(data["schemaVersion"], 4)
-        self.assertEqual(data["rankingFacts"]["materials"][0]["material_id"], "1")
-        self.assertTrue(data["audienceFacts"]["labelsMayOverlap"])
+        self.assertEqual(ranking["schemaVersion"], 2)
         self.assertEqual(
-            data["marketingFacts"]["materials"][0]["material_tags"], ["产品展示"]
-        )
-        self.assertEqual(data["secondLevelFacts"]["materials"][0]["material_id"], "1")
-        self.assertEqual(
-            data["highlightFrameFacts"][0]["frame_ref"], "highlight:1:click_peak:2"
+            ranking["evidence"]["industryTop1000Facts"]["materials"][0]["material_id"],
+            "1",
         )
         self.assertEqual(
-            data["visualAssets"][0]["image_path"], "highlights/1/02-002s.jpg"
+            audience["evidence"]["chapter02AiFacts"]["all"]["sampleCount"], 1
         )
         self.assertEqual(
-            data["visualAssets"][0]["frame_source"],
+            audience["evidence"]["chapter02AiFacts"]["all"]["marketingDashboard"]["tagCount"],
+            1,
+        )
+        self.assertEqual(
+            audience["evidence"]["chapter02AiFacts"]["all"]["marketingDashboard"]["topTags"],
+            [{
+                "tag": "产品展示",
+                "count": 1,
+                "materialCount": 1,
+                "category": "其他",
+            }],
+        )
+        self.assertEqual(
+            highlight["evidence"]["visualAssets"][0]["frame_ref"],
+            "highlight:1:click_peak:2",
+        )
+        self.assertEqual(
+            highlight["evidence"]["visualAssets"][0]["image_path"],
+            "../highlights/1/02-002s.jpg",
+        )
+        self.assertEqual(
+            highlight["evidence"]["visualAssets"][0]["frame_source"],
             "reused_local_extracted_frame",
         )
-        self.assertEqual(data["dataLimitations"][0]["reason"], "not_returned")
+        self.assertEqual(
+            deep_dive["evidence"]["materialFacts"][0]["material_id"], "1"
+        )
+        self.assertEqual(
+            deep_dive["evidence"]["materialFacts"][0]["material_tags"],
+            ["产品展示"],
+        )
+        self.assertEqual(
+            deep_dive["evidence"]["materialFacts"][0]["secondLevelBreakdown"]["metrics"][2],
+            {
+                "trend_name": "点击指数",
+                "available": True,
+                "missing_reason": "",
+                "points": [{"second": 2, "value": 0.8}],
+                "high_points": [],
+                "loss_points": [],
+            },
+        )
         self.assertIn("visualAssets", prompt)
         self.assertIn("实际查看每张成功 JPEG", prompt)
         self.assertIn("主体、人物、产品、动作、场景、构图和可见字幕", prompt)
@@ -377,9 +440,6 @@ class YuntuAnalysisTests(unittest.TestCase):
             )
 
             output = root / "diagnostic-analysis"
-            complete = json.loads(
-                (output / "yuntu-analysis-data.json").read_text(encoding="utf-8")
-            )
             report = json.loads(
                 (output / "report-data.json").read_text(encoding="utf-8")
             )
@@ -405,11 +465,8 @@ class YuntuAnalysisTests(unittest.TestCase):
             )
             prompt = (output / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
 
-        self.assertIn("chapter02AiFacts", complete)
-        self.assertEqual(
-            report["chapter02AiFacts"]["scopeOrder"],
-            complete["chapter02AiFacts"]["scopeOrder"],
-        )
+        self.assertFalse((output / "yuntu-analysis-data.json").exists())
+        self.assertEqual(report["chapter02AiFacts"]["scopeOrder"], ["all", "五个女博士"])
         self.assertTrue(
             all(
                 report["chapter02AiFacts"][scope] == {}
@@ -525,10 +582,26 @@ class YuntuAnalysisTests(unittest.TestCase):
             frames = [{"second": 0, "frame_type": "cover", "available": False, "failure_reason": "missing_video_url"}]
             with mock.patch.object(analysis, "generate_standard_highlights_for_detail", return_value=frames) as generate:
                 analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
-            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+            data = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
+            highlight = json.loads(
+                (
+                    root
+                    / "diagnostic-analysis"
+                    / "analysis-units"
+                    / "highlight-input.json"
+                ).read_text(encoding="utf-8")
+            )
 
         generate.assert_called_once_with(mock.ANY, root)
         self.assertEqual(data["materialFacts"][0]["highlightFrames"], frames)
+        self.assertEqual(
+            highlight["evidence"]["dataLimitations"],
+            [{
+                "material_id": "1",
+                "field": "highlightFrames.0",
+                "reason": "missing_video_url",
+            }],
+        )
         self.assertEqual(
             data["materialFacts"][0]["highlightFrameAvailability"],
             {"available": False, "missing_reason": "missing_video_url"},
@@ -556,7 +629,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             analysis.write_highlights_manifest(root, {"1": frames})
             with mock.patch.object(analysis, "generate_standard_highlights_for_detail") as generate:
                 analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
-            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+            data = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
 
         generate.assert_not_called()
         self.assertEqual(data["materialFacts"][0]["highlightFrames"], frames)
@@ -604,8 +677,8 @@ class YuntuAnalysisTests(unittest.TestCase):
             analysis.prepare_analysis(
                 input_dir=root, output_dir=root / "diagnostic-analysis"
             )
-            data = json.loads(
-                (root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(
+            ranking = json.loads(
+                (root / "diagnostic-analysis" / "analysis-units" / "ranking-brand-input.json").read_text(
                     encoding="utf-8"
                 )
             )
@@ -614,13 +687,13 @@ class YuntuAnalysisTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            data["topMaterialCombination"]["overall"]["topMaterials"][0][
+            ranking["evidence"]["industryTop1000Facts"]["materials"][0][
                 "material_id"
             ],
                     "2",
         )
         self.assertEqual(
-            set(data["topMaterialCombination"]["brands"]),
+            set(ranking["evidence"]["brandTopNFacts"]["brands"]),
             {"万益蓝/WONDERLAB", "五个女博士"},
         )
         self.assertIn("topMaterialCombination", prompt)
@@ -685,7 +758,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             root = Path(directory)
             self._write_input(root, records, selected, details)
             analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
-            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+            data = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
 
         chapter = data["chapter02Facts"]
         self.assertEqual(chapter["scopeOrder"][0], "all")
@@ -721,13 +794,24 @@ class YuntuAnalysisTests(unittest.TestCase):
             manifest["filters"]["brands"] = ["五个女博士"]
             manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
             analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
-            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+            report = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
+            audience = json.loads(
+                (root / "diagnostic-analysis" / "analysis-units" / "audience-marketing-input.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            ranking = json.loads(
+                (root / "diagnostic-analysis" / "analysis-units" / "ranking-brand-input.json").read_text(
+                    encoding="utf-8"
+                )
+            )
             prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
 
-        scope = data["brandTopNFacts"]["brands"]["五个女博士"]
-        self.assertEqual(data["brandTopNFacts"]["requested_top_n"], 30)
+        scope = ranking["evidence"]["brandTopNFacts"]["brands"]["五个女博士"]
+        self.assertEqual(ranking["evidence"]["brandTopNFacts"]["requested_top_n"], 30)
         self.assertEqual(scope["sample_count"], 2)
-        self.assertEqual(data["chapter02Facts"]["五个女博士"]["audienceDashboard"]["sample"]["recordCount"], 2)
+        self.assertEqual(report["chapter02Facts"]["五个女博士"]["audienceDashboard"]["sample"]["recordCount"], 2)
+        self.assertEqual(audience["evidence"]["chapter02AiFacts"]["五个女博士"]["sampleCount"], 2)
         self.assertIn("Top 30", prompt)
 
     def test_prepare_analysis_keeps_chapter02_dashboard_full_when_brand_ai_uses_top_n(self):
@@ -755,13 +839,19 @@ class YuntuAnalysisTests(unittest.TestCase):
                 output_dir=root / "diagnostic-analysis",
                 brand_top_n=1,
             )
-            data = json.loads((root / "diagnostic-analysis" / "yuntu-analysis-data.json").read_text(encoding="utf-8"))
+            report = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
+            ranking = json.loads(
+                (root / "diagnostic-analysis" / "analysis-units" / "ranking-brand-input.json").read_text(encoding="utf-8")
+            )
+            audience = json.loads(
+                (root / "diagnostic-analysis" / "analysis-units" / "audience-marketing-input.json").read_text(encoding="utf-8")
+            )
 
-        self.assertEqual(data["brandTopNFacts"]["brands"]["五个女博士"]["sample_count"], 1)
-        self.assertEqual(data["chapter02AiFacts"]["五个女博士"]["sampleCount"], 1)
-        self.assertEqual(data["chapter02Facts"]["五个女博士"]["sampleCount"], 3)
+        self.assertEqual(ranking["evidence"]["brandTopNFacts"]["brands"]["五个女博士"]["sample_count"], 1)
+        self.assertEqual(audience["evidence"]["chapter02AiFacts"]["五个女博士"]["sampleCount"], 1)
+        self.assertEqual(report["chapter02Facts"]["五个女博士"]["sampleCount"], 3)
         self.assertEqual(
-            data["chapter02Facts"]["五个女博士"]["audienceDashboard"]["sample"]["recordCount"],
+            report["chapter02Facts"]["五个女博士"]["audienceDashboard"]["sample"]["recordCount"],
             3,
         )
 

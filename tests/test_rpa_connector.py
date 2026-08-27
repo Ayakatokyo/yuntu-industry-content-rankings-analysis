@@ -782,6 +782,32 @@ class RpaConnectorTest(unittest.TestCase):
         self.assertEqual(render.call_args.kwargs["fact_pack"], {"source": "report"})
         self.assertEqual(render.call_args.kwargs["highlight_asset_root"], root.parent)
 
+    def test_render_command_uses_report_projection_without_complete_snapshot(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "yuntu-ai-analysis.json"
+            report_path = root / "report-data.json"
+            analysis_path.write_text("{}", encoding="utf-8")
+            report_path.write_text('{"source":"report-only"}', encoding="utf-8")
+            with mock.patch.object(
+                connector, "load_verified_provenance", return_value={}
+            ), mock.patch.object(connector, "render_report", return_value=0) as render:
+                status = connector.main(
+                    [
+                        "render-report",
+                        "--analysis-json", str(analysis_path),
+                        "--output-dir", str(root / "report"),
+                    ]
+                )
+            complete_snapshot_exists = (root / "yuntu-analysis-data.json").exists()
+
+        self.assertEqual(status, 0)
+        self.assertFalse(complete_snapshot_exists)
+        self.assertEqual(
+            render.call_args.kwargs["fact_pack"], {"source": "report-only"}
+        )
+
     def test_render_command_falls_back_to_complete_fact_pack_for_legacy_batches(self):
         connector = self.connector()
         with tempfile.TemporaryDirectory() as directory:

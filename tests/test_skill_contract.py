@@ -289,6 +289,17 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertIn("旧版完整 JSON", skill)
         self.assertIn("额外字段", skill)
         self.assertIn("兼容渲染", skill)
+        self.assertIn("新批次不再生成 `yuntu-analysis-data.json`", skill)
+        self.assertIn("缺少 `report-data.json`", skill)
+        self.assertIn("历史批次", skill)
+        self.assertIn(
+            "`diagnostic-analysis/yuntu-ai-analysis.schema.json`", skill
+        )
+        self.assertIn("`diagnostic-analysis/yuntu-analysis-prompt.md`", skill)
+        self.assertNotIn(
+            "`diagnostic-analysis/yuntu-analysis-data.json`（完整兼容快照）",
+            skill,
+        )
 
     def test_requires_current_dialog_model_without_external_model_processes(self):
         skill = self.read_skill()

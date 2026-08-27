@@ -42,7 +42,7 @@ REPORT_DATA_FIELDS = (
     "chapter02Facts",
     "chapter02AiFacts",
     "industryTop1000Facts",
-    "brandTopNFacts",
+    "brandRankingFacts",
 )
 
 
@@ -125,8 +125,8 @@ def _ranking_material_fact(record):
     }
 
 
-def _ranking_scope_facts(records, *, source_scope, requested_top_n):
-    selected = select_top_materials(records, limit=requested_top_n)
+def _ranking_scope_facts(records, *, source_scope):
+    selected = select_top_materials(records, limit=len(records))
     metrics = {
         name: _metric_summary(selected, name)
         for name in RANKING_FACT_METRICS
@@ -141,14 +141,13 @@ def _ranking_scope_facts(records, *, source_scope, requested_top_n):
     }
     return {
         "source_scope": source_scope,
-        "requested_top_n": requested_top_n,
         "sample_count": len(selected),
         "metrics": metrics,
         "materials": [_ranking_material_fact(record) for record in selected],
     }
 
 
-def _audience_topn_records(records, *, limit=1000):
+def _audience_rank_records(records, *, limit=1000):
     return [
         {
             "material_id": str(record.get("material_id", "")),
@@ -424,9 +423,8 @@ def _model_input_sections(
         "industryTop1000Facts": _ranking_scope_facts(
             pool_records,
             source_scope="industry_top1000",
-            requested_top_n=1000,
         ),
-        "brandTopNFacts": brand_facts,
+        "brandRankingFacts": brand_facts,
         "chapter02AiFacts": chapter02_ai_facts,
         "audienceFacts": {
             "labelsMayOverlap": True,
@@ -487,13 +485,12 @@ def _report_data(fact_pack):
     industry = fact_pack.get("industryTop1000Facts", {})
     projected["industryTop1000Facts"] = {
         key: industry[key]
-        for key in ("source_scope", "requested_top_n", "sample_count")
+        for key in ("source_scope", "sample_count")
         if key in industry
     }
-    brand_facts = fact_pack.get("brandTopNFacts", {})
-    projected["brandTopNFacts"] = {
+    brand_facts = fact_pack.get("brandRankingFacts", {})
+    projected["brandRankingFacts"] = {
         "source_scope": brand_facts.get("source_scope"),
-        "requested_top_n": brand_facts.get("requested_top_n"),
         "brands": {
             brand: {
                 "source_scope": facts.get("source_scope"),
@@ -503,7 +500,6 @@ def _report_data(fact_pack):
                     for item in facts.get("materials", [])
                     if isinstance(item, dict) and item.get("material_id")
                 ],
-                "audienceFacts": facts.get("audienceFacts", {}),
             }
             for brand, facts in brand_facts.get("brands", {}).items()
             if isinstance(facts, dict)
@@ -564,7 +560,6 @@ def _ranking_output_schema():
             "brand",
             "classificationSource",
             "dataSummary",
-            "peopleSummary",
             "evidence",
             "material_ids",
         ],
@@ -575,7 +570,6 @@ def _ranking_output_schema():
                 "enum": ["title_rule", "runtime_title_rule"],
             },
             "dataSummary": {"type": "string"},
-            "peopleSummary": {"type": "string"},
             "evidence": {"type": "array", "items": {"type": "string"}},
             "material_ids": {"type": "array", "items": {"type": "string"}},
         },
@@ -795,7 +789,7 @@ def _write_analysis_units(fact_pack, output):
             {
                 "reportScope": fact_pack["reportScopes"]["ranking"],
                 "industryTop1000Facts": fact_pack["industryTop1000Facts"],
-                "brandTopNFacts": fact_pack["brandTopNFacts"],
+                "brandRankingFacts": fact_pack["brandRankingFacts"],
             },
         ),
         (
@@ -873,7 +867,6 @@ def _write_analysis_units(fact_pack, output):
 
 PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "prompts" / "yuntu-analysis-prompt.md"
 PROMPT_PLACEHOLDERS = (
-    "__BRAND_SCOPE_LABEL__",
     "__BRANDS__",
     "__SCOPE_LABELS__",
 )
@@ -894,25 +887,19 @@ def _load_prompt_template():
     return template
 
 
-def _prompt_text(*, brand_top_n, filters):
+def _prompt_text(*, filters):
     brands = "、".join(str(brand) for brand in filters.get("brands", []) if brand)
     scope_labels = "、".join(
         ["all（全量 TOP1000）", *(str(brand) for brand in filters.get("brands", []) if brand)]
     )
-    brand_scope_label = (
-        f"Top {brand_top_n}"
-        if isinstance(brand_top_n, int) and brand_top_n > 0
-        else "全量匹配素材"
-    )
     return (
         _load_prompt_template()
-        .replace("__BRAND_SCOPE_LABEL__", brand_scope_label)
         .replace("__BRANDS__", brands or "未指定品牌")
         .replace("__SCOPE_LABELS__", scope_labels)
     )
 
 
-def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
+def prepare_analysis(*, input_dir, output_dir):
     root = Path(input_dir)
     output = Path(output_dir)
     manifest = _load_json(root / "batch-manifest.json")
@@ -966,32 +953,24 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
     candidate_pool = _candidate_pool(pool_records)
     report_scopes = _report_scopes(pool_records, selected, rejected)
     audience_dashboard = build_audience_dashboard(pool_records)
-    audience_topn_records = _audience_topn_records(pool_records)
+    audience_rank_records = _audience_rank_records(pool_records)
     tag_insights = _tag_insights(pool_records, selected_ids)
     trend_summary = _trend_summary(details)
     brands = manifest.get("filters", {}).get("brands", [])
     combination = build_top_material_combination(
         pool_records,
-        top_n=brand_top_n,
-        brands=brands,
-    )
-    full_brand_combination = build_top_material_combination(
-        pool_records,
-        top_n=None,
+        top_n=len(pool_records),
         brands=brands,
     )
     list_by_id = {record.get("material_id"): record for record in pool_records}
     brand_facts = {
-        "source_scope": "brand_top_n",
-        "requested_top_n": brand_top_n,
+        "source_scope": "brand_in_top1000",
         "brands": {
             brand: {
                 **_ranking_scope_facts(
                     [list_by_id[item["material_id"]] for item in group["topMaterials"]],
-                    source_scope="brand_top_n",
-                    requested_top_n=brand_top_n,
+                    source_scope="brand_in_top1000",
                 ),
-                "audienceFacts": group["people"],
             }
             for brand, group in combination.get("brands", {}).items()
         },
@@ -1007,9 +986,9 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
     }
     configured_brands = brands or list(brand_facts["brands"])
     for brand in configured_brands:
-        if brand not in brand_facts["brands"] or brand not in full_brand_combination.get("brands", {}):
+        if brand not in brand_facts["brands"]:
             continue
-        full_brand_materials = full_brand_combination["brands"][brand].get("topMaterials", [])
+        full_brand_materials = brand_facts["brands"][brand].get("materials", [])
         full_brand_records = [
             list_by_id[item["material_id"]]
             for item in full_brand_materials
@@ -1040,9 +1019,8 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
         "summaryMetrics": {"selectedCount": len(selected), "rejectedCount": len(rejected), "candidateCount": len(pool_records)},
         "candidatePool": candidate_pool,
         "reportScopes": report_scopes,
-        "topMaterialCombination": combination,
         "audienceDashboard": audience_dashboard,
-        "audienceTopNRecords": audience_topn_records,
+        "audienceRankRecords": audience_rank_records,
         "tagInsights": tag_insights,
         "trendSummary": trend_summary,
         "dataAvailabilitySummary": _availability_summary(material_facts),
@@ -1069,7 +1047,7 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
     _write_analysis_units(fact_pack, output)
     output.mkdir(parents=True, exist_ok=True)
     (output / "yuntu-analysis-prompt.md").write_text(
-        _prompt_text(brand_top_n=brand_top_n, filters=manifest.get("filters", {})),
+        _prompt_text(filters=manifest.get("filters", {})),
         encoding="utf-8",
     )
     return 0

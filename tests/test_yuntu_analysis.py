@@ -65,18 +65,12 @@ class YuntuAnalysisTests(unittest.TestCase):
         analysis = load_module()
 
         template = analysis.PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
-        prompt = analysis._prompt_text(
-            brand_top_n=18,
-            filters={"brands": ["万益蓝", "燕之屋"]},
-        )
+        prompt = analysis._prompt_text(filters={"brands": ["万益蓝", "燕之屋"]})
 
-        self.assertIn("__BRAND_SCOPE_LABEL__", template)
         self.assertIn("__BRANDS__", template)
         self.assertIn("__SCOPE_LABELS__", template)
-        self.assertIn("Top 18", prompt)
         self.assertIn("万益蓝、燕之屋", prompt)
         self.assertIn("all（全量 TOP1000）、万益蓝、燕之屋", prompt)
-        self.assertNotIn("__BRAND_SCOPE_LABEL__", prompt)
         self.assertNotIn("__BRANDS__", prompt)
         self.assertNotIn("__SCOPE_LABELS__", prompt)
 
@@ -161,7 +155,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(data["candidatePool"]["count"], 4)
         self.assertEqual(data["candidatePool"]["metrics"]["ctr"]["median"], 0.25)
         self.assertEqual(data["industryTop1000Facts"]["sample_count"], 4)
-        self.assertEqual(data["brandTopNFacts"]["brands"], {})
+        self.assertEqual(data["brandRankingFacts"]["brands"], {})
         self.assertEqual(data["audienceDashboard"]["sample"]["recordCount"], 4)
         self.assertEqual(
             {item["label"]: item["materialCount"] for item in data["audienceDashboard"]["dimensions"]["crowd"]["buckets"]},
@@ -480,10 +474,9 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("chapter02Facts", report)
         self.assertIn("materialFacts", report)
         self.assertNotIn("materials", report["industryTop1000Facts"])
-        report_brand_facts = report["brandTopNFacts"]["brands"]["五个女博士"]
-        self.assertEqual(report_brand_facts["source_scope"], "brand_top_n")
+        report_brand_facts = report["brandRankingFacts"]["brands"]["五个女博士"]
+        self.assertEqual(report_brand_facts["source_scope"], "brand_in_top1000")
         self.assertEqual(report_brand_facts["sample_count"], 1)
-        self.assertTrue(report_brand_facts["audienceFacts"]["coverageIsOverlapping"])
         self.assertEqual(len(report_brand_facts["materials"]), 1)
         self.assertEqual(
             len(ranking_text.splitlines()),
@@ -535,14 +528,14 @@ class YuntuAnalysisTests(unittest.TestCase):
             set(ranking["outputSchema"]["properties"]), {"brandConclusions"}
         )
         self.assertEqual(ranking["outputSchema"]["required"], ["brandConclusions"])
-        self.assertIn("peopleSummary", brand_item_schema["required"])
+        self.assertNotIn("peopleSummary", brand_item_schema["required"])
         self.assertEqual(
             brand_item_schema["properties"]["classificationSource"]["enum"],
             ["title_rule", "runtime_title_rule"],
         )
         self.assertEqual(
             set(ranking["evidence"]),
-            {"reportScope", "industryTop1000Facts", "brandTopNFacts"},
+            {"reportScope", "industryTop1000Facts", "brandRankingFacts"},
         )
         self.assertIn("industryTop1000Facts", ranking["evidence"])
         self.assertNotIn("chapter02AiFacts", ranking["evidence"])
@@ -570,10 +563,10 @@ class YuntuAnalysisTests(unittest.TestCase):
         )
         self.assertNotIn("brandComparisonConclusion", prompt)
         self.assertNotIn("executiveSummary", prompt)
-        self.assertIn("peopleSummary", prompt)
+        self.assertNotIn("peopleSummary", prompt.split("02 章必须读取", 1)[0])
         self.assertIn("2 至 3 个短句解释整体指标组合", prompt)
-        self.assertIn("1 至 2 个短句说明整体人群覆盖", prompt)
-        self.assertIn("只分析该品牌全部 Top N 的聚合结果", prompt)
+        self.assertIn("第一章不输出人群维度分析", prompt)
+        self.assertIn("只分析该品牌在行业 TOP1000 内匹配到的全部素材聚合结果", prompt)
         self.assertIn("不得引用单条素材的素材 ID、标题、排名或指标", prompt)
         self.assertIn("素材 ID 只保留在 `evidence` 与 `material_ids` 审计字段", prompt)
         for metric in ("累计曝光", "CTR", "CVR", "3 秒播放率"):
@@ -704,7 +697,7 @@ class YuntuAnalysisTests(unittest.TestCase):
                     "2",
         )
         self.assertEqual(
-            set(ranking["evidence"]["brandTopNFacts"]["brands"]),
+            set(ranking["evidence"]["brandRankingFacts"]["brands"]),
             {"万益蓝/WONDERLAB", "五个女博士"},
         )
         self.assertIn("topMaterialCombination", prompt)
@@ -714,7 +707,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("dataSummary", prompt)
         self.assertIn("chapter02Insights", prompt)
         self.assertIn("industryTop1000Facts", prompt)
-        self.assertIn("brandTopNFacts", prompt)
+        self.assertIn("brandRankingFacts", prompt)
         self.assertIn("同一合并 TOP1000", prompt)
         self.assertNotIn("成功秒级拆解素材集合", prompt)
         self.assertNotIn(
@@ -727,7 +720,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("少量关键事实锚点 + 多句分析判断", prompt)
         self.assertIn("为什么值得保留或改写", prompt)
         self.assertIn("下一步如何验证", prompt)
-        self.assertIn("本次品牌榜单分析范围为Top 30", prompt)
+        self.assertIn("本次品牌榜单分析范围为行业 TOP1000 内按品牌匹配的全部素材", prompt)
         self.assertIn("chapter02AiFacts", prompt)
         self.assertIn("audienceSummary", prompt)
         self.assertIn("marketingSummary", prompt)
@@ -818,25 +811,12 @@ class YuntuAnalysisTests(unittest.TestCase):
             )
             prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
 
-        scope = ranking["evidence"]["brandTopNFacts"]["brands"]["五个女博士"]
-        self.assertEqual(ranking["evidence"]["brandTopNFacts"]["requested_top_n"], 30)
+        scope = ranking["evidence"]["brandRankingFacts"]["brands"]["五个女博士"]
         self.assertEqual(scope["sample_count"], 2)
         self.assertNotIn("cpm", scope["metrics"])
-        self.assertTrue(scope["audienceFacts"]["coverageIsOverlapping"])
-        self.assertEqual(
-            {
-                item["label"]: item["materialCount"]
-                for item in scope["audienceFacts"]["age"]
-            },
-            {"24-30": 1, "31-35": 1},
-        )
-        self.assertEqual(
-            report["brandTopNFacts"]["brands"]["五个女博士"]["audienceFacts"],
-            scope["audienceFacts"],
-        )
         self.assertEqual(report["chapter02Facts"]["五个女博士"]["audienceDashboard"]["sample"]["recordCount"], 2)
         self.assertEqual(audience["evidence"]["chapter02AiFacts"]["五个女博士"]["sampleCount"], 2)
-        self.assertIn("Top 30", prompt)
+        self.assertIn("行业 TOP1000 内按品牌匹配的全部素材", prompt)
         self.assertNotIn("CPM", prompt)
 
     def test_prepare_analysis_keeps_chapter02_dashboard_full_when_brand_ai_uses_top_n(self):
@@ -862,7 +842,6 @@ class YuntuAnalysisTests(unittest.TestCase):
             analysis.prepare_analysis(
                 input_dir=root,
                 output_dir=root / "diagnostic-analysis",
-                brand_top_n=1,
             )
             report = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
             ranking = json.loads(
@@ -872,8 +851,8 @@ class YuntuAnalysisTests(unittest.TestCase):
                 (root / "diagnostic-analysis" / "analysis-units" / "audience-marketing-input.json").read_text(encoding="utf-8")
             )
 
-        self.assertEqual(ranking["evidence"]["brandTopNFacts"]["brands"]["五个女博士"]["sample_count"], 1)
-        self.assertEqual(audience["evidence"]["chapter02AiFacts"]["五个女博士"]["sampleCount"], 1)
+        self.assertEqual(ranking["evidence"]["brandRankingFacts"]["brands"]["五个女博士"]["sample_count"], 3)
+        self.assertEqual(audience["evidence"]["chapter02AiFacts"]["五个女博士"]["sampleCount"], 3)
         self.assertEqual(report["chapter02Facts"]["五个女博士"]["sampleCount"], 3)
         self.assertEqual(
             report["chapter02Facts"]["五个女博士"]["audienceDashboard"]["sample"]["recordCount"],

@@ -206,8 +206,6 @@ def _project_chapter02(analysis, fact_pack):
     insight_scopes = insights.get("scopes", {}) if isinstance(insights, dict) else {}
     if insight_order != scope_order or (insight_scopes and set(insight_scopes) != set(scope_order)):
         raise YuntuPresentationError("chapter02 analysis scope order is invalid")
-    top_n = (fact_pack.get("brandTopNFacts") or {}).get("requested_top_n")
-    top_n = top_n if isinstance(top_n, int) and top_n > 0 else None
     scopes, panels, tab_items = [], [], []
     interaction_targets = {}
     for index, scope_key in enumerate(scope_order):
@@ -222,7 +220,6 @@ def _project_chapter02(analysis, fact_pack):
             "label": _text(scope_fact.get("label")) or scope_key,
             "kind": "industry" if scope_key == "all" else "brand",
             "rankScope": "top1000" if scope_key == "all" else "all-materials",
-            "topN": None if scope_key == "all" else top_n,
             "aiFactSource": "chapter02AiFacts",
             "chartFactSource": "chapter02Facts",
         })
@@ -245,12 +242,6 @@ def _project_chapter02(analysis, fact_pack):
             "topMaterials": deepcopy(scope_fact.get("topMaterials", [])),
             "charts": charts,
             "detailViews": detail_views,
-            "topNControl": {
-                "min": 1,
-                "max": top_n or 1,
-                "value": top_n or 1,
-                "factSource": "chapter02Facts",
-            },
         })
         tab_items.append({"id": scope_id, "label": scopes[-1]["label"], "panelId": panels[-1]["id"]})
     return scopes, {
@@ -268,8 +259,6 @@ def _project_chapter01(analysis, fact_pack):
         return {"brandTabs": [], "brandPanels": []}
     if not isinstance(combination, dict):
         raise YuntuPresentationError("chapter01 combination is invalid")
-    requested_top_n = (fact_pack.get("brandTopNFacts") or {}).get("requested_top_n")
-    top_n = requested_top_n if isinstance(requested_top_n, int) and requested_top_n > 0 else None
     brands = combination.get("brandConclusions", [])
     if not isinstance(brands, list):
         raise YuntuPresentationError("chapter01 brand conclusions are invalid")
@@ -281,12 +270,9 @@ def _project_chapter01(analysis, fact_pack):
         panels.append({
             "id": _scope_id(brand),
             "brand": brand,
-            "topN": top_n,
-            "insights": [
-                {"text": _text(item.get(field)), "dimension": key}
-                for key, field in (("data", "dataSummary"), ("people", "peopleSummary"))
-                if _text(item.get(field))
-            ],
+            "insights": ([
+                {"text": _text(item.get("dataSummary")), "dimension": "data"}
+            ] if _text(item.get("dataSummary")) else []),
         })
     if not panels:
         raise YuntuPresentationError("chapter01 brand conclusions are required")
@@ -508,7 +494,7 @@ def build_yuntu_presentation(analysis, fact_pack, *, report_meta=None):
                 "secondLevelMetricOrder": list(SECOND_LEVEL_METRIC_ORDER),
                 "factSourceContract": {
                     "chapter02AiFacts": "AI 二次分析唯一来源",
-                    "chapter02Facts": "真实汇总图表与 Top N 控制唯一来源",
+                    "chapter02Facts": "真实汇总图表与范围 Tab 唯一来源",
                 },
             }
         },

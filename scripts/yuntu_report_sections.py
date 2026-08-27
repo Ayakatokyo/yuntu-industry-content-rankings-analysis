@@ -14,12 +14,7 @@ def render_top_material_combination(
     *,
     esc,
     generic_text,
-    dimension_labels,
-    dimensions,
-    brand_summary_fields,
     brand_order,
-    brand_top_n=None,
-    brand_scope_label=None,
     presentation=None,
 ):
     if isinstance(presentation, dict) and presentation.get("brandPanels"):
@@ -29,18 +24,8 @@ def render_top_material_combination(
             value["brandConclusions"].append({
                 "brand": panel.get("brand", ""),
                 "dataSummary": summaries.get("data", ""),
-                "peopleSummary": summaries.get("people", ""),
             })
         brand_order = [panel.get("brand", "") for panel in presentation["brandPanels"]]
-        brand_top_n = presentation["brandPanels"][0].get("topN") or brand_top_n
-    top_n_label = (
-        brand_scope_label
-        or (
-            f"Top {brand_top_n}"
-            if isinstance(brand_top_n, int) and brand_top_n > 0
-            else "Top N"
-        )
-    )
     brand_conclusions = {item["brand"]: item for item in value["brandConclusions"]}
     ordered_brands = [
         brand_conclusions[brand] for brand in brand_order if brand in brand_conclusions
@@ -68,29 +53,20 @@ def render_top_material_combination(
         + ("hidden " if item["brand"] != default_brand else "")
         + f'aria-label="{esc(item["brand"])}，标题匹配归属" '
         + f'data-brand-panel="{esc(item["brand"])}">'
-        + '<p class="brand-classification-note">品牌归属：本次榜单标题匹配；分析范围：同一榜单 TOP1000 内的品牌 '
-        + esc(top_n_label)
-        + '</p>'
-        + "".join(
-            '<p class="brand-summary brand-summary-' + esc(dimension) + '">'
-            + '<strong class="brand-summary-label">'
-            + esc(dimension_labels[dimension])
-            + '：</strong>'
-            + esc(generic_text(item[brand_summary_fields[dimension]]))
+        + '<p class="brand-classification-note">品牌归属：本次榜单标题匹配；分析范围：行业 TOP1000 内该品牌全部匹配素材</p>'
+        + (
+            '<p class="brand-summary brand-summary-data">'
+            + esc(generic_text(item.get("dataSummary")))
             + "</p>"
-            for dimension in dimensions
-            if generic_text(item.get(brand_summary_fields[dimension]))
+            if generic_text(item.get("dataSummary"))
+            else ""
         )
         + "</article>"
         for index, item in enumerate(ordered_brands)
     )
     return (
-        '<div class="top-material-brands yuntu-content-card"><h3>各品牌榜单 '
-        + esc(top_n_label)
-        + ' 分析</h3>'
-        + '<div class="brand-tabs" role="tablist" aria-label="各品牌榜单 '
-        + esc(top_n_label)
-        + ' 分析">'
+        '<div class="top-material-brands yuntu-content-card"><h3>各品牌榜单分析</h3>'
+        + '<div class="brand-tabs" role="tablist" aria-label="各品牌榜单分析">'
         + tabs
         + '</div><div class="brand-panels">'
         + panels
@@ -203,7 +179,9 @@ def _render_audience_scope(
     charts += "".join(audience_dimension_chart(key, dimension) for key, dimension in dimensions.items() if key not in dimension_order and key in dimension_labels and isinstance(dimension, dict))
     if not charts:
         charts = '<p class="data-note">暂无人群汇总数据。</p>'
-    topn_records = fact_pack.get("audienceTopNRecords", [])
+    topn_records = fact_pack.get("audienceRankRecords")
+    if topn_records is None:
+        topn_records = fact_pack.get("audienceTopNRecords", [])
     topn_records_json = ""
     topn_controls = ""
     if isinstance(topn_records, list) and topn_records:
@@ -360,7 +338,7 @@ def render_audience_insights(
         ai_html = ai_html or '<p class="data-note">暂无该范围 AI 二次分析。</p>'
         rendered_scope = _render_audience_scope(
             scope_fact.get("audienceDashboard", {}), analysis=analysis,
-            fact_pack={**fact_pack, "audienceTopNRecords": scope_fact.get("topMaterials", [])}, facts=facts, esc=esc,
+            fact_pack={**fact_pack, "audienceRankRecords": scope_fact.get("topMaterials", [])}, facts=facts, esc=esc,
             generic_text=generic_text, insight_cards=insight_cards, dimension_labels=dimension_labels,
             html_module=html_module, json_module=json_module, math_module=math_module,
             scope="", insights=[], dashboard_id="chapter02-audience-dashboard-body-" + str(index),

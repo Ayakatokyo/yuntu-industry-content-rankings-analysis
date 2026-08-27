@@ -25,7 +25,7 @@ HTML_TEMPLATE_PATH = Path(__file__).with_name("templates") / "final-report-templ
 REPORT_STYLE_PATH = SKILL_ROOT / "assets" / "report" / "unified-report.css"
 REPORT_SCRIPT_PATH = SKILL_ROOT / "assets" / "report" / "unified-report.js"
 CURRENT_REPORT_SECTIONS = (
-    ("top_material_combination", "top-material-combination", "01｜TOP 素材组合结论"),
+    ("top_material_combination", "top-material-combination", "01｜素材榜单数据洞察"),
     ("audience_insights", "audience-insights", "02｜人群及营销卖点洞察"),
     ("script_insights", "script-insights", "03｜脚本洞察"),
     ("highlight_insights", "highlight-insights", "04｜高光画面洞察"),
@@ -94,11 +94,6 @@ def _archive_report_directory(output):
 REQUIRED_FIELDS = (
     "topMaterialCombination",
 )
-TOP_MATERIAL_LABELS = {
-    "data": "素材列表数据",
-    "people": "人群维度",
-    "marketing": "从营销卖点维度看",
-}
 TOP_MATERIAL_BRAND_ORDER = ("万益蓝/WONDERLAB", "五个女博士", "燕之屋")
 AUDIENCE_DIMENSION_LABELS = {
     "age": "年龄",
@@ -161,11 +156,7 @@ def _load_analysis(
 def validate_analysis_input(*, analysis_json, fact_pack=None):
     """Validate model analysis against the same contracts used by rendering."""
     fact_pack = fact_pack or {}
-    require_people_summary = not (
-        isinstance(fact_pack, dict)
-        and fact_pack
-        and fact_pack.get("schemaVersion", 5) < 5
-    )
+    require_people_summary = False
     strict_top_material_contract = (
         isinstance(fact_pack, dict) and fact_pack.get("schemaVersion", 0) >= 6
     )
@@ -251,6 +242,16 @@ def _validate_top_material_combination(
         _validate_evidence_and_material_ids(
             item, "topMaterialCombination.brandConclusions items"
         )
+
+
+def _brand_ranking_facts(fact_pack):
+    if not isinstance(fact_pack, dict):
+        return {}
+    facts = fact_pack.get("brandRankingFacts")
+    if isinstance(facts, dict):
+        return facts
+    legacy_facts = fact_pack.get("brandTopNFacts")
+    return legacy_facts if isinstance(legacy_facts, dict) else {}
 
 
 def _validate_chapter02_insights(value):
@@ -342,15 +343,15 @@ def _validate_ranking_scope_contract(analysis, fact_pack):
     actual_names = [item.get("brand") for item in conclusions if isinstance(item, dict)]
     if brands and set(actual_names) != set(brands):
         raise YuntuReportError("brand conclusions must preserve the complete input brand names")
-    brand_facts = fact_pack.get("brandTopNFacts", {}).get("brands", {})
+    brand_facts = _brand_ranking_facts(fact_pack).get("brands", {})
     conclusions_by_brand = {
         item["brand"]: item for item in conclusions if isinstance(item, dict)
     }
     strict_audience_contract = fact_pack.get("schemaVersion", 0) >= 5
     for brand in actual_names:
         scope = brand_facts.get(brand)
-        if not isinstance(scope, dict) or scope.get("source_scope") != "brand_top_n":
-            raise YuntuReportError(f"missing processed brand Top N facts for {brand}")
+        if not isinstance(scope, dict) or scope.get("source_scope") not in {"brand_in_top1000", "brand_top_n"}:
+            raise YuntuReportError(f"missing processed brand facts for {brand}")
         if not strict_audience_contract:
             continue
         data_summary = conclusions_by_brand[brand]["dataSummary"]
@@ -368,61 +369,30 @@ def _validate_ranking_scope_contract(analysis, fact_pack):
             raise YuntuReportError(
                 f"brand dataSummary must cover exposure, CTR, CVR, and 3-second play rate for {brand}"
             )
-        audience_facts = scope.get("audienceFacts")
-        if not isinstance(audience_facts, dict) or audience_facts.get("coverageIsOverlapping") is not True:
-            raise YuntuReportError(f"missing brand Top N audience facts for {brand}")
-        audience_labels = {
-            item.get("label")
-            for dimension in ("age", "gender", "crowd")
-            for item in audience_facts.get(dimension, [])
-            if isinstance(item, dict) and isinstance(item.get("label"), str)
-        }
-        if audience_labels and not any(
-            label in conclusions_by_brand[brand]["peopleSummary"]
-            for label in audience_labels
-        ):
-            raise YuntuReportError(
-                f"brand peopleSummary must reference Top N audience facts for {brand}"
-            )
         material_ids = {
             str(item.get("material_id"))
             for item in scope.get("materials", [])
             if isinstance(item, dict) and item.get("material_id")
         }
         if len(material_ids) != scope.get("sample_count"):
-            raise YuntuReportError(f"brand Top N audience facts sample mismatch for {brand}")
+            raise YuntuReportError(f"brand facts sample mismatch for {brand}")
         if fact_pack.get("schemaVersion", 0) >= 6:
-            for field in ("dataSummary", "peopleSummary"):
+            for field in ("dataSummary",):
                 summary = conclusions_by_brand[brand][field]
                 if any(material_id in summary for material_id in material_ids):
                     raise YuntuReportError(
-                        f"brand {field} must not include material IDs for {brand}"
+                        f"brand dataSummary must not include material IDs for {brand}"
                     )
         referenced_ids = set(conclusions_by_brand[brand].get("material_ids", []))
         if material_ids and not referenced_ids.issubset(material_ids):
-            raise YuntuReportError(f"brand conclusion references material outside Top N for {brand}")
-
-
-def _requested_brand_top_n(fact_pack):
-    value = (fact_pack or {}).get("brandTopNFacts", {}).get("requested_top_n")
-    return value if isinstance(value, int) and value > 0 else None
-
-
-def _brand_scope_label(fact_pack):
-    facts = (fact_pack or {}).get("brandTopNFacts", {})
-    if not isinstance(facts, dict) or "requested_top_n" not in facts:
-        return "Top N"
-    requested = facts.get("requested_top_n")
-    return f"Top {requested}" if isinstance(requested, int) and requested > 0 else "全量匹配素材"
+            raise YuntuReportError(f"brand conclusion references material outside brand facts for {brand}")
 
 
 def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
     lines = ["# 云图行业内容榜单分析报告", ""]
     combination = analysis["topMaterialCombination"]
-    lines.extend(["## 01｜TOP 素材组合结论", ""])
-    brand_top_n = _requested_brand_top_n(fact_pack)
-    top_n_label = _brand_scope_label(fact_pack)
-    lines.extend(["---", "", f"### 各品牌榜单 {top_n_label} 分析", ""])
+    lines.extend(["## 01｜素材榜单数据洞察", ""])
+    lines.extend(["---", "", "### 各品牌榜单分析", ""])
     brand_conclusions = {item["brand"]: item for item in combination["brandConclusions"]}
     configured_brands = (fact_pack or {}).get("filters", {}).get("brands", [])
     brand_order = configured_brands or TOP_MATERIAL_BRAND_ORDER
@@ -444,11 +414,9 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
             "",
         ])
         lines.extend([
-            f"**素材列表数据：** {item['dataSummary']}",
+            item["dataSummary"],
             "",
         ])
-        if item.get("peopleSummary"):
-            lines.extend([f"**人群维度：** {item['peopleSummary']}", ""])
     lines.extend(["## 02｜人群及营销卖点洞察", ""])
     chapter02 = (fact_pack or {}).get("chapter02Facts") if isinstance(fact_pack, dict) else None
     chapter02_insights = analysis.get("chapter02Insights", {})
@@ -1074,18 +1042,11 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None):
         presentation=(presentation or {}).get("chapters", {}).get("chapter05") if isinstance(presentation, dict) else None,
     )
 
-    report_dimensions = ("data", "people")
-    report_brand_fields = {"data": "dataSummary", "people": "peopleSummary"}
     top_material_combination = render_top_material_combination(
         analysis["topMaterialCombination"],
         esc=esc,
         generic_text=_generic_text,
-        dimension_labels=TOP_MATERIAL_LABELS,
-        dimensions=report_dimensions,
-        brand_summary_fields=report_brand_fields,
         brand_order=(fact_pack.get("filters", {}).get("brands") or TOP_MATERIAL_BRAND_ORDER),
-        brand_top_n=_requested_brand_top_n(fact_pack),
-        brand_scope_label=_brand_scope_label(fact_pack),
         presentation=(presentation or {}).get("chapters", {}).get("chapter01") if isinstance(presentation, dict) else None,
     )
     audience_insights = render_audience_insights(

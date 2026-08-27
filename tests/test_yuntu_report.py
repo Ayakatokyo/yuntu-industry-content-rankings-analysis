@@ -163,7 +163,7 @@ class YuntuReportTests(unittest.TestCase):
 
         self.assertNotIn('class="top-material-executive yuntu-content-card"', component)
         self.assertIn('class="brand-tabs"', component)
-        self.assertIn("brand-summary-label", component)
+        self.assertIn("brand-summary-data", component)
         self.assertNotIn('def top_material_combination_cards(value):', source)
 
     def test_audience_renderer_owns_its_markup(self):
@@ -440,16 +440,14 @@ class YuntuReportTests(unittest.TestCase):
             self.assertNotIn("从数据维度看", rendered)
             self.assertNotIn("从营销卖点维度看", rendered)
             self.assertNotIn("人群标签是重叠标签，不是真实人群分布，不能相加为 100%。", rendered)
-            self.assertIn("各品牌榜单 Top N 分析", rendered)
+            self.assertIn("各品牌榜单分析", rendered)
             self.assertIn("万益蓝/WONDERLAB", rendered)
             self.assertIn("五个女博士", rendered)
             self.assertIn("燕之屋", rendered)
             self.assertNotIn("品牌间差异总结", rendered)
             self.assertNotIn("真实品牌差异结论", rendered)
-            self.assertIn("素材列表数据", rendered)
             self.assertNotIn("素材列表数据分析", rendered)
-            self.assertIn("人群维度", rendered)
-            self.assertIn("人群结构以都市女性为主。", rendered)
+            self.assertNotIn("人群维度", rendered)
             self.assertNotIn("旧版兼容字段", rendered)
             self.assertNotIn("查看数据依据", rendered)
             self.assertNotIn('<details class="evidence-details">', rendered)
@@ -461,7 +459,7 @@ class YuntuReportTests(unittest.TestCase):
                 self.assertNotIn(title, rendered)
         self.assertNotIn("一、品牌筛选条件下", markdown)
         self.assertNotIn("二、各品牌 TOP", markdown)
-        self.assertIn("---\n\n### 各品牌榜单 Top N 分析", markdown)
+        self.assertIn("---\n\n### 各品牌榜单分析", markdown)
         self.assertIn("---\n\n### 五个女博士", markdown)
         self.assertNotIn("品牌间差异总结", markdown)
         self.assertIn('role="tablist"', html)
@@ -533,7 +531,7 @@ class YuntuReportTests(unittest.TestCase):
                 encoding="utf-8"
             )
 
-        self.assertIn("素材列表数据", rendered)
+        self.assertIn("各品牌榜单分析", rendered)
         self.assertNotIn("素材列表数据分析", rendered)
         self.assertNotIn("人群维度", rendered)
 
@@ -549,11 +547,10 @@ class YuntuReportTests(unittest.TestCase):
             analysis_path.write_text(
                 json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
             )
-            with self.assertRaisesRegex(report.YuntuReportError, "peopleSummary"):
-                report.render_report(
-                    analysis_json=analysis_path,
-                    output_dir=root / "final-report",
-                )
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+            )
 
     def test_new_chapter01_contract_requires_four_metrics_and_real_audience_label(self):
         report = load_module()
@@ -601,11 +598,8 @@ class YuntuReportTests(unittest.TestCase):
         analysis["topMaterialCombination"]["brandConclusions"][0][
             "dataSummary"
         ] = "Top 30 累计曝光 100 万，CTR 2%、CVR 3%、3 秒播放率 40%。"
-        analysis["topMaterialCombination"]["brandConclusions"][0][
-            "peopleSummary"
-        ] = "目标标签覆盖较高。"
-        with self.assertRaisesRegex(report.YuntuReportError, "audience facts"):
-            report._validate_ranking_scope_contract(analysis, fact_pack)
+        analysis["topMaterialCombination"]["brandConclusions"][0].pop("peopleSummary")
+        report._validate_ranking_scope_contract(analysis, fact_pack)
 
     def test_schema_v6_rejects_material_id_in_chapter01_visible_summaries(self):
         report = load_module()
@@ -724,14 +718,14 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("成功秒级拆解素材：5 条", top_section)
         self.assertNotIn("高光帧可用：", rendered)
         self.assertNotIn("TOP1000 整体分析", rendered)
-        self.assertIn("各品牌榜单 Top 30 分析", rendered)
+        self.assertIn("各品牌榜单分析", rendered)
         self.assertNotIn("各品牌榜单 Top N 分析", rendered)
         self.assertNotIn("品牌筛选 TOP30", rendered)
         self.assertNotIn("各品牌 TOP30", rendered)
         self.assertNotIn("TOP30", markdown)
         self.assertNotIn('<h3>综合结论</h3>', rendered)
         self.assertNotIn("综合结论：榜单、人群、卖点和已取得详情共同指向明确的内容机会。", rendered)
-        self.assertIn('class="brand-classification-note">品牌归属：本次榜单标题匹配；分析范围：同一榜单 TOP1000 内的品牌 Top 30</p>', rendered)
+        self.assertIn('class="brand-classification-note">品牌归属：本次榜单标题匹配；分析范围：行业 TOP1000 内该品牌全部匹配素材</p>', rendered)
 
     def test_chapter01_renders_brand_metric_facts_instead_of_overall_block(self):
         report = load_module()
@@ -1844,7 +1838,7 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
         self.assertIn("--paper:#fff8ec", rendered)
-        self.assertIn('aria-label="各品牌榜单 Top N 分析"', rendered)
+        self.assertIn('aria-label="各品牌榜单分析"', rendered)
         self.assertNotIn('aria-label="查看 101 封面 高光帧"', rendered)
         self.assertNotIn('aria-label="关闭高光帧预览"', rendered)
 

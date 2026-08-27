@@ -566,12 +566,6 @@ def _parser():
     )
     prepare_parser.add_argument("--input-dir", required=True)
     prepare_parser.add_argument("--output-dir", required=True)
-    prepare_parser.add_argument(
-        "--brand-top-n",
-        type=_positive_int_argument,
-        default=30,
-        help="Analysis-only brand Top N; limit each brand's chapter 01 and AI analysis to its highest-exposure N materials (not the RPA detail count); defaults to 30",
-    )
     attest_parser = commands.add_parser(
         "attest-analysis", help="Record the source of a model-authored analysis JSON"
     )
@@ -689,7 +683,6 @@ def main(argv=None):
             return prepare_analysis(
                 input_dir=args.input_dir,
                 output_dir=args.output_dir,
-                brand_top_n=args.brand_top_n,
             )
         if args.command == "attest-analysis":
             if attest_analysis is None:

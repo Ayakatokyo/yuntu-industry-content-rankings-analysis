@@ -90,7 +90,7 @@ class YuntuPresentationTests(unittest.TestCase):
             "materialFacts": material_facts,
             "chapter02Facts": chapter02_facts,
             "chapter02AiFacts": chapter02_ai_facts,
-            "brandTopNFacts": {"requested_top_n": 30},
+            "brandRankingFacts": {"source_scope": "brand_in_top1000"},
         }
 
     def analysis(self):
@@ -146,10 +146,10 @@ class YuntuPresentationTests(unittest.TestCase):
 
         self.assertEqual(scopes["all"]["rankScope"], "top1000")
         self.assertEqual(brand_scope["rankScope"], "all-materials")
-        self.assertEqual(brand_scope["topN"], 30)
+        self.assertNotIn("topN", brand_scope)
         self.assertEqual(panels[1]["aiFactSource"], "chapter02AiFacts")
         self.assertEqual(panels[1]["chartFactSource"], "chapter02Facts")
-        self.assertEqual(panels[1]["topNControl"]["factSource"], "chapter02Facts")
+        self.assertNotIn("topNControl", panels[1])
         self.assertIn("audienceSummary", panels[1]["aiInsights"])
         self.assertIn("marketingSummary", panels[1]["aiInsights"])
         self.assertEqual(panels[1]["charts"][0]["buckets"][0]["value"], 2)
@@ -158,7 +158,7 @@ class YuntuPresentationTests(unittest.TestCase):
     def test_projects_chapter01_top_material_conclusions(self):
         analysis = self.analysis()
         analysis["topMaterialCombination"] = {
-            "brandConclusions": [{"brand": "WONDERLAB/万益蓝", "classificationSource": "title_match", "dataSummary": "品牌 Top30 的累计曝光、CTR、CVR 与 3 秒播放率呈现稳定。", "peopleSummary": "品牌 Top30 以都市女性标签为主。", "evidence": [{"material_id": "101"}]}],
+            "brandConclusions": [{"brand": "WONDERLAB/万益蓝", "classificationSource": "runtime_title_rule", "dataSummary": "品牌全量素材的累计曝光、CTR、CVR 与 3 秒播放率呈现稳定。", "evidence": [{"material_id": "101"}]}],
         }
 
         payload = build_yuntu_presentation(analysis, self.fact_pack())
@@ -171,16 +171,14 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertNotIn("brandComparisonInsight", chapter)
         self.assertEqual(set(chapter), {"brandTabs", "brandPanels"})
         self.assertEqual(chapter["brandPanels"][0]["brand"], "WONDERLAB/万益蓝")
-        self.assertEqual(chapter["brandPanels"][0]["topN"], 30)
-        self.assertEqual(
-            set(chapter["brandPanels"][0]), {"id", "brand", "topN", "insights"}
-        )
+        self.assertNotIn("topN", chapter["brandPanels"][0])
+        self.assertEqual(set(chapter["brandPanels"][0]), {"id", "brand", "insights"})
         self.assertEqual(
             set(chapter["brandPanels"][0]["insights"][0]), {"text", "dimension"}
         )
         self.assertEqual(
             [item["dimension"] for item in chapter["brandPanels"][0]["insights"]],
-            ["data", "people"],
+            ["data"],
         )
         brand_tabs = payload["interactions"]["chapter01-brand-tabs"]
         self.assertEqual(brand_tabs["items"], chapter["brandTabs"])

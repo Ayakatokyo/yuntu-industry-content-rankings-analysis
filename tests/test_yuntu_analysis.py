@@ -157,7 +157,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
 
         self.assertEqual(status, 0)
-        self.assertEqual(data["schemaVersion"], 5)
+        self.assertEqual(data["schemaVersion"], 6)
         self.assertEqual(data["candidatePool"]["count"], 4)
         self.assertEqual(data["candidatePool"]["metrics"]["ctr"]["median"], 0.25)
         self.assertEqual(data["industryTop1000Facts"]["sample_count"], 4)
@@ -314,7 +314,7 @@ class YuntuAnalysisTests(unittest.TestCase):
                 encoding="utf-8"
             )
 
-        self.assertEqual(ranking["schemaVersion"], 3)
+        self.assertEqual(ranking["schemaVersion"], 4)
         self.assertEqual(
             ranking["evidence"]["industryTop1000Facts"]["materials"][0]["material_id"],
             "1",
@@ -523,7 +523,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             ],
         )
         self.assertEqual(ranking["outputField"], "topMaterialCombination")
-        self.assertEqual(ranking["schemaVersion"], 3)
+        self.assertEqual(ranking["schemaVersion"], 4)
         brand_item_schema = ranking["outputSchema"]["properties"][
             "brandConclusions"
         ]["items"]
@@ -531,17 +531,14 @@ class YuntuAnalysisTests(unittest.TestCase):
             "executiveSummary",
             ranking["outputSchema"]["properties"],
         )
+        self.assertEqual(
+            set(ranking["outputSchema"]["properties"]), {"brandConclusions"}
+        )
+        self.assertEqual(ranking["outputSchema"]["required"], ["brandConclusions"])
         self.assertIn("peopleSummary", brand_item_schema["required"])
         self.assertEqual(
             brand_item_schema["properties"]["classificationSource"]["enum"],
             ["title_rule", "runtime_title_rule"],
-        )
-        comparison_evidence_schema = ranking["outputSchema"]["properties"][
-            "brandComparisonConclusion"
-        ]["properties"]["evidence"]["items"]
-        self.assertEqual(
-            comparison_evidence_schema["required"],
-            ["brand", "metric", "value"],
         )
         self.assertEqual(
             set(ranking["evidence"]),
@@ -571,15 +568,16 @@ class YuntuAnalysisTests(unittest.TestCase):
             '`classificationSource` 只能是 `title_rule` 或 `runtime_title_rule`',
             prompt,
         )
-        self.assertIn(
-            '`brandComparisonConclusion.evidence` 必须是对象数组',
-            prompt,
-        )
-        self.assertNotIn("topMaterialCombination.executiveSummary", prompt)
+        self.assertNotIn("brandComparisonConclusion", prompt)
+        self.assertNotIn("executiveSummary", prompt)
         self.assertIn("peopleSummary", prompt)
+        self.assertIn("2 至 3 个短句解释整体指标组合", prompt)
+        self.assertIn("1 至 2 个短句说明整体人群覆盖", prompt)
+        self.assertIn("只分析该品牌全部 Top N 的聚合结果", prompt)
+        self.assertIn("不得引用单条素材的素材 ID、标题、排名或指标", prompt)
+        self.assertIn("素材 ID 只保留在 `evidence` 与 `material_ids` 审计字段", prompt)
         for metric in ("累计曝光", "CTR", "CVR", "3 秒播放率"):
             self.assertIn(metric, prompt)
-        self.assertIn('`brand`、`metric`、`value`', prompt)
         self.assertNotIn("读取同目录的 `yuntu-analysis-data.json`", prompt)
 
     def test_prepare_analysis_records_standard_highlight_failure_states(self):
@@ -711,7 +709,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         )
         self.assertIn("topMaterialCombination", prompt)
         self.assertIn("运行时品牌匹配", prompt)
-        self.assertIn("brandComparisonConclusion", prompt)
+        self.assertNotIn("brandComparisonConclusion", prompt)
         self.assertIn("title", prompt)
         self.assertIn("dataSummary", prompt)
         self.assertIn("chapter02Insights", prompt)

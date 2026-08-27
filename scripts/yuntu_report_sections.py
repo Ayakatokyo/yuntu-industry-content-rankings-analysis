@@ -23,18 +23,13 @@ def render_top_material_combination(
     presentation=None,
 ):
     if isinstance(presentation, dict) and presentation.get("brandPanels"):
-        comparison = presentation.get("brandComparisonInsight", {})
-        value = {
-            "brandConclusions": [],
-            "brandComparisonConclusion": {"summary": comparison.get("text", "")},
-        }
+        value = {"brandConclusions": []}
         for panel in presentation["brandPanels"]:
             summaries = {item.get("dimension"): item.get("text", "") for item in panel.get("insights", [])}
             value["brandConclusions"].append({
                 "brand": panel.get("brand", ""),
                 "dataSummary": summaries.get("data", ""),
                 "peopleSummary": summaries.get("people", ""),
-                "marketingSummary": summaries.get("marketing", ""),
             })
         brand_order = [panel.get("brand", "") for panel in presentation["brandPanels"]]
         brand_top_n = presentation["brandPanels"][0].get("topN") or brand_top_n
@@ -100,9 +95,6 @@ def render_top_material_combination(
         + '</div><div class="brand-panels">'
         + panels
         + "</div></div>"
-        + '<article class="brand-difference yuntu-content-card"><h3>品牌间差异总结</h3><p>'
-        + esc(generic_text(value["brandComparisonConclusion"]["summary"]))
-        + "</p></article>"
     )
 
 

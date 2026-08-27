@@ -5,7 +5,7 @@ import math
 from pathlib import PurePosixPath
 
 
-PRESENTATION_SCHEMA_VERSION = 2
+PRESENTATION_SCHEMA_VERSION = 3
 REPORT_TITLE = "云图行业内容榜单分析"
 SECTION_IDS = ("chapter01", "chapter02", "chapter04", "chapter05")
 REPORT_STATUSES = {"complete", "partial", "unavailable"}
@@ -262,24 +262,10 @@ def _project_chapter02(analysis, fact_pack):
     }
 
 
-def _chapter01_insight(item, *, dimension="", brand=""):
-    if not isinstance(item, dict):
-        raise YuntuPresentationError("chapter01 insight is invalid")
-    text = _text(item.get("summary"))
-    if not text:
-        raise YuntuPresentationError("chapter01 insight summary is required")
-    return {
-        "text": text,
-        "dimension": _text(dimension or item.get("dimension")),
-        "brand": _text(brand or item.get("brand")),
-        "evidence": deepcopy(item.get("evidence", [])),
-    }
-
-
 def _project_chapter01(analysis, fact_pack):
     combination = analysis.get("topMaterialCombination", {}) if isinstance(analysis, dict) else {}
     if not combination:
-        return {"brandTabs": [], "brandPanels": [], "brandComparisonInsight": {}}
+        return {"brandTabs": [], "brandPanels": []}
     if not isinstance(combination, dict):
         raise YuntuPresentationError("chapter01 combination is invalid")
     requested_top_n = (fact_pack.get("brandTopNFacts") or {}).get("requested_top_n")
@@ -295,22 +281,19 @@ def _project_chapter01(analysis, fact_pack):
         panels.append({
             "id": _scope_id(brand),
             "brand": brand,
-            "classificationSource": _text(item.get("classificationSource")),
             "topN": top_n,
             "insights": [
-                {"text": _text(item.get(field)), "dimension": key, "brand": brand, "evidence": deepcopy(item.get("evidence", []))}
+                {"text": _text(item.get(field)), "dimension": key}
                 for key, field in (("data", "dataSummary"), ("people", "peopleSummary"))
                 if _text(item.get(field))
             ],
         })
     if not panels:
         raise YuntuPresentationError("chapter01 brand conclusions are required")
-    comparison = _chapter01_insight(combination.get("brandComparisonConclusion", {}))
     tabs = [{"id": panel["id"], "label": panel["brand"], "panelId": panel["id"]} for panel in panels]
     return {
         "brandTabs": tabs,
         "brandPanels": panels,
-        "brandComparisonInsight": comparison,
     }
 
 

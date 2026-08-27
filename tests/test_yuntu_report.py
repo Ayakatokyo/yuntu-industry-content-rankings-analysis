@@ -81,7 +81,7 @@ class YuntuReportTests(unittest.TestCase):
             )
 
         self.assertEqual(status, 0)
-        self.assertEqual(presentation["presentationSchemaVersion"], 2)
+        self.assertEqual(presentation["presentationSchemaVersion"], 3)
         self.assertEqual(report_data["presentation"], presentation)
 
     def test_load_analysis_adapts_legacy_chapter02_scope_insights(self):
@@ -444,8 +444,8 @@ class YuntuReportTests(unittest.TestCase):
             self.assertIn("万益蓝/WONDERLAB", rendered)
             self.assertIn("五个女博士", rendered)
             self.assertIn("燕之屋", rendered)
-            self.assertIn("品牌间差异总结", rendered)
-            self.assertIn("真实品牌差异结论", rendered)
+            self.assertNotIn("品牌间差异总结", rendered)
+            self.assertNotIn("真实品牌差异结论", rendered)
             self.assertIn("素材列表数据", rendered)
             self.assertNotIn("素材列表数据分析", rendered)
             self.assertIn("人群维度", rendered)
@@ -463,7 +463,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("二、各品牌 TOP", markdown)
         self.assertIn("---\n\n### 各品牌榜单 Top N 分析", markdown)
         self.assertIn("---\n\n### 五个女博士", markdown)
-        self.assertIn("---\n\n### 品牌间差异总结", markdown)
+        self.assertNotIn("品牌间差异总结", markdown)
         self.assertIn('role="tablist"', html)
         self.assertIn('role="tab"', html)
         self.assertIn('role="tabpanel"', html)
@@ -606,6 +606,78 @@ class YuntuReportTests(unittest.TestCase):
         ] = "目标标签覆盖较高。"
         with self.assertRaisesRegex(report.YuntuReportError, "audience facts"):
             report._validate_ranking_scope_contract(analysis, fact_pack)
+
+    def test_schema_v6_rejects_material_id_in_chapter01_visible_summaries(self):
+        report = load_module()
+        material_id = "7668663443726172214"
+        analysis = {
+            "topMaterialCombination": {
+                "brandConclusions": [
+                    {
+                        "brand": "小仙炖",
+                        "classificationSource": "runtime_title_rule",
+                        "dataSummary": (
+                            "Top 30 累计曝光 100 万，CTR 2%、CVR 3%、"
+                            f"3 秒播放率 40%，素材{material_id}表现突出。"
+                        ),
+                        "peopleSummary": "新锐白领标签覆盖较高。",
+                        "evidence": ["Top 30 聚合指标与人群覆盖事实。"],
+                        "material_ids": [material_id],
+                    }
+                ]
+            }
+        }
+        fact_pack = {
+            "schemaVersion": 6,
+            "industryTop1000Facts": {"source_scope": "industry_top1000"},
+            "filters": {"brands": ["小仙炖"]},
+            "brandTopNFacts": {
+                "brands": {
+                    "小仙炖": {
+                        "source_scope": "brand_top_n",
+                        "sample_count": 1,
+                        "materials": [{"material_id": material_id}],
+                        "audienceFacts": {
+                            "coverageIsOverlapping": True,
+                            "age": [],
+                            "gender": [],
+                            "crowd": [{"label": "新锐白领"}],
+                        },
+                    }
+                }
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                report.YuntuReportError, "must not include material IDs"
+            ):
+                report.validate_analysis_input(
+                    analysis_json=path, fact_pack=fact_pack
+                )
+
+        analysis["topMaterialCombination"]["brandConclusions"][0][
+            "dataSummary"
+        ] = "Top 30 累计曝光 100 万，CTR 2%、CVR 3%、3 秒播放率 40%。"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            validated = report.validate_analysis_input(
+                analysis_json=path, fact_pack=fact_pack
+            )
+
+        self.assertEqual(
+            validated["topMaterialCombination"]["brandConclusions"][0][
+                "material_ids"
+            ],
+            [material_id],
+        )
 
     def test_render_report_renders_section_scope_labels_without_deep_frame_coverage(self):
         report = load_module()
@@ -752,7 +824,8 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("TOP30 素材组合结论", rendered)
         self.assertNotIn("来源：Top1000 榜单数据", rendered)
         self.assertNotIn("基于筛选品牌集合与标题匹配品牌", rendered)
-        self.assertEqual(rendered.count(' yuntu-content-card"'), 2)
+        self.assertEqual(rendered.count(' yuntu-content-card"'), 1)
+        self.assertNotIn('class="brand-difference', rendered)
         self.assertIn(".unified-report .report-shell", rendered)
         self.assertIn("data-unified-report-ready", rendered)
         self.assertNotIn('rel="stylesheet"', rendered)
@@ -1096,19 +1169,20 @@ class YuntuReportTests(unittest.TestCase):
             with self.assertRaisesRegex(report.YuntuReportError, "evidence"):
                 report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
 
-    def test_render_report_rejects_incomplete_top_material_contract(self):
+    def test_render_report_accepts_top_material_contract_without_brand_comparison(self):
         report = load_module()
         analysis = self.analysis_json()
         analysis["topMaterialCombination"].pop("brandComparisonConclusion")
         with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
             path = Path(directory) / "analysis.json"
             path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(
-                report.YuntuReportError, "brandComparisonConclusion"
-            ):
-                report.render_report(
-                    analysis_json=path, output_dir=Path(directory) / "report"
-                )
+            report.render_report(analysis_json=path, output_dir=root / "report")
+            rendered = (root / "report" / "final-report.html").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertNotIn("品牌间差异总结", rendered)
 
     def test_render_report_rejects_audit_content_in_user_readable_summaries(self):
         report = load_module()
@@ -1148,8 +1222,8 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("本次云图 RPA 未提供可用于汇总的脚本正文与时间戳段落", markdown)
         self.assertIn("暂无可用高光帧", rendered)
         self.assertNotIn('href="#landscape"', rendered)
-        self.assertIn('</article></section>', rendered)
-        self.assertNotIn('</article></div></section>', rendered)
+        self.assertIn('</div></div></section>', rendered)
+        self.assertNotIn('class="brand-difference', rendered)
         self.assertNotIn("榜单竞争格局", markdown)
 
     def test_render_report_renders_material_deep_dive_with_tabs_frames_and_five_charts(self):
@@ -1668,29 +1742,24 @@ class YuntuReportTests(unittest.TestCase):
                     fact_pack=fact_pack,
                 )
 
-    def test_render_report_rejects_brand_comparison_without_each_brand_evidence(self):
+    def test_current_schema_rejects_hidden_chapter01_residual_fields(self):
         report = load_module()
         analysis = self.analysis_json()
-        analysis["topMaterialCombination"]["brandComparisonConclusion"]["evidence"].pop()
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "analysis.json"
-            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(report.YuntuReportError, "brandComparisonConclusion.*brand"):
-                report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
-
-    def test_render_report_rejects_brand_comparison_evidence_without_value(self):
-        report = load_module()
-        analysis = self.analysis_json()
-        analysis["topMaterialCombination"]["brandComparisonConclusion"]["evidence"][0].pop("value")
+        analysis["topMaterialCombination"] = {
+            "brandConclusions": analysis["topMaterialCombination"]["brandConclusions"],
+            "brandComparisonConclusion": analysis["topMaterialCombination"]["brandComparisonConclusion"],
+        }
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "analysis.json"
             path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
             with self.assertRaisesRegex(
                 report.YuntuReportError,
-                "brandComparisonConclusion.*brand, metric, and value",
+                "must only include brandConclusions",
             ):
                 report.render_report(
-                    analysis_json=path, output_dir=Path(directory) / "report"
+                    analysis_json=path,
+                    output_dir=Path(directory) / "report",
+                    fact_pack={"schemaVersion": 6},
                 )
 
     def test_render_report_renders_styled_cover_without_legacy_gallery(self):

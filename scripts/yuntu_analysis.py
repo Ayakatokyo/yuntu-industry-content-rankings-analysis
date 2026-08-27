@@ -580,42 +580,14 @@ def _ranking_output_schema():
             "material_ids": {"type": "array", "items": {"type": "string"}},
         },
     }
-    comparison_evidence_schema = {
-        "type": "object",
-        "required": ["brand", "metric", "value"],
-        "properties": {
-            "brand": {"type": "string"},
-            "metric": {"type": "string"},
-            "value": {"type": ["number", "string"]},
-        },
-    }
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": [
-            "brandConclusions",
-            "brandComparisonConclusion",
-        ],
+        "required": ["brandConclusions"],
         "properties": {
             "brandConclusions": {
                 "type": "array",
                 "items": brand_conclusion_schema,
-            },
-            "brandComparisonConclusion": {
-                "type": "object",
-                "required": ["title", "summary", "evidence", "material_ids"],
-                "properties": {
-                    "title": {"type": "string"},
-                    "summary": {"type": "string"},
-                    "evidence": {
-                        "type": "array",
-                        "items": comparison_evidence_schema,
-                    },
-                    "material_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
             },
         },
     }
@@ -860,7 +832,7 @@ def _write_analysis_units(fact_pack, output):
     for filename, unit_name, output_field, evidence in units:
         path = unit_dir / filename
         payload = {
-            "schemaVersion": 3 if unit_name == "ranking_brand" else 1,
+            "schemaVersion": 4 if unit_name == "ranking_brand" else 1,
             "unit": unit_name,
             "outputField": output_field,
             "evidence": evidence,
@@ -880,7 +852,7 @@ def _write_analysis_units(fact_pack, output):
     output_schema_path = Path(output) / "yuntu-ai-analysis.schema.json"
     write_json_atomically(_analysis_output_schema(fact_pack), output_schema_path)
     manifest = {
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "executionMode": "single_model_call",
         "sharedContext": {
             "filters": fact_pack["filters"],
@@ -1061,7 +1033,7 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
             limit=len(ai_brand_records) or 1,
         )
     fact_pack = {
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "filters": manifest.get("filters", {}),
         "selectedMaterials": selected,
         "rejectedMaterials": rejected,

@@ -157,7 +157,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
 
         self.assertEqual(status, 0)
-        self.assertEqual(data["schemaVersion"], 4)
+        self.assertEqual(data["schemaVersion"], 5)
         self.assertEqual(data["candidatePool"]["count"], 4)
         self.assertEqual(data["candidatePool"]["metrics"]["ctr"]["median"], 0.25)
         self.assertEqual(data["industryTop1000Facts"]["sample_count"], 4)
@@ -314,10 +314,13 @@ class YuntuAnalysisTests(unittest.TestCase):
                 encoding="utf-8"
             )
 
-        self.assertEqual(ranking["schemaVersion"], 2)
+        self.assertEqual(ranking["schemaVersion"], 3)
         self.assertEqual(
             ranking["evidence"]["industryTop1000Facts"]["materials"][0]["material_id"],
             "1",
+        )
+        self.assertNotIn(
+            "cpm", ranking["evidence"]["industryTop1000Facts"]["metrics"]
         )
         self.assertEqual(
             audience["evidence"]["chapter02AiFacts"]["all"]["sampleCount"], 1
@@ -477,10 +480,11 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("chapter02Facts", report)
         self.assertIn("materialFacts", report)
         self.assertNotIn("materials", report["industryTop1000Facts"])
-        self.assertEqual(
-            report["brandTopNFacts"]["brands"]["五个女博士"],
-            {"source_scope": "brand_top_n"},
-        )
+        report_brand_facts = report["brandTopNFacts"]["brands"]["五个女博士"]
+        self.assertEqual(report_brand_facts["source_scope"], "brand_top_n")
+        self.assertEqual(report_brand_facts["sample_count"], 1)
+        self.assertTrue(report_brand_facts["audienceFacts"]["coverageIsOverlapping"])
+        self.assertEqual(len(report_brand_facts["materials"]), 1)
         self.assertEqual(
             len(ranking_text.splitlines()),
             1,
@@ -519,10 +523,15 @@ class YuntuAnalysisTests(unittest.TestCase):
             ],
         )
         self.assertEqual(ranking["outputField"], "topMaterialCombination")
-        self.assertEqual(ranking["schemaVersion"], 2)
+        self.assertEqual(ranking["schemaVersion"], 3)
         brand_item_schema = ranking["outputSchema"]["properties"][
             "brandConclusions"
         ]["items"]
+        self.assertNotIn(
+            "executiveSummary",
+            ranking["outputSchema"]["properties"],
+        )
+        self.assertIn("peopleSummary", brand_item_schema["required"])
         self.assertEqual(
             brand_item_schema["properties"]["classificationSource"]["enum"],
             ["title_rule", "runtime_title_rule"],
@@ -566,6 +575,10 @@ class YuntuAnalysisTests(unittest.TestCase):
             '`brandComparisonConclusion.evidence` 必须是对象数组',
             prompt,
         )
+        self.assertNotIn("topMaterialCombination.executiveSummary", prompt)
+        self.assertIn("peopleSummary", prompt)
+        for metric in ("累计曝光", "CTR", "CVR", "3 秒播放率"):
+            self.assertIn(metric, prompt)
         self.assertIn('`brand`、`metric`、`value`', prompt)
         self.assertNotIn("读取同目录的 `yuntu-analysis-data.json`", prompt)
 
@@ -810,9 +823,23 @@ class YuntuAnalysisTests(unittest.TestCase):
         scope = ranking["evidence"]["brandTopNFacts"]["brands"]["五个女博士"]
         self.assertEqual(ranking["evidence"]["brandTopNFacts"]["requested_top_n"], 30)
         self.assertEqual(scope["sample_count"], 2)
+        self.assertNotIn("cpm", scope["metrics"])
+        self.assertTrue(scope["audienceFacts"]["coverageIsOverlapping"])
+        self.assertEqual(
+            {
+                item["label"]: item["materialCount"]
+                for item in scope["audienceFacts"]["age"]
+            },
+            {"24-30": 1, "31-35": 1},
+        )
+        self.assertEqual(
+            report["brandTopNFacts"]["brands"]["五个女博士"]["audienceFacts"],
+            scope["audienceFacts"],
+        )
         self.assertEqual(report["chapter02Facts"]["五个女博士"]["audienceDashboard"]["sample"]["recordCount"], 2)
         self.assertEqual(audience["evidence"]["chapter02AiFacts"]["五个女博士"]["sampleCount"], 2)
         self.assertIn("Top 30", prompt)
+        self.assertNotIn("CPM", prompt)
 
     def test_prepare_analysis_keeps_chapter02_dashboard_full_when_brand_ai_uses_top_n(self):
         analysis = load_module()

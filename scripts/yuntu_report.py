@@ -95,8 +95,8 @@ REQUIRED_FIELDS = (
     "topMaterialCombination",
 )
 TOP_MATERIAL_LABELS = {
-    "data": "从数据维度看",
-    "people": "从人群维度看",
+    "data": "素材列表数据",
+    "people": "人群维度",
     "marketing": "从营销卖点维度看",
 }
 TOP_MATERIAL_BRAND_ORDER = ("万益蓝/WONDERLAB", "五个女博士", "燕之屋")
@@ -131,7 +131,7 @@ DEEP_DIVE_FORBIDDEN_CLAIM = re.compile(
 )
 
 
-def _load_analysis(path):
+def _load_analysis(path, *, require_people_summary=True):
     try:
         analysis = json.loads(Path(path).read_text(encoding="utf-8"))
     except Exception as exc:
@@ -143,7 +143,10 @@ def _load_analysis(path):
         raise YuntuReportError(
             "analysis JSON is missing required fields: " + ", ".join(missing)
         )
-    _validate_top_material_combination(analysis["topMaterialCombination"])
+    _validate_top_material_combination(
+        analysis["topMaterialCombination"],
+        require_people_summary=require_people_summary,
+    )
     if "chapter02Insights" in analysis:
         analysis["chapter02Insights"] = _normalize_chapter02_insights(
             analysis["chapter02Insights"]
@@ -154,8 +157,16 @@ def _load_analysis(path):
 
 def validate_analysis_input(*, analysis_json, fact_pack=None):
     """Validate model analysis against the same contracts used by rendering."""
-    analysis = _load_analysis(analysis_json)
     fact_pack = fact_pack or {}
+    require_people_summary = not (
+        isinstance(fact_pack, dict)
+        and fact_pack
+        and fact_pack.get("schemaVersion", 5) < 5
+    )
+    analysis = _load_analysis(
+        analysis_json,
+        require_people_summary=require_people_summary,
+    )
     _validate_ranking_scope_contract(analysis, fact_pack)
     _validate_highlight_dashboard(analysis, fact_pack)
     _validate_material_deep_dives(analysis, fact_pack)
@@ -202,21 +213,9 @@ def _validate_evidence_and_material_ids(item, field):
     raise YuntuReportError(f"{field} must include material_id or material_ids")
 
 
-def _validate_top_material_combination(value):
+def _validate_top_material_combination(value, *, require_people_summary=True):
     if not isinstance(value, dict):
         raise YuntuReportError("topMaterialCombination must be an object")
-    executive_summary = value.get("executiveSummary")
-    if not isinstance(executive_summary, dict):
-        raise YuntuReportError(
-            "topMaterialCombination.executiveSummary must be an object"
-        )
-    _validate_summary(
-        executive_summary.get("summary"),
-        "topMaterialCombination.executiveSummary summary",
-    )
-    _validate_evidence_and_material_ids(
-        executive_summary, "topMaterialCombination.executiveSummary"
-    )
     brands = value.get("brandConclusions")
     if not isinstance(brands, list):
         raise YuntuReportError("topMaterialCombination.brandConclusions must be a list")
@@ -231,6 +230,11 @@ def _validate_top_material_combination(value):
             item.get("dataSummary"),
             "topMaterialCombination.brandConclusions dataSummary",
         )
+        if require_people_summary or "peopleSummary" in item:
+            _validate_summary(
+                item.get("peopleSummary"),
+                "topMaterialCombination.brandConclusions peopleSummary",
+            )
         _validate_evidence_and_material_ids(
             item, "topMaterialCombination.brandConclusions items"
         )
@@ -358,10 +362,57 @@ def _validate_ranking_scope_contract(analysis, fact_pack):
     if brands and set(actual_names) != set(brands):
         raise YuntuReportError("brand conclusions must preserve the complete input brand names")
     brand_facts = fact_pack.get("brandTopNFacts", {}).get("brands", {})
+    conclusions_by_brand = {
+        item["brand"]: item for item in conclusions if isinstance(item, dict)
+    }
+    strict_audience_contract = fact_pack.get("schemaVersion", 0) >= 5
     for brand in actual_names:
         scope = brand_facts.get(brand)
         if not isinstance(scope, dict) or scope.get("source_scope") != "brand_top_n":
             raise YuntuReportError(f"missing processed brand Top N facts for {brand}")
+        if not strict_audience_contract:
+            continue
+        data_summary = conclusions_by_brand[brand]["dataSummary"]
+        missing_metrics = []
+        for label, aliases in (
+            ("曝光", ("曝光",)),
+            ("CTR/点击率", ("CTR", "点击率")),
+            ("CVR/转化率", ("CVR", "转化率")),
+        ):
+            if not any(alias in data_summary for alias in aliases):
+                missing_metrics.append(label)
+        if "3秒" not in data_summary and "3 秒" not in data_summary:
+            missing_metrics.append("3 秒播放率")
+        if missing_metrics:
+            raise YuntuReportError(
+                f"brand dataSummary must cover exposure, CTR, CVR, and 3-second play rate for {brand}"
+            )
+        audience_facts = scope.get("audienceFacts")
+        if not isinstance(audience_facts, dict) or audience_facts.get("coverageIsOverlapping") is not True:
+            raise YuntuReportError(f"missing brand Top N audience facts for {brand}")
+        audience_labels = {
+            item.get("label")
+            for dimension in ("age", "gender", "crowd")
+            for item in audience_facts.get(dimension, [])
+            if isinstance(item, dict) and isinstance(item.get("label"), str)
+        }
+        if audience_labels and not any(
+            label in conclusions_by_brand[brand]["peopleSummary"]
+            for label in audience_labels
+        ):
+            raise YuntuReportError(
+                f"brand peopleSummary must reference Top N audience facts for {brand}"
+            )
+        material_ids = {
+            str(item.get("material_id"))
+            for item in scope.get("materials", [])
+            if isinstance(item, dict) and item.get("material_id")
+        }
+        if len(material_ids) != scope.get("sample_count"):
+            raise YuntuReportError(f"brand Top N audience facts sample mismatch for {brand}")
+        referenced_ids = set(conclusions_by_brand[brand].get("material_ids", []))
+        if material_ids and not referenced_ids.issubset(material_ids):
+            raise YuntuReportError(f"brand conclusion references material outside Top N for {brand}")
 
 
 def _requested_brand_top_n(fact_pack):
@@ -380,7 +431,7 @@ def _brand_scope_label(fact_pack):
 def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
     lines = ["# 云图行业内容榜单分析报告", ""]
     combination = analysis["topMaterialCombination"]
-    lines.extend(["## 01｜TOP 素材组合结论", "", "### 综合结论", "", combination["executiveSummary"]["summary"], ""])
+    lines.extend(["## 01｜TOP 素材组合结论", ""])
     brand_top_n = _requested_brand_top_n(fact_pack)
     top_n_label = _brand_scope_label(fact_pack)
     lines.extend(["---", "", f"### 各品牌榜单 {top_n_label} 分析", ""])
@@ -404,7 +455,12 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
             f"### {item['brand']}",
             "",
         ])
-        lines.extend([item["dataSummary"], ""])
+        lines.extend([
+            f"**素材列表数据：** {item['dataSummary']}",
+            "",
+        ])
+        if item.get("peopleSummary"):
+            lines.extend([f"**人群维度：** {item['peopleSummary']}", ""])
     lines.extend([
         "---",
         "",
@@ -1038,8 +1094,8 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None):
         presentation=(presentation or {}).get("chapters", {}).get("chapter05") if isinstance(presentation, dict) else None,
     )
 
-    report_dimensions = ("data",)
-    report_brand_fields = {"data": "dataSummary"}
+    report_dimensions = ("data", "people")
+    report_brand_fields = {"data": "dataSummary", "people": "peopleSummary"}
     top_material_combination = render_top_material_combination(
         analysis["topMaterialCombination"],
         esc=esc,

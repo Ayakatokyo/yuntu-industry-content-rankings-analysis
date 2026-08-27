@@ -139,10 +139,6 @@ def _ranking_scope_facts(records, *, source_scope, requested_top_n):
         "mean": show_summary["mean"] if show_summary else None,
         "median": show_summary["median"] if show_summary else None,
     }
-    metrics["cpm"] = {
-        "available": False,
-        "missing_reason": "rpa_not_provided",
-    }
     return {
         "source_scope": source_scope,
         "requested_top_n": requested_top_n,
@@ -499,7 +495,16 @@ def _report_data(fact_pack):
         "source_scope": brand_facts.get("source_scope"),
         "requested_top_n": brand_facts.get("requested_top_n"),
         "brands": {
-            brand: {"source_scope": facts.get("source_scope")}
+            brand: {
+                "source_scope": facts.get("source_scope"),
+                "sample_count": facts.get("sample_count"),
+                "materials": [
+                    {"material_id": str(item["material_id"])}
+                    for item in facts.get("materials", [])
+                    if isinstance(item, dict) and item.get("material_id")
+                ],
+                "audienceFacts": facts.get("audienceFacts", {}),
+            }
             for brand, facts in brand_facts.get("brands", {}).items()
             if isinstance(facts, dict)
         },
@@ -552,22 +557,14 @@ def _model_material_facts(material_facts):
 
 
 def _ranking_output_schema():
-    summary_schema = {
-        "type": "object",
-        "required": ["title", "summary", "evidence", "material_ids"],
-        "properties": {
-            "title": {"type": "string"},
-            "summary": {"type": "string"},
-            "evidence": {"type": "array", "items": {"type": "string"}},
-            "material_ids": {"type": "array", "items": {"type": "string"}},
-        },
-    }
     brand_conclusion_schema = {
         "type": "object",
+        "additionalProperties": False,
         "required": [
             "brand",
             "classificationSource",
             "dataSummary",
+            "peopleSummary",
             "evidence",
             "material_ids",
         ],
@@ -578,6 +575,7 @@ def _ranking_output_schema():
                 "enum": ["title_rule", "runtime_title_rule"],
             },
             "dataSummary": {"type": "string"},
+            "peopleSummary": {"type": "string"},
             "evidence": {"type": "array", "items": {"type": "string"}},
             "material_ids": {"type": "array", "items": {"type": "string"}},
         },
@@ -593,13 +591,12 @@ def _ranking_output_schema():
     }
     return {
         "type": "object",
+        "additionalProperties": False,
         "required": [
-            "executiveSummary",
             "brandConclusions",
             "brandComparisonConclusion",
         ],
         "properties": {
-            "executiveSummary": summary_schema,
             "brandConclusions": {
                 "type": "array",
                 "items": brand_conclusion_schema,
@@ -863,7 +860,7 @@ def _write_analysis_units(fact_pack, output):
     for filename, unit_name, output_field, evidence in units:
         path = unit_dir / filename
         payload = {
-            "schemaVersion": 2 if unit_name == "ranking_brand" else 1,
+            "schemaVersion": 3 if unit_name == "ranking_brand" else 1,
             "unit": unit_name,
             "outputField": output_field,
             "evidence": evidence,
@@ -883,7 +880,7 @@ def _write_analysis_units(fact_pack, output):
     output_schema_path = Path(output) / "yuntu-ai-analysis.schema.json"
     write_json_atomically(_analysis_output_schema(fact_pack), output_schema_path)
     manifest = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "executionMode": "single_model_call",
         "sharedContext": {
             "filters": fact_pack["filters"],
@@ -1016,11 +1013,14 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
         "source_scope": "brand_top_n",
         "requested_top_n": brand_top_n,
         "brands": {
-            brand: _ranking_scope_facts(
-                [list_by_id[item["material_id"]] for item in group["topMaterials"]],
-                source_scope="brand_top_n",
-                requested_top_n=brand_top_n,
-            )
+            brand: {
+                **_ranking_scope_facts(
+                    [list_by_id[item["material_id"]] for item in group["topMaterials"]],
+                    source_scope="brand_top_n",
+                    requested_top_n=brand_top_n,
+                ),
+                "audienceFacts": group["people"],
+            }
             for brand, group in combination.get("brands", {}).items()
         },
     }
@@ -1061,7 +1061,7 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
             limit=len(ai_brand_records) or 1,
         )
     fact_pack = {
-        "schemaVersion": 4,
+        "schemaVersion": 5,
         "filters": manifest.get("filters", {}),
         "selectedMaterials": selected,
         "rejectedMaterials": rejected,

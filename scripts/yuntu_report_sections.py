@@ -23,14 +23,8 @@ def render_top_material_combination(
     presentation=None,
 ):
     if isinstance(presentation, dict) and presentation.get("brandPanels"):
-        executive = presentation.get("executiveInsight", {})
         comparison = presentation.get("brandComparisonInsight", {})
         value = {
-            "executiveSummary": {"summary": executive.get("text", "")},
-            "overallConclusions": [
-                {"dimension": item.get("dimension", ""), "summary": item.get("text", "")}
-                for item in presentation.get("overallInsights", [])
-            ],
             "brandConclusions": [],
             "brandComparisonConclusion": {"summary": comparison.get("text", "")},
         }
@@ -82,15 +76,21 @@ def render_top_material_combination(
         + '<p class="brand-classification-note">品牌归属：本次榜单标题匹配；分析范围：同一榜单 TOP1000 内的品牌 '
         + esc(top_n_label)
         + '</p>'
-        + '<p>' + esc(generic_text(item[brand_summary_fields["data"]])) + "</p>"
+        + "".join(
+            '<p class="brand-summary brand-summary-' + esc(dimension) + '">'
+            + '<strong class="brand-summary-label">'
+            + esc(dimension_labels[dimension])
+            + '：</strong>'
+            + esc(generic_text(item[brand_summary_fields[dimension]]))
+            + "</p>"
+            for dimension in dimensions
+            if generic_text(item.get(brand_summary_fields[dimension]))
+        )
         + "</article>"
         for index, item in enumerate(ordered_brands)
     )
     return (
-        '<article class="top-material-executive yuntu-content-card"><h3>综合结论</h3><p>'
-        + esc(generic_text(value["executiveSummary"]["summary"]))
-        + "</p></article>"
-        + '<div class="top-material-brands yuntu-content-card"><h3>各品牌榜单 '
+        '<div class="top-material-brands yuntu-content-card"><h3>各品牌榜单 '
         + esc(top_n_label)
         + ' 分析</h3>'
         + '<div class="brand-tabs" role="tablist" aria-label="各品牌榜单 '

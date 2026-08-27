@@ -81,7 +81,7 @@ class YuntuReportTests(unittest.TestCase):
             )
 
         self.assertEqual(status, 0)
-        self.assertEqual(presentation["presentationSchemaVersion"], 1)
+        self.assertEqual(presentation["presentationSchemaVersion"], 2)
         self.assertEqual(report_data["presentation"], presentation)
 
     def test_load_analysis_adapts_legacy_chapter02_scope_insights(self):
@@ -161,8 +161,9 @@ class YuntuReportTests(unittest.TestCase):
         source = MODULE_PATH.read_text(encoding="utf-8")
         component = (ROOT / "scripts" / "yuntu_report_sections.py").read_text(encoding="utf-8")
 
-        self.assertIn('class="top-material-executive yuntu-content-card"', component)
+        self.assertNotIn('class="top-material-executive yuntu-content-card"', component)
         self.assertIn('class="brand-tabs"', component)
+        self.assertIn("brand-summary-label", component)
         self.assertNotIn('def top_material_combination_cards(value):', source)
 
     def test_audience_renderer_owns_its_markup(self):
@@ -434,9 +435,9 @@ class YuntuReportTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(data["status"], "complete")
         for rendered in (markdown, html):
+            self.assertNotIn("综合结论", rendered)
             self.assertNotIn("TOP1000 整体分析", rendered)
             self.assertNotIn("从数据维度看", rendered)
-            self.assertNotIn("从人群维度看", rendered)
             self.assertNotIn("从营销卖点维度看", rendered)
             self.assertNotIn("人群标签是重叠标签，不是真实人群分布，不能相加为 100%。", rendered)
             self.assertIn("各品牌榜单 Top N 分析", rendered)
@@ -445,6 +446,10 @@ class YuntuReportTests(unittest.TestCase):
             self.assertIn("燕之屋", rendered)
             self.assertIn("品牌间差异总结", rendered)
             self.assertIn("真实品牌差异结论", rendered)
+            self.assertIn("素材列表数据", rendered)
+            self.assertNotIn("素材列表数据分析", rendered)
+            self.assertIn("人群维度", rendered)
+            self.assertIn("人群结构以都市女性为主。", rendered)
             self.assertNotIn("旧版兼容字段", rendered)
             self.assertNotIn("查看数据依据", rendered)
             self.assertNotIn('<details class="evidence-details">', rendered)
@@ -495,7 +500,7 @@ class YuntuReportTests(unittest.TestCase):
                 with self.assertRaisesRegex(report.YuntuReportError, "script_insights"):
                     report._load_html_template()
 
-    def test_render_report_rejects_top_material_combination_without_executive_summary(self):
+    def test_render_report_accepts_top_material_combination_without_executive_summary(self):
         report = load_module()
         analysis = self.analysis_json()
         analysis["topMaterialCombination"].pop("executiveSummary")
@@ -503,8 +508,104 @@ class YuntuReportTests(unittest.TestCase):
             root = Path(directory)
             analysis_path = root / "analysis.json"
             analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(report.YuntuReportError, "executiveSummary"):
-                report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertNotIn("综合结论", rendered)
+
+    def test_render_report_keeps_schema_v4_brand_data_compatible_without_people_summary(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        for item in analysis["topMaterialCombination"]["brandConclusions"]:
+            item.pop("peopleSummary")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack={"schemaVersion": 4},
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertIn("素材列表数据", rendered)
+        self.assertNotIn("素材列表数据分析", rendered)
+        self.assertNotIn("人群维度", rendered)
+
+    def test_render_report_rejects_brand_conclusion_without_people_summary(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        analysis["topMaterialCombination"]["brandConclusions"][0].pop(
+            "peopleSummary"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(report.YuntuReportError, "peopleSummary"):
+                report.render_report(
+                    analysis_json=analysis_path,
+                    output_dir=root / "final-report",
+                )
+
+    def test_new_chapter01_contract_requires_four_metrics_and_real_audience_label(self):
+        report = load_module()
+        analysis = {
+            "topMaterialCombination": {
+                "brandConclusions": [
+                    {
+                        "brand": "小仙炖",
+                        "dataSummary": "Top 30 累计曝光 100 万，CTR 2%、CVR 3%、3 秒播放率 40%。",
+                        "peopleSummary": "新锐白领标签覆盖较高。",
+                        "material_ids": ["101"],
+                    }
+                ]
+            }
+        }
+        fact_pack = {
+            "schemaVersion": 5,
+            "industryTop1000Facts": {"source_scope": "industry_top1000"},
+            "filters": {"brands": ["小仙炖"]},
+            "brandTopNFacts": {
+                "brands": {
+                    "小仙炖": {
+                        "source_scope": "brand_top_n",
+                        "sample_count": 1,
+                        "materials": [{"material_id": "101"}],
+                        "audienceFacts": {
+                            "coverageIsOverlapping": True,
+                            "age": [],
+                            "gender": [],
+                            "crowd": [{"label": "新锐白领"}],
+                        },
+                    }
+                }
+            },
+        }
+
+        report._validate_ranking_scope_contract(analysis, fact_pack)
+
+        analysis["topMaterialCombination"]["brandConclusions"][0][
+            "dataSummary"
+        ] = "Top 30 累计曝光 100 万。"
+        with self.assertRaisesRegex(report.YuntuReportError, "3-second play rate"):
+            report._validate_ranking_scope_contract(analysis, fact_pack)
+
+        analysis["topMaterialCombination"]["brandConclusions"][0][
+            "dataSummary"
+        ] = "Top 30 累计曝光 100 万，CTR 2%、CVR 3%、3 秒播放率 40%。"
+        analysis["topMaterialCombination"]["brandConclusions"][0][
+            "peopleSummary"
+        ] = "目标标签覆盖较高。"
+        with self.assertRaisesRegex(report.YuntuReportError, "audience facts"):
+            report._validate_ranking_scope_contract(analysis, fact_pack)
 
     def test_render_report_renders_section_scope_labels_without_deep_frame_coverage(self):
         report = load_module()
@@ -556,8 +657,8 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("品牌筛选 TOP30", rendered)
         self.assertNotIn("各品牌 TOP30", rendered)
         self.assertNotIn("TOP30", markdown)
-        self.assertIn('<h3>综合结论</h3>', rendered)
-        self.assertIn("综合结论：榜单、人群、卖点和已取得详情共同指向明确的内容机会。", rendered)
+        self.assertNotIn('<h3>综合结论</h3>', rendered)
+        self.assertNotIn("综合结论：榜单、人群、卖点和已取得详情共同指向明确的内容机会。", rendered)
         self.assertIn('class="brand-classification-note">品牌归属：本次榜单标题匹配；分析范围：同一榜单 TOP1000 内的品牌 Top 30</p>', rendered)
 
     def test_chapter01_renders_brand_metric_facts_instead_of_overall_block(self):
@@ -606,7 +707,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("CVR 中位数 4.56%", rendered)
         self.assertNotIn("3 秒播放率中位数 32.10%", rendered)
 
-    def test_chapter01_executive_uses_shared_card_style_without_left_rule(self):
+    def test_chapter01_omits_executive_card_style(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -651,7 +752,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("TOP30 素材组合结论", rendered)
         self.assertNotIn("来源：Top1000 榜单数据", rendered)
         self.assertNotIn("基于筛选品牌集合与标题匹配品牌", rendered)
-        self.assertEqual(rendered.count(' yuntu-content-card"'), 3)
+        self.assertEqual(rendered.count(' yuntu-content-card"'), 2)
         self.assertIn(".unified-report .report-shell", rendered)
         self.assertIn("data-unified-report-ready", rendered)
         self.assertNotIn('rel="stylesheet"', rendered)
@@ -988,7 +1089,7 @@ class YuntuReportTests(unittest.TestCase):
     def test_render_report_rejects_evidence_less_conclusion(self):
         report = load_module()
         analysis = self.analysis_json()
-        del analysis["topMaterialCombination"]["executiveSummary"]["evidence"]
+        del analysis["topMaterialCombination"]["brandConclusions"][0]["evidence"]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "analysis.json"
             path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
@@ -1012,16 +1113,12 @@ class YuntuReportTests(unittest.TestCase):
     def test_render_report_rejects_audit_content_in_user_readable_summaries(self):
         report = load_module()
         for field, value in (
-            ("summary", "查看数据依据"),
             ("dataSummary", "证据：{\"metric\": \"ctr\"}"),
+            ("peopleSummary", "查看数据依据"),
         ):
             with self.subTest(field=field):
                 analysis = self.analysis_json()
-                target = (
-                    analysis["topMaterialCombination"]["executiveSummary"]
-                    if field == "summary"
-                    else analysis["topMaterialCombination"]["brandConclusions"][0]
-                )
+                target = analysis["topMaterialCombination"]["brandConclusions"][0]
                 target[field] = value
                 with tempfile.TemporaryDirectory() as directory:
                     path = Path(directory) / "analysis.json"

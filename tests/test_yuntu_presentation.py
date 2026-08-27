@@ -84,7 +84,7 @@ class YuntuPresentationTests(unittest.TestCase):
         chapter02_ai_facts = copy.deepcopy(chapter02_facts)
         chapter02_ai_facts["WONDERLAB/万益蓝"]["marketingDashboard"]["categories"][0]["occurrenceCount"] = 1
         return {
-            "schemaVersion": 4,
+            "schemaVersion": 5,
             "filters": {"brands": ["WONDERLAB/万益蓝"], "startDate": "2026-07-30", "endDate": "2026-08-05"},
             "selectedMaterials": [{"material_id": "101", "rank": 1}, {"material_id": "102", "rank": 2}],
             "materialFacts": material_facts,
@@ -132,7 +132,7 @@ class YuntuPresentationTests(unittest.TestCase):
 
         payload = build_yuntu_presentation(analysis, facts)
 
-        self.assertEqual(payload["presentationSchemaVersion"], 1)
+        self.assertEqual(payload["presentationSchemaVersion"], 2)
         self.assertEqual(payload["report"]["sections"], ["chapter01", "chapter02", "chapter04", "chapter05"])
         self.assertIs(payload, validate_yuntu_presentation(payload))
         json.dumps(payload, ensure_ascii=False)
@@ -158,20 +158,24 @@ class YuntuPresentationTests(unittest.TestCase):
     def test_projects_chapter01_top_material_conclusions(self):
         analysis = self.analysis()
         analysis["topMaterialCombination"] = {
-            "executiveSummary": {"summary": "行业头部素材以清晰卖点驱动理解。", "evidence": [{"material_id": "101"}]},
             "overallConclusions": [{"dimension": "data", "summary": "TOP1000 中高表现素材呈现稳定。", "evidence": [{"material_id": "101"}]}],
-            "brandConclusions": [{"brand": "WONDERLAB/万益蓝", "classificationSource": "title_match", "dataSummary": "品牌 Top30 以产品解释为主。", "evidence": [{"material_id": "101"}]}],
+            "brandConclusions": [{"brand": "WONDERLAB/万益蓝", "classificationSource": "title_match", "dataSummary": "品牌 Top30 的累计曝光、CTR、CVR 与 3 秒播放率呈现稳定。", "peopleSummary": "品牌 Top30 以都市女性标签为主。", "evidence": [{"material_id": "101"}]}],
             "brandComparisonConclusion": {"summary": "品牌间存在素材表达差异。", "evidence": [{"material_id": "101"}]},
         }
 
         payload = build_yuntu_presentation(analysis, self.fact_pack())
 
         chapter = payload["chapters"]["chapter01"]
+        self.assertEqual(payload["presentationSchemaVersion"], 2)
         self.assertEqual(payload["report"]["sections"], ["chapter01", "chapter02", "chapter04", "chapter05"])
-        self.assertEqual(chapter["executiveInsight"]["text"], "行业头部素材以清晰卖点驱动理解。")
-        self.assertEqual(chapter["overallInsights"][0]["dimension"], "data")
+        self.assertNotIn("executiveInsight", chapter)
+        self.assertNotIn("overallInsights", chapter)
         self.assertEqual(chapter["brandPanels"][0]["brand"], "WONDERLAB/万益蓝")
         self.assertEqual(chapter["brandPanels"][0]["topN"], 30)
+        self.assertEqual(
+            [item["dimension"] for item in chapter["brandPanels"][0]["insights"]],
+            ["data", "people"],
+        )
         brand_tabs = payload["interactions"]["chapter01-brand-tabs"]
         self.assertEqual(brand_tabs["items"], chapter["brandTabs"])
         self.assertEqual(brand_tabs["defaultItemId"], chapter["brandTabs"][0]["id"])

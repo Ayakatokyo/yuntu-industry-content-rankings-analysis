@@ -5,7 +5,7 @@ import math
 from pathlib import PurePosixPath
 
 
-PRESENTATION_SCHEMA_VERSION = 1
+PRESENTATION_SCHEMA_VERSION = 2
 REPORT_TITLE = "云图行业内容榜单分析"
 SECTION_IDS = ("chapter01", "chapter02", "chapter04", "chapter05")
 REPORT_STATUSES = {"complete", "partial", "unavailable"}
@@ -279,16 +279,11 @@ def _chapter01_insight(item, *, dimension="", brand=""):
 def _project_chapter01(analysis, fact_pack):
     combination = analysis.get("topMaterialCombination", {}) if isinstance(analysis, dict) else {}
     if not combination:
-        return {"executiveInsight": {}, "overallInsights": [], "brandTabs": [], "brandPanels": [], "brandComparisonInsight": {}}
+        return {"brandTabs": [], "brandPanels": [], "brandComparisonInsight": {}}
     if not isinstance(combination, dict):
         raise YuntuPresentationError("chapter01 combination is invalid")
     requested_top_n = (fact_pack.get("brandTopNFacts") or {}).get("requested_top_n")
     top_n = requested_top_n if isinstance(requested_top_n, int) and requested_top_n > 0 else None
-    executive = _chapter01_insight(combination.get("executiveSummary", {}))
-    overall = [
-        _chapter01_insight(item)
-        for item in (combination.get("overallConclusions") or [])
-    ]
     brands = combination.get("brandConclusions", [])
     if not isinstance(brands, list):
         raise YuntuPresentationError("chapter01 brand conclusions are invalid")
@@ -304,7 +299,7 @@ def _project_chapter01(analysis, fact_pack):
             "topN": top_n,
             "insights": [
                 {"text": _text(item.get(field)), "dimension": key, "brand": brand, "evidence": deepcopy(item.get("evidence", []))}
-                for key, field in (("data", "dataSummary"), ("people", "peopleSummary"), ("marketing", "marketingSummary"))
+                for key, field in (("data", "dataSummary"), ("people", "peopleSummary"))
                 if _text(item.get(field))
             ],
         })
@@ -313,8 +308,6 @@ def _project_chapter01(analysis, fact_pack):
     comparison = _chapter01_insight(combination.get("brandComparisonConclusion", {}))
     tabs = [{"id": panel["id"], "label": panel["brand"], "panelId": panel["id"]} for panel in panels]
     return {
-        "executiveInsight": executive,
-        "overallInsights": overall,
         "brandTabs": tabs,
         "brandPanels": panels,
         "brandComparisonInsight": comparison,

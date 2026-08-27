@@ -1345,6 +1345,22 @@ body.unified-report {
   font-size: 12px;
 }
 
+.unified-yuntu .brand-summary {
+  margin: 0;
+  line-height: 1.8;
+}
+
+.unified-yuntu .brand-summary + .brand-summary {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--unified-line);
+}
+
+.unified-yuntu .brand-summary-label {
+  margin-right: 4px;
+  color: var(--unified-ink);
+}
+
 .unified-yuntu :is(.brand-tabs,.chapter02-tabs,.highlight-dashboard-tabs){display:flex;flex-wrap:nowrap;gap:18px;max-width:100%;overflow-x:auto;overflow-y:hidden;padding:0 2px 8px;border-bottom:1px solid var(--unified-line);scrollbar-width:thin}
 .unified-yuntu :is(.brand-tab,.chapter02-tabs button,.highlight-dashboard-tabs button){position:relative;flex:0 0 auto;border:0;border-radius:0;background:transparent;color:var(--unified-muted);padding:8px 2px;cursor:pointer;white-space:nowrap;font:inherit}
 .unified-yuntu :is(.brand-tab,.chapter02-tabs button,.highlight-dashboard-tabs button):hover{color:var(--unified-ink)}

@@ -495,25 +495,29 @@ def _model_material_facts(material_facts):
     projected = []
     for fact in material_facts:
         copied = {
-            key: fact[key]
-            for key in (
-                "material_id",
-                "rank",
-                "title",
-                "metrics",
-                "metricComparison",
-                "people_tags",
-                "material_tags",
-                "secondLevelBreakdown",
-                "highlightFrameAvailability",
-            )
-            if key in fact
+            "material_id": str(fact.get("material_id", "")),
+            "secondLevelBreakdown": fact.get("secondLevelBreakdown", {"metrics": []}),
+            "highlightFrames": [],
         }
-        copied["highlightFrames"] = []
         for frame in fact.get("highlightFrames", []):
-            frame_copy = dict(frame)
-            relative_path = str(frame_copy.get("relative_path") or "").replace("\\", "/")
-            frame_copy["image_path"] = f"../{relative_path}" if relative_path else ""
+            frame_copy = {
+                key: frame[key]
+                for key in ("frame_ref", "second", "frame_type", "available")
+                if key in frame
+            }
+            relative_path = str(
+                frame.get("relative_path") or frame.get("image_path") or ""
+            ).replace("\\", "/")
+            if relative_path:
+                frame_copy["image_path"] = (
+                    relative_path
+                    if relative_path.startswith("../")
+                    else f"../{relative_path}"
+                )
+            elif "image_path" not in frame_copy:
+                frame_copy["image_path"] = ""
+            if frame.get("failure_reason"):
+                frame_copy["failure_reason"] = frame["failure_reason"]
             copied["highlightFrames"].append(frame_copy)
         projected.append(copied)
     return projected

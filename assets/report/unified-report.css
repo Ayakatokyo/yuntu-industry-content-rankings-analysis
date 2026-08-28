@@ -769,7 +769,7 @@ body.unified-report {
 .unified-yuntu .material-detail-tabs {
   display: flex;
   flex-wrap: nowrap;
-  gap: 18px;
+  gap: 14px;
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
@@ -817,9 +817,9 @@ body.unified-report {
   content: "";
   display: block;
   position: absolute;
-  right: 0;
-  bottom: -9px;
-  left: 0;
+  right: 12px;
+  bottom: -1px;
+  left: 12px;
   height: 2px;
   background: var(--unified-accent);
 }
@@ -1190,7 +1190,12 @@ body.unified-report {
 }
 
 .unified-yuntu .second-level-section {
-  padding-top: 24px;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.unified-yuntu .second-level-switcher.metric-switch {
+  gap: 14px;
 }
 
 .unified-yuntu .highlight-frame-grid {
@@ -1462,3 +1467,19 @@ body.unified-report {
 .unified-yuntu .marketing-drill-chart .legend-item { padding:3px 4px; font-size:11px; line-height:1.25; }
 .unified-yuntu .marketing-tag-detail-table { width:100%; box-sizing:border-box; }
 @media (max-width:700px) { .unified-yuntu .marketing-drill-primary { grid-template-rows:auto; padding:0 0 12px; } .unified-yuntu .marketing-drill-chart { padding:0; } }
+
+/* Final tab alignment overrides for the rendered Yuntu report. */
+.unified-yuntu :is(.brand-tabs,.chapter02-tabs,.highlight-dashboard-tabs,.highlight-brand-tabs) {
+  gap: 12px;
+  padding: 0 2px 8px;
+}
+
+.unified-yuntu :is(.brand-tab,.chapter02-tabs button,.highlight-dashboard-tabs button,.highlight-brand-tabs button)[aria-selected="true"]::after {
+  right: 12px;
+  bottom: -1px;
+  left: 12px;
+}
+
+.unified-yuntu .second-level-switcher.metric-switch {
+  gap: 14px;
+}

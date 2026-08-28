@@ -538,7 +538,7 @@ def render_material_deep_dive(
         payload = html_module.escape(json_module.dumps(ordered_metrics, ensure_ascii=False), quote=True)
         body_id = "second-level-body-" + str(material_index)
         return ('<div class="second-level-timeline raw-fact-card" data-second-level-timeline data-second-level-metrics="' + payload + '">'
-            + '<div class="collapsible-head"><button class="collapsible-toggle" type="button" data-collapsible-toggle aria-expanded="true" aria-controls="' + esc(body_id) + '"><span class="collapsible-toggle-action">收起数据</span></button></div>'
+            + '<div class="collapsible-head"><button class="collapsible-toggle" type="button" data-collapsible-toggle data-collapsible-expanded-label="收起秒级拆解数据" data-collapsible-collapsed-label="展开秒级拆解数据" aria-expanded="true" aria-controls="' + esc(body_id) + '"><span class="collapsible-toggle-action">收起秒级拆解数据</span></button></div>'
             + '<div class="collapsible-body" id="' + esc(body_id) + '"><b class="collapsible-body-title">秒级拆解</b>'
             + '<div class="second-level-switcher metric-switch" role="group" aria-label="秒级拆解指标">' + buttons + "</div>"
             + '<div class="second-level-chart-mount" aria-live="polite"></div>'

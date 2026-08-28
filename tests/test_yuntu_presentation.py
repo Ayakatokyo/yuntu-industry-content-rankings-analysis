@@ -138,6 +138,21 @@ class YuntuPresentationTests(unittest.TestCase):
         json.dumps(payload, ensure_ascii=False)
         self.assertEqual(before, json.dumps({"analysis": analysis, "facts": facts}, ensure_ascii=False, sort_keys=True))
 
+    def test_chapter05_uses_single_panel_source_without_frame_copy_fields(self):
+        payload = build_yuntu_presentation(self.analysis(), self.fact_pack())
+        chapter = payload["chapters"]["chapter05"]
+
+        self.assertNotIn("materials", payload)
+        self.assertEqual(
+            chapter["materialTabs"],
+            payload["interactions"]["chapter05-material-tabs"]["items"],
+        )
+        frame = chapter["panels"][0]["frames"][0]
+        self.assertNotIn("materialId", frame)
+        self.assertNotIn("rank", frame)
+        self.assertNotIn("title", frame)
+        self.assertNotIn("caption", frame)
+
     def test_chapter02_preserves_the_ai_and_chart_dual_scope_contract(self):
         payload = build_yuntu_presentation(self.analysis(), self.fact_pack())
         scopes = {scope["id"]: scope for scope in payload["scopes"]}

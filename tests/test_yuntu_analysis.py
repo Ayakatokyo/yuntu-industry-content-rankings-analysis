@@ -348,9 +348,13 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(
             deep_dive["evidence"]["materialFacts"][0]["material_id"], "1"
         )
+        deep_fact = deep_dive["evidence"]["materialFacts"][0]
         self.assertEqual(
-            deep_dive["evidence"]["materialFacts"][0]["material_tags"],
-            ["产品展示"],
+            set(deep_fact), {"material_id", "secondLevelBreakdown", "highlightFrames"}
+        )
+        self.assertEqual(
+            set(deep_fact["highlightFrames"][0]),
+            {"frame_ref", "second", "frame_type", "available", "image_path"},
         )
         self.assertEqual(
             deep_dive["evidence"]["materialFacts"][0]["secondLevelBreakdown"]["metrics"][2],

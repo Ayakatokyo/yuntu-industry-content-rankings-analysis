@@ -351,6 +351,19 @@ def _frame_card(frame):
     }
 
 
+def _chapter05_frame_card(frame):
+    """Project only frame facts that cannot be inherited from its material panel."""
+    return {
+        "frameRef": frame["frame_ref"],
+        "available": True,
+        "relativePath": frame["relative_path"],
+        "second": frame.get("second"),
+        "frameType": _text(frame.get("frame_type")),
+        "peakRank": frame.get("peak_rank"),
+        "clickValue": frame.get("click_value"),
+    }
+
+
 def _project_scoped_highlight_brands(scoped_brands, available, brand_order):
     """Project model-authored brand-scoped highlight groups without copying conclusions."""
     if not isinstance(scoped_brands, list) or not scoped_brands:
@@ -527,9 +540,7 @@ def _project_chapter05(analysis, fact_pack):
                 copied = deepcopy(frame)
                 copied["relative_path"] = _safe_relative_frame_path(copied.get("relative_path"))
                 copied["material_id"] = material_id
-                copied["rank"] = fact.get("rank", "-")
-                copied["title"] = _text(fact.get("title"))
-                frames.append(_frame_card(copied))
+                frames.append(_chapter05_frame_card(copied))
             elif isinstance(frame, dict):
                 reason = _text(frame.get("failure_reason") or frame.get("missing_reason") or frame.get("reason"))
                 if reason and reason not in frame_failures:
@@ -602,7 +613,6 @@ def build_yuntu_presentation(analysis, fact_pack, *, report_meta=None):
         "report": _report_metadata(fact_pack, report_meta),
         "scopes": scopes,
         "chapters": {"chapter01": chapter01, "chapter02": chapter02, "chapter04": chapter04, "chapter05": chapter05},
-        "materials": deepcopy(chapter05["panels"]),
         "interactions": {"chapter01-brand-tabs": {"id": "chapter01-brand-tabs", "type": "tab-list", "items": chapter01["brandTabs"], "defaultItemId": chapter01["brandTabs"][0]["id"] if chapter01["brandTabs"] else "", "keyboard": ["ArrowLeft", "ArrowRight", "Home", "End"]}, **chapter02_interactions, "chapter04-frame-lightbox": {"id": "chapter04-frame-lightbox", "type": "frame-lightbox"}, **chapter05_interactions},
         "extensions": {
             "yuntu": {

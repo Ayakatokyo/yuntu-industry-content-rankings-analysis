@@ -84,6 +84,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertEqual(presentation["presentationSchemaVersion"], 3)
         self.assertEqual(report_data["presentation"], presentation)
         self.assertNotIn("categories", presentation["chapters"]["chapter04"])
+        self.assertNotIn("materials", presentation)
 
     def test_load_analysis_adapts_legacy_chapter02_scope_insights(self):
         report = load_module()
@@ -1251,7 +1252,11 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('class="deep-frame-grid fixed-six"', rendered)
         self.assertIn('class="second-level-timeline raw-fact-card"', rendered)
         self.assertIn('data-collapsible-toggle', rendered)
-        self.assertIn('class="collapsible-toggle-action">收起数据</span>', rendered)
+        self.assertIn('data-collapsible-expanded-label="收起秒级拆解数据"', rendered)
+        self.assertIn('data-collapsible-collapsed-label="展开秒级拆解数据"', rendered)
+        self.assertIn('class="collapsible-toggle-action">收起秒级拆解数据</span>', rendered)
+        self.assertNotIn('class="collapsible-toggle-action">收起数据</span>', rendered)
+        self.assertNotIn('class="collapsible-toggle-action">收起/展开秒级拆解数据</span>', rendered)
         self.assertEqual(rendered.count('class="second-level-chart"'), 0)
         deep_dive_section = rendered.split('id="material-deep-dive"', 1)[1]
         self.assertIn("0s · 点击指数 -", deep_dive_section)
@@ -1269,6 +1274,28 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("#### 不建议照搬", markdown)
         self.assertNotIn("可结合画面主体、字幕和产品露出查看节奏分布", rendered)
         self.assertNotIn("未输出观察。", markdown)
+
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+        self.assertIn("gap: 12px;", css)
+        self.assertIn("border-bottom: 1px solid var(--unified-line);", css)
+        self.assertIn("padding: 0 2px 8px;", css)
+        self.assertIn("bottom: -1px;", css)
+        self.assertIn("border-top: 0;", css)
+        self.assertIn(".unified-yuntu .second-level-switcher.metric-switch", css)
+        metric_rule = css.split(".unified-yuntu .second-level-switcher.metric-switch", 1)[1].split("}", 1)[0]
+        self.assertIn("gap: 14px;", metric_rule)
+        self.assertIn(
+            ".unified-yuntu :is(.brand-tabs,.chapter02-tabs,.highlight-dashboard-tabs,.highlight-brand-tabs) {\n  gap: 12px;\n  padding: 0 2px 8px;",
+            css,
+        )
+        self.assertIn(
+            '.unified-yuntu :is(.brand-tab,.chapter02-tabs button,.highlight-dashboard-tabs button,.highlight-brand-tabs button)[aria-selected="true"]::after {\n  right: 12px;\n  bottom: -1px;\n  left: 12px;',
+            css,
+        )
+        self.assertIn("bottom: -1px;", css)
+        self.assertIn(".unified-yuntu .material-detail-tabs {", css)
+        material_tabs_rule = css.split(".unified-yuntu .material-detail-tabs {", 1)[1].split("}", 1)[0]
+        self.assertIn("gap: 14px;", material_tabs_rule)
 
     def test_render_report_uses_qianchuan_style_frame_first_deep_dive_layout(self):
         report = load_module()
@@ -1947,7 +1974,8 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn(".script-drill-moving-bar", css)
         self.assertIn(".highlight-frame-card[hidden]", css)
         self.assertIn(".second-level-section {", css)
-        self.assertIn("padding-top: 24px;", css)
+        self.assertIn("border-top: 0;", css)
+        self.assertIn("padding-top: 0;", css)
 
     def test_unified_report_mobile_navigation_does_not_force_page_overflow(self):
         css = (ROOT / "assets" / "report" / "unified-report.css").read_text(

@@ -83,6 +83,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(presentation["presentationSchemaVersion"], 3)
         self.assertEqual(report_data["presentation"], presentation)
+        self.assertNotIn("categories", presentation["chapters"]["chapter04"])
 
     def test_load_analysis_adapts_legacy_chapter02_scope_insights(self):
         report = load_module()

@@ -344,6 +344,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             highlight["evidence"]["visualAssets"][0]["frame_source"],
             "reused_local_extracted_frame",
         )
+        self.assertEqual(highlight["evidence"]["visualAssets"][0]["brand"], "其他品牌")
         self.assertEqual(
             deep_dive["evidence"]["materialFacts"][0]["material_id"], "1"
         )
@@ -365,6 +366,41 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("visualAssets", prompt)
         self.assertIn("实际查看每张成功 JPEG", prompt)
         self.assertIn("主体、人物、产品、动作、场景、构图和可见字幕", prompt)
+
+    def test_prepare_analysis_does_not_emit_legacy_top_level_audience_rank_records(self):
+        analysis = load_module()
+        records = [{
+            "material_id": "1", "title": "素材", "rank": 1,
+            "metrics": {"ctr": 0.2, "show_cnt": 100},
+            "people_tags": ["都市女性"], "material_tags": [], "data_availability": {},
+        }]
+        selected = [{"rank": 1, "material_id": "1", "detailRecordPath": "normalized/detail-records/1.json"}]
+        details = {"1": {"material_id": "1", "high_points": [], "loss_points": [], "data_availability": {}}}
+        captured = {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            original = analysis._report_data
+
+            def capture(fact_pack):
+                captured.update(fact_pack)
+                return original(fact_pack)
+
+            with mock.patch.object(analysis, "_report_data", side_effect=capture):
+                analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
+
+        self.assertNotIn("audienceRankRecords", captured)
+        self.assertNotIn("audienceFacts", captured)
+        self.assertNotIn("marketingFacts", captured)
+        self.assertNotIn("highlightFrameFacts", captured)
+
+    def test_highlight_schema_requires_structured_common_patterns(self):
+        analysis = load_module()
+        schema = analysis._highlight_output_schema()
+        items = schema["properties"]["groups"]["items"]["properties"]["common_patterns"]["items"]
+        self.assertEqual(items["type"], "object")
+        self.assertNotIn("anyOf", items)
 
     def test_prepare_analysis_writes_report_projection_and_single_call_unit_inputs(self):
         analysis = load_module()

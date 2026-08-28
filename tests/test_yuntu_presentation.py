@@ -212,7 +212,9 @@ class YuntuPresentationTests(unittest.TestCase):
 
     def test_projects_each_available_highlight_frame_once(self):
         payload = build_yuntu_presentation(self.analysis(), self.fact_pack())
-        categories = payload["chapters"]["chapter04"]["categories"]
+        chapter04 = payload["chapters"]["chapter04"]
+        self.assertNotIn("categories", chapter04)
+        categories = chapter04["brands"][0]["categories"]
         refs = [frame["frameRef"] for category in categories for frame in category["frames"]]
 
         self.assertEqual(len(refs), 4)
@@ -230,6 +232,56 @@ class YuntuPresentationTests(unittest.TestCase):
         refs = [frame["frameRef"] for category in brands[1]["categories"] for frame in category["frames"]]
         self.assertEqual(set(refs), {"highlight:101:cover:0", "highlight:101:click_peak:2"})
         self.assertTrue(all(frame["brand"] == "小仙炖" for category in brands[1]["categories"] for frame in category["frames"]))
+
+    def test_projects_brand_scoped_highlight_insights_without_copying(self):
+        facts = self.fact_pack()
+        facts["filters"]["brands"] = ["小仙炖", "五个女博士"]
+        facts["materialFacts"][0]["title"] = "小仙炖测试素材 101"
+        facts["materialFacts"][1]["title"] = "五个女博士测试素材 102"
+        analysis = self.analysis()
+        analysis["highlightDashboard"] = {
+            "brands": [
+                {
+                    "brand": "全品牌",
+                    "groups": [{
+                        "category": "portrait",
+                        "frame_refs": [
+                            "highlight:101:cover:0", "highlight:101:click_peak:2",
+                            "highlight:102:cover:0", "highlight:102:click_peak:2",
+                        ],
+                        "common_patterns": [{"title": "全品牌主体", "body": "全品牌主体清晰。", "frame_refs": [
+                            "highlight:101:cover:0", "highlight:101:click_peak:2",
+                            "highlight:102:cover:0", "highlight:102:click_peak:2",
+                        ]}],
+                        "derivative_directions": [{"title": "全品牌方向", "body": "全品牌验证主体前置。", "frame_refs": ["highlight:101:cover:0"]}],
+                    }],
+                },
+                {
+                    "brand": "小仙炖",
+                    "groups": [{
+                        "category": "portrait",
+                        "frame_refs": ["highlight:101:cover:0", "highlight:101:click_peak:2"],
+                        "common_patterns": [{"title": "小仙炖主体", "body": "小仙炖主体清晰。", "frame_refs": ["highlight:101:cover:0", "highlight:101:click_peak:2"]}],
+                        "derivative_directions": [{"title": "小仙炖方向", "body": "小仙炖验证人物开场。", "frame_refs": ["highlight:101:cover:0"]}],
+                    }],
+                },
+                {
+                    "brand": "五个女博士",
+                    "groups": [{
+                        "category": "portrait",
+                        "frame_refs": ["highlight:102:cover:0", "highlight:102:click_peak:2"],
+                        "common_patterns": [{"title": "五个女博士主体", "body": "五个女博士主体清晰。", "frame_refs": ["highlight:102:cover:0", "highlight:102:click_peak:2"]}],
+                        "derivative_directions": [{"title": "五个女博士方向", "body": "五个女博士验证产品衔接。", "frame_refs": ["highlight:102:cover:0"]}],
+                    }],
+                },
+            ]
+        }
+
+        payload = build_yuntu_presentation(analysis, facts)
+        brands = payload["chapters"]["chapter04"]["brands"]
+        self.assertEqual([item["brand"] for item in brands[:3]], ["全品牌", "小仙炖", "五个女博士"])
+        self.assertEqual(brands[1]["categories"][0]["commonConclusion"][0]["title"], "小仙炖主体")
+        self.assertEqual(brands[2]["categories"][0]["commonConclusion"][0]["title"], "五个女博士主体")
 
     def test_rejects_duplicate_highlight_frame_reference(self):
         analysis = self.analysis()

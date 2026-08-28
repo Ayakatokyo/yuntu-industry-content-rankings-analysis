@@ -12,6 +12,7 @@ from yuntu_highlights import (
     load_highlights_manifest,
     write_highlights_manifest,
 )
+from yuntu_highlight_export import match_brand_from_title
 from yuntu_top_materials import (
     build_audience_dashboard,
     build_marketing_dashboard,
@@ -147,20 +148,6 @@ def _ranking_scope_facts(records, *, source_scope):
         "metrics": metrics,
         "materials": [_ranking_material_fact(record) for record in selected],
     }
-
-
-def _audience_rank_records(records, *, limit=1000):
-    return [
-        {
-            "material_id": str(record.get("material_id", "")),
-            "rank": record.get("rank"),
-            "people_tags": [
-                tag for tag in record.get("people_tags", [])
-                if isinstance(tag, str) and tag
-            ],
-        }
-        for record in select_top_materials(records, limit=limit)
-    ]
 
 
 def _metric_comparison(record, pool_records):
@@ -379,8 +366,7 @@ def _model_input_sections(
     brand_facts,
     chapter02_ai_facts,
     candidate_pool,
-    audience_dashboard,
-    tag_insights,
+    brands,
     trend_summary,
     report_scopes,
 ):
@@ -393,6 +379,7 @@ def _model_input_sections(
                 {
                     "material_id": str(fact["material_id"]),
                     "title": fact["title"],
+                    "brand": match_brand_from_title(fact["title"], brands),
                     "rank": fact["rank"],
                     "frame_ref": frame.get("frame_ref"),
                     "second": frame.get("second"),
@@ -432,28 +419,6 @@ def _model_input_sections(
             source_scope="all_brands",
         ),
         "chapter02AiFacts": chapter02_ai_facts,
-        "audienceFacts": {
-            "labelsMayOverlap": True,
-            "notice": "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。",
-            "dashboard": audience_dashboard,
-            "materials": [
-                {
-                    "material_id": str(fact["material_id"]),
-                    "people_tags": fact["people_tags"],
-                }
-                for fact in material_facts
-            ],
-        },
-        "marketingFacts": {
-            "tagInsights": tag_insights,
-            "materials": [
-                {
-                    "material_id": str(fact["material_id"]),
-                    "material_tags": fact["material_tags"],
-                }
-                for fact in material_facts
-            ],
-        },
         "secondLevelFacts": {
             "trendSummary": trend_summary,
             "materials": [
@@ -464,22 +429,6 @@ def _model_input_sections(
                 for fact in material_facts
             ],
         },
-        "highlightFrameFacts": [
-            {
-                key: asset[key]
-                for key in (
-                    "material_id",
-                    "frame_ref",
-                    "second",
-                    "frame_type",
-                    "peak_rank",
-                    "click_value",
-                    "available",
-                    "failure_reason",
-                )
-            }
-            for asset in visual_assets
-        ],
         "visualAssets": visual_assets,
         "highlightAllBrandFacts": {
             "source_scope": "all_brands",
@@ -663,50 +612,34 @@ def _highlight_output_schema():
             "frame_refs": {"type": "array", "items": {"type": "string"}},
         },
     }
+    group_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["category", "frame_refs", "common_patterns", "derivative_directions"],
+        "properties": {
+            "category": {"type": "string", "enum": ["portrait", "product", "other"]},
+            "frame_refs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+            "common_patterns": {"type": "array", "minItems": 1, "items": direction_schema},
+            "derivative_directions": {"type": "array", "items": direction_schema},
+        },
+    }
+    brand_scope_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["brand", "groups"],
+        "properties": {
+            "brand": {"type": "string"},
+            "groups": {"type": "array", "minItems": 1, "items": group_schema},
+        },
+    }
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["groups"],
+        "required": ["brands"],
         "properties": {
-            "groups": {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": [
-                        "category",
-                        "frame_refs",
-                        "common_patterns",
-                        "derivative_directions",
-                    ],
-                    "properties": {
-                        "category": {
-                            "type": "string",
-                            "enum": ["portrait", "product", "other"],
-                        },
-                        "frame_refs": {
-                            "type": "array",
-                            "minItems": 1,
-                            "items": {"type": "string"},
-                        },
-                        "common_patterns": {
-                            "type": "array",
-                            "minItems": 1,
-                            "items": {
-                                "anyOf": [
-                                    {"type": "string"},
-                                    direction_schema,
-                                ]
-                            },
-                        },
-                        "derivative_directions": {
-                            "type": "array",
-                            "items": direction_schema,
-                        },
-                    },
-                },
-            }
+            "brands": {"type": "array", "minItems": 1, "items": brand_scope_schema},
+            # Compatibility schema for historical analysis units; new prompts must emit brands.
+            "groups": {"type": "array", "minItems": 1, "items": group_schema},
         },
     }
 
@@ -964,7 +897,6 @@ def prepare_analysis(*, input_dir, output_dir):
     candidate_pool = _candidate_pool(pool_records)
     report_scopes = _report_scopes(pool_records, selected, rejected)
     audience_dashboard = build_audience_dashboard(pool_records)
-    audience_rank_records = _audience_rank_records(pool_records)
     tag_insights = _tag_insights(pool_records, selected_ids)
     trend_summary = _trend_summary(details)
     brands = manifest.get("filters", {}).get("brands", [])
@@ -1031,7 +963,6 @@ def prepare_analysis(*, input_dir, output_dir):
         "candidatePool": candidate_pool,
         "reportScopes": report_scopes,
         "audienceDashboard": audience_dashboard,
-        "audienceRankRecords": audience_rank_records,
         "tagInsights": tag_insights,
         "trendSummary": trend_summary,
         "dataAvailabilitySummary": _availability_summary(material_facts),
@@ -1046,8 +977,7 @@ def prepare_analysis(*, input_dir, output_dir):
             brand_facts,
             chapter02_ai_facts,
             candidate_pool,
-            audience_dashboard,
-            tag_insights,
+            brands,
             trend_summary,
             report_scopes,
         )

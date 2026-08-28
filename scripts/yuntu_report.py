@@ -12,6 +12,7 @@ from string import Template
 from rpa_io import write_json_atomically
 from yuntu_presentation import build_yuntu_presentation
 from yuntu_highlight_export import export_highlight_workbook
+from yuntu_highlight_export import match_brand_from_title
 from yuntu_report_sections import (
     render_audience_insights,
     render_highlight_insights,
@@ -509,7 +510,11 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
         lines.extend(["高光帧已生成，尚未完成视觉分类，因此不输出视觉洞察。", ""])
     else:
         frames_by_ref = {frame["frame_ref"]: frame for frame in successful_frames}
-        for group in dashboard["groups"]:
+        markdown_groups = dashboard.get("groups")
+        if not isinstance(markdown_groups, list):
+            brand_scopes = dashboard.get("brands", [])
+            markdown_groups = brand_scopes[0].get("groups", []) if brand_scopes else []
+        for group in markdown_groups:
             category = {"scene": "other", "text_overlay": "other"}.get(group["category"], group["category"])
             lines.extend([f"### {HIGHLIGHT_CATEGORY_LABELS[category]}", "", "#### 共性洞察", ""])
             patterns = list(group["common_patterns"])
@@ -640,6 +645,69 @@ def _validate_highlight_dashboard(analysis, fact_pack):
                 "highlightDashboard is required when standard highlight frames are available"
             )
         # Historical reports may be re-rendered before visual analysis exists.
+        return
+    scoped_brands = dashboard.get("brands")
+    if scoped_brands is not None:
+        if not isinstance(scoped_brands, list) or not scoped_brands:
+            raise YuntuReportError("highlightDashboard.brands must be a non-empty list")
+        known_refs = {frame["frame_ref"] for frame in successful_frames}
+        brand_order = [
+            str(brand).strip()
+            for brand in (fact_pack.get("filters", {}) or {}).get("brands", [])
+            if str(brand).strip()
+        ]
+        seen_brands = set()
+        for index, scope in enumerate(scoped_brands):
+            if not isinstance(scope, dict) or not isinstance(scope.get("brand"), str):
+                raise YuntuReportError("highlightDashboard brand scopes must be objects")
+            brand = scope["brand"].strip()
+            if not brand or brand in seen_brands:
+                raise YuntuReportError("highlightDashboard brand scopes must be unique")
+            if index == 0 and brand != "全品牌":
+                raise YuntuReportError("highlightDashboard first brand scope must be 全品牌")
+            groups = scope.get("groups")
+            if not isinstance(groups, list) or not groups:
+                raise YuntuReportError("highlightDashboard brand scope groups must be a non-empty list")
+            actual_refs = []
+            categories = []
+            for group in groups:
+                if not isinstance(group, dict):
+                    raise YuntuReportError("highlightDashboard groups items must be objects")
+                category = group.get("category")
+                if category not in HIGHLIGHT_RENDER_CATEGORY_ORDER:
+                    raise YuntuReportError("highlightDashboard brand category is invalid")
+                categories.append(category)
+                frame_refs = group.get("frame_refs")
+                if not isinstance(frame_refs, list) or not frame_refs or not all(isinstance(ref, str) for ref in frame_refs):
+                    raise YuntuReportError("highlightDashboard groups require frame_refs")
+                if not set(frame_refs).issubset(known_refs):
+                    raise YuntuReportError("highlightDashboard brand frame reference is invalid")
+                patterns = group.get("common_patterns")
+                directions = group.get("derivative_directions")
+                if not isinstance(patterns, list) or not patterns or not all(isinstance(item, dict) for item in patterns):
+                    raise YuntuReportError("highlightDashboard brand groups require structured common_patterns")
+                if not isinstance(directions, list) or len(patterns) != len(directions):
+                    raise YuntuReportError("highlightDashboard common_patterns and derivative_directions must have matching counts")
+                for pattern, direction in zip(patterns, directions):
+                    for item, label in ((pattern, "common pattern"), (direction, "derivative direction")):
+                        if not all(isinstance(item.get(key), str) and item[key].strip() for key in ("title", "body")):
+                            raise YuntuReportError(f"highlightDashboard {label} requires title and body")
+                        refs = item.get("frame_refs")
+                        if not isinstance(refs, list) or not refs or not set(refs).issubset(set(frame_refs)):
+                            raise YuntuReportError(f"highlightDashboard {label} frame references are invalid")
+                        _validate_deep_dive_text(item["title"], f"highlightDashboard {label} title")
+                        _validate_deep_dive_text(item["body"], f"highlightDashboard {label} body")
+                actual_refs.extend(frame_refs)
+            if categories != [category for category in HIGHLIGHT_RENDER_CATEGORY_ORDER if category in categories]:
+                raise YuntuReportError("highlightDashboard brand groups must use portrait, product, other order")
+            expected_refs = known_refs if brand == "全品牌" else {
+                frame["frame_ref"]
+                for frame in successful_frames
+                if match_brand_from_title(frame.get("title"), brand_order) == brand
+            }
+            if len(actual_refs) != len(set(actual_refs)) or set(actual_refs) != expected_refs:
+                raise YuntuReportError("highlightDashboard brand scope must classify its frames exactly once")
+            seen_brands.add(brand)
         return
     groups = dashboard.get("groups")
     if not isinstance(groups, list):

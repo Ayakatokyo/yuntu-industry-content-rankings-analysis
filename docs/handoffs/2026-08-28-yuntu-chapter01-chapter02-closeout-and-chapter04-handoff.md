@@ -36,6 +36,7 @@
 - 人群摘要必须在同一自然段中体现八大人群、性别、年龄三个维度，并连到内容方向和验证建议，不拆成编号或不同小节。
 - 营销卖点摘要继续围绕类别、Top 标签、命中素材和内容取舍展开，不改变原有营销分析思路。
 - 两部分摘要均已从纯数据陈述扩展为“事实锚点 → 业务判断 → 可能形成原因/内容机制 → 内容策略 → 下一步验证”。
+- 第二部分事实包已停止生成顶层 `audienceRankRecords`、`audienceFacts` 和 `marketingFacts`；范围内 TOPN 交互只从 `chapter02Facts[*].topMaterials` 读取，历史渲染仍保留旧字段回退。
 
 ## 第二部分事实包核验结果
 
@@ -97,6 +98,7 @@
 - 成功秒级详情素材：5 条；失败素材不纳入高光/秒级 AI 分析。
 - `highlight-input.json` 的 `visualAssets` 提供本地 JPEG、`frame_ref`、秒数、帧类型、点击指数和可用状态。
 - 当前 AI 高光分组为 `portrait` 与 `product`，均包含共性洞察、裂变方向和 frame_refs。
+- 新 Presentation 不再写入第四部分顶层 `categories`；全品牌分类统一承载在 `brands[0].categories`，渲染层继续读取历史 Presentation 的顶层 `categories`。
 - `material-deep-dive-input.json` 仍支撑第五部分的逐帧观察与秒级拆解，不要把第五部分内容误并入第四部分。
 
 第四部分优化时优先确认：用户要改的是高光分组、共性洞察、裂变方向、卡片信息顺序，还是事实包范围。若只改 AI 文字，优先修改 Prompt 与模型 JSON；若改图表/交互，必须区分 `highlight-input.json`、Presentation 和渲染层，不能扩大到第一、二部分。

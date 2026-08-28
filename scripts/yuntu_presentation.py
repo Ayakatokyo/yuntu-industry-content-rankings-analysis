@@ -351,13 +351,72 @@ def _frame_card(frame):
     }
 
 
+def _project_scoped_highlight_brands(scoped_brands, available, brand_order):
+    """Project model-authored brand-scoped highlight groups without copying conclusions."""
+    if not isinstance(scoped_brands, list) or not scoped_brands:
+        raise YuntuPresentationError("highlight dashboard brands are required")
+    projected = []
+    seen_brands = set()
+    all_refs = set(available)
+    for scope in scoped_brands:
+        if not isinstance(scope, dict):
+            raise YuntuPresentationError("highlight brand scope is invalid")
+        brand = _text(scope.get("brand"))
+        groups = scope.get("groups")
+        if not brand or brand in seen_brands or not isinstance(groups, list) or not groups:
+            raise YuntuPresentationError("highlight brand scope is invalid")
+        seen_brands.add(brand)
+        merged = {}
+        scope_refs = []
+        for group in groups:
+            if not isinstance(group, dict) or group.get("category") not in HIGHLIGHT_CATEGORIES:
+                raise YuntuPresentationError("highlight category is invalid")
+            category = {"scene": "other", "text_overlay": "other"}.get(group["category"], group["category"])
+            refs = group.get("frame_refs", [])
+            if not isinstance(refs, list) or not refs or any(_text(ref) not in available for ref in refs):
+                raise YuntuPresentationError("highlight frame reference is invalid")
+            scope_refs.extend(refs)
+            target = merged.setdefault(category, {"id": category, "label": category, "commonConclusion": [], "derivativeDirections": [], "frames": []})
+            target["commonConclusion"].extend(deepcopy(group.get("common_patterns", [])))
+            target["derivativeDirections"].extend(deepcopy(group.get("derivative_directions", [])))
+            for ref in refs:
+                frame_card = _frame_card(available[ref])
+                frame_card["brand"] = match_brand_from_title(frame_card.get("title"), brand_order)
+                target["frames"].append(frame_card)
+        if len(scope_refs) != len(set(scope_refs)):
+            raise YuntuPresentationError("highlight frame coverage is invalid")
+        categories = [merged[key] for key in ("portrait", "product", "other") if key in merged]
+        projected.append({
+            "id": "all-brands" if brand == "全品牌" else _scope_id(brand),
+            "brand": brand,
+            "categories": categories,
+            "_refs": set(scope_refs),
+        })
+    if projected[0]["brand"] != "全品牌" or projected[0]["_refs"] != all_refs:
+        raise YuntuPresentationError("all-brand highlight scope must cover every available frame")
+    for scope in projected[1:]:
+        expected = {
+            ref for ref, frame in available.items()
+            if match_brand_from_title(frame.get("title"), brand_order) == scope["brand"]
+        }
+        if scope["_refs"] != expected:
+            raise YuntuPresentationError("brand highlight scope frame coverage is invalid")
+    for scope in projected:
+        scope.pop("_refs", None)
+    return {"scopeId": "all", "brands": projected, "availability": {"status": "complete", "reasons": []}}
+
+
 def _project_chapter04(analysis, fact_pack):
     available = _available_frames(fact_pack)
     dashboard = analysis.get("highlightDashboard", {}) if isinstance(analysis, dict) else {}
     groups = dashboard.get("groups", []) if isinstance(dashboard, dict) else []
     if not available:
-        return {"scopeId": "all", "categories": [], "availability": {"status": "unavailable", "reasons": ["暂无可用高光帧"]}}
+        return {"scopeId": "all", "brands": [], "availability": {"status": "unavailable", "reasons": ["暂无可用高光帧"]}}
     if not isinstance(groups, list) or not groups:
+        scoped_brands = dashboard.get("brands") if isinstance(dashboard, dict) else None
+        if scoped_brands is not None:
+            brand_order = [str(brand).strip() for brand in (fact_pack.get("filters", {}) or {}).get("brands", []) if str(brand).strip()]
+            return _project_scoped_highlight_brands(scoped_brands, available, brand_order)
         raise YuntuPresentationError("highlight dashboard is required")
     seen, categories, previous_index = [], [], -1
     merged = {}
@@ -408,7 +467,10 @@ def _project_chapter04(analysis, fact_pack):
             continue
         brand_categories = [brand_merged[brand][category] for category in ("portrait", "product", "other") if category in brand_merged[brand]]
         ordered_brands.append({"id": _scope_id(brand), "brand": brand, "categories": brand_categories})
-    return {"scopeId": "all", "categories": categories, "brands": ordered_brands, "availability": {"status": "complete", "reasons": []}}
+    # New projections use the all-brand tab as the single chapter-level source.
+    # The renderer still accepts historical payloads that contain top-level
+    # ``categories`` as a read-only compatibility fallback.
+    return {"scopeId": "all", "brands": ordered_brands, "availability": {"status": "complete", "reasons": []}}
 
 
 def _project_second_level(metrics):

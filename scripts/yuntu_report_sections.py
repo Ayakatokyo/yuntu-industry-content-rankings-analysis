@@ -91,6 +91,7 @@ def _render_audience_scope(
     insights=None,
     dashboard_id="audience-dashboard-body",
     extra_dashboard_html="",
+    topn_records=None,
 ):
     def audience_dimension_chart(key, dimension):
         label = dimension_labels[key]
@@ -179,9 +180,12 @@ def _render_audience_scope(
     charts += "".join(audience_dimension_chart(key, dimension) for key, dimension in dimensions.items() if key not in dimension_order and key in dimension_labels and isinstance(dimension, dict))
     if not charts:
         charts = '<p class="data-note">暂无人群汇总数据。</p>'
-    topn_records = fact_pack.get("audienceRankRecords")
     if topn_records is None:
-        topn_records = fact_pack.get("audienceTopNRecords", [])
+        # Historical reports may still carry either legacy top-N field. New
+        # chapter02 rendering passes scope_fact.topMaterials explicitly.
+        topn_records = fact_pack.get("audienceRankRecords")
+        if topn_records is None:
+            topn_records = fact_pack.get("audienceTopNRecords", [])
     topn_records_json = ""
     topn_controls = ""
     if isinstance(topn_records, list) and topn_records:
@@ -241,9 +245,7 @@ def render_audience_insights(
             ai_insights = panel.get("aiInsights", {})
             converted_insights["scopes"][scope_key] = {
                 "audienceSummary": {"title": (ai_insights.get("audienceSummary") or {}).get("title", ""), "summary": (ai_insights.get("audienceSummary") or {}).get("text", "")},
-                "audienceInsights": [{"title": item.get("title", ""), "summary": item.get("text", ""), "dimension": item.get("title", "")} for item in ai_insights.get("audience", [])],
                 "marketingSummary": {"title": (ai_insights.get("marketingSummary") or {}).get("title", ""), "summary": (ai_insights.get("marketingSummary") or {}).get("text", "")},
-                "marketingInsights": [{"title": item.get("title", ""), "summary": item.get("text", ""), "dimension": item.get("title", "")} for item in ai_insights.get("marketing", [])],
             }
         converted_insights["scopeOrder"] = converted_facts["scopeOrder"]
         analysis = {**analysis, "chapter02Insights": converted_insights}
@@ -331,11 +333,12 @@ def render_audience_insights(
         ai_html = ai_html or '<p class="data-note">暂无该范围 AI 二次分析。</p>'
         rendered_scope = _render_audience_scope(
             scope_fact.get("audienceDashboard", {}), analysis=analysis,
-            fact_pack={**fact_pack, "audienceRankRecords": scope_fact.get("topMaterials", [])}, facts=facts, esc=esc,
+            fact_pack=fact_pack, facts=facts, esc=esc,
             generic_text=generic_text, insight_cards=insight_cards, dimension_labels=dimension_labels,
             html_module=html_module, json_module=json_module, math_module=math_module,
             scope="", insights=[], dashboard_id="chapter02-audience-dashboard-body-" + str(index),
             extra_dashboard_html=marketing_html(scope_fact.get("marketingDashboard", {})),
+            topn_records=scope_fact.get("topMaterials", []),
         )
         dashboard_start = rendered_scope.find('<div class="audience-dashboard"')
         dashboard_html = rendered_scope[dashboard_start:].rsplit("</section>", 1)[0] if dashboard_start >= 0 else '<p class="data-note">暂无人群汇总数据。</p>'

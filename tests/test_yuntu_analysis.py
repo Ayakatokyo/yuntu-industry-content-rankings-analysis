@@ -531,7 +531,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             ranking["outputSchema"]["properties"],
         )
         self.assertEqual(
-            set(ranking["outputSchema"]["properties"]), {"brandConclusions"}
+            set(ranking["outputSchema"]["properties"]), {"brandConclusions", "allBrandsConclusion"}
         )
         self.assertEqual(ranking["outputSchema"]["required"], ["brandConclusions"])
         self.assertNotIn("peopleSummary", brand_item_schema["required"])
@@ -541,7 +541,12 @@ class YuntuAnalysisTests(unittest.TestCase):
         )
         self.assertEqual(
             set(ranking["evidence"]),
-            {"reportScope", "industryTop1000Facts", "brandRankingFacts"},
+            {
+                "reportScope",
+                "industryTop1000Facts",
+                "brandRankingFacts",
+                "allBrandsRankingFacts",
+            },
         )
         self.assertIn("industryTop1000Facts", ranking["evidence"])
         self.assertNotIn("chapter02AiFacts", ranking["evidence"])
@@ -552,7 +557,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(highlight["outputField"], "highlightDashboard")
         self.assertEqual(
             set(highlight["evidence"]),
-            {"reportScope", "visualAssets", "dataLimitations"},
+            {"reportScope", "visualAssets", "dataLimitations", "allBrandFacts"},
         )
         self.assertEqual(highlight["evidence"]["visualAssets"][0]["frame_ref"], frame["frame_ref"])
         self.assertEqual(deep_dive["outputField"], "materialDeepDives")

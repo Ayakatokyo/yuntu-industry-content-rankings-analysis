@@ -219,6 +219,18 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(len(refs), len(set(refs)))
         self.assertTrue(all(frame["relativePath"].startswith("highlights/") for category in categories for frame in category["frames"]))
 
+    def test_projects_brand_first_highlight_categories_from_title(self):
+        facts = self.fact_pack()
+        facts["filters"]["brands"] = ["小仙炖", "五个女博士"]
+        facts["materialFacts"][0]["title"] = "小仙炖测试素材 101"
+        facts["materialFacts"][1]["title"] = "五个女博士测试素材 102"
+        payload = build_yuntu_presentation(self.analysis(), facts)
+        brands = payload["chapters"]["chapter04"]["brands"]
+        self.assertEqual([item["brand"] for item in brands], ["全品牌", "小仙炖", "五个女博士"])
+        refs = [frame["frameRef"] for category in brands[1]["categories"] for frame in category["frames"]]
+        self.assertEqual(set(refs), {"highlight:101:cover:0", "highlight:101:click_peak:2"})
+        self.assertTrue(all(frame["brand"] == "小仙炖" for category in brands[1]["categories"] for frame in category["frames"]))
+
     def test_rejects_duplicate_highlight_frame_reference(self):
         analysis = self.analysis()
         analysis["highlightDashboard"]["groups"].append({

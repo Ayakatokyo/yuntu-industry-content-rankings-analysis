@@ -34,7 +34,7 @@ def render_top_material_combination(
         item for item in value["brandConclusions"] if item not in ordered_brands
     )
     default_brand = next(
-        (item["brand"] for item in ordered_brands if item["brand"] == "五个女博士"),
+        (item["brand"] for item in ordered_brands if item["brand"] == "全品牌"),
         ordered_brands[0]["brand"],
     )
     tabs = "".join(
@@ -65,7 +65,7 @@ def render_top_material_combination(
         for index, item in enumerate(ordered_brands)
     )
     return (
-        '<div class="top-material-brands yuntu-content-card"><h3>各品牌榜单分析</h3>'
+        '<div class="top-material-brands yuntu-content-card">'
         + '<div class="brand-tabs" role="tablist" aria-label="各品牌榜单分析">'
         + tabs
         + '</div><div class="brand-panels">'
@@ -304,7 +304,7 @@ def render_audience_insights(
         scope_fact = chapter02_facts.get(scope_key, {})
         selected = index == 0
         tab_id, panel_id = f"chapter02-tab-{index}", f"chapter02-panel-{index}"
-        label = scope_fact.get("label", scope_key)
+        label = "全品牌" if scope_key == "all" else scope_fact.get("label", scope_key)
         tabs.append(
             '<button type="button" role="tab" id="' + tab_id + '" aria-controls="' + panel_id
             + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1")
@@ -342,7 +342,7 @@ def render_audience_insights(
         panels.append(
             '<section class="chapter02-panel" role="tabpanel" id="' + panel_id + '" aria-labelledby="' + tab_id + '"'
             + (" hidden" if not selected else "") + ' data-chapter02-panel="' + esc(scope_key) + '">'
-            + '<h3 class="chapter02-scope-title">' + esc(label) + '</h3><div class="chapter02-ai-insights">'
+            + '<div class="chapter02-ai-insights">'
             + ai_html + '</div><div class="chapter02-audience-summary">' + dashboard_html + '</div></section>'
         )
     return '<section class="section" id="audience-insights"><header class="section-header"><h2>02｜人群及营销卖点洞察</h2>' \
@@ -355,54 +355,134 @@ def render_highlight_insights(
     image_src, frame_label, material_title, format_index_value, failure_reason,
     category_order, category_labels,
     presentation=None,
+    export_href=None,
 ):
-    if isinstance(presentation, dict) and presentation.get("categories"):
-        successful_frames = []
-        groups = []
-        for category in presentation.get("categories", []):
+    def convert_groups(category_groups):
+        converted_frames = []
+        converted_groups = []
+        pattern_titles = ("画面主体与构图", "信息层与动作机制", "可迁移机会")
+        for category in category_groups:
             refs = []
             for frame in category.get("frames", []):
-                converted = {"frame_ref": frame.get("frameRef"), "available": True, "relative_path": frame.get("relativePath"), "second": frame.get("second"), "frame_type": frame.get("frameType"), "peak_rank": frame.get("peakRank"), "click_value": frame.get("clickValue"), "material_id": frame.get("materialId", ""), "rank": frame.get("rank", "-"), "title": frame.get("title", "")}
-                successful_frames.append(converted); refs.append(converted["frame_ref"])
-            groups.append({"category": category.get("id"), "frame_refs": refs, "common_patterns": category.get("commonConclusion", []), "derivative_directions": category.get("derivativeDirections", [])})
-        dashboard = {"groups": groups}
+                converted = {
+                    "frame_ref": frame.get("frameRef"),
+                    "available": True,
+                    "relative_path": frame.get("relativePath"),
+                    "second": frame.get("second"),
+                    "frame_type": frame.get("frameType"),
+                    "peak_rank": frame.get("peakRank"),
+                    "click_value": frame.get("clickValue"),
+                    "material_id": frame.get("materialId", ""),
+                    "rank": frame.get("rank", "-"),
+                    "title": frame.get("title", ""),
+                    "brand": frame.get("brand", ""),
+                }
+                converted_frames.append(converted)
+                refs.append(converted["frame_ref"])
+            patterns = []
+            for index, pattern in enumerate(category.get("commonConclusion", [])):
+                if isinstance(pattern, dict):
+                    normalized = dict(pattern)
+                    normalized["frame_refs"] = [ref for ref in normalized.get("frame_refs", refs) if ref in refs] or refs
+                else:
+                    normalized = {"title": pattern_titles[index] if index < len(pattern_titles) else "共性观察", "body": str(pattern), "frame_refs": refs}
+                patterns.append(normalized)
+            converted_groups.append({
+                "category": category.get("id"),
+                "frame_refs": refs,
+                "common_patterns": patterns,
+                "derivative_directions": category.get("derivativeDirections", []),
+            })
+        return converted_frames, {"groups": converted_groups}
+
+    brand_views = []
+    if isinstance(presentation, dict) and presentation.get("brands"):
+        for brand in presentation.get("brands", []):
+            if not isinstance(brand, dict):
+                continue
+            brand_frames, brand_dashboard = convert_groups(brand.get("categories", []))
+            brand_views.append({"brand": brand.get("brand", ""), "id": brand.get("id", ""), "frames": brand_frames, "dashboard": brand_dashboard})
+        successful_frames = [frame for view in brand_views for frame in view["frames"]]
+        dashboard = None
+    elif isinstance(presentation, dict) and presentation.get("categories"):
+        successful_frames, dashboard = convert_groups(presentation.get("categories", []))
     if not successful_frames:
         detail = f"（{esc(failure_reason)}）" if failure_reason else ""
         return '<p class="data-note">暂无可用高光帧' + detail + "。</p>"
-    if not isinstance(dashboard, dict):
+    if not brand_views and not isinstance(dashboard, dict):
         return '<p class="data-note">高光帧已生成，尚未完成视觉分类，因此不输出视觉洞察。</p>'
     category_aliases = {"scene": "other", "text_overlay": "other"}
-    normalized_groups = {}
-    for raw_group in dashboard.get("groups", []):
-        if not isinstance(raw_group, dict):
-            continue
-        category = category_aliases.get(raw_group.get("category"), raw_group.get("category"))
-        target = normalized_groups.setdefault(category, {"category": category, "frame_refs": [], "common_patterns": [], "derivative_directions": []})
-        target["frame_refs"].extend(raw_group.get("frame_refs", []))
-        target["common_patterns"].extend(raw_group.get("common_patterns", []))
-        target["derivative_directions"].extend(raw_group.get("derivative_directions", []))
-    dashboard = {"groups": [normalized_groups[key] for key in ("portrait", "product", "other") if key in normalized_groups]}
-    frames_by_ref = {frame["frame_ref"]: frame for frame in successful_frames}
-    groups = [group for category in category_order for group in dashboard["groups"] if group["category"] == category]
-    tabs, panels = [], []
-    for index, group in enumerate(groups):
-        category = group["category"]
-        selected = index == 0
-        panel_id, tab_id = f"highlight-panel-{category}", f"highlight-tab-{category}"
-        refs = group["frame_refs"]
-        tabs.append('<button type="button" role="tab" id="' + esc(tab_id) + '" aria-controls="' + esc(panel_id) + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1") + '" data-highlight-category-tab data-highlight-category-target="' + esc(panel_id) + '">' + esc(category_labels[category]) + " · " + esc(len(refs)) + " 帧</button>")
-        cards = []
-        for ref in refs:
-            frame = frames_by_ref[ref]
-            material_id = str(frame.get("material_id", ""))
-            click_text = f"点击指数 {format_index_value(frame.get('click_value'))}"
-            caption = f"#{esc(frame.get('rank', '-'))} · {esc(material_title(frame))} · {esc(frame_label(frame))} · {esc(frame.get('second'))}s · {click_text}"
-            cards.append('<article class="highlight-frame-card" data-highlight-frame-card data-highlight-material-id="' + esc(material_id) + '"><figure><button class="highlight-frame-preview highlight-frame-button" type="button" data-highlight-src="' + html_module.escape(image_src(frame), quote=True) + '" data-highlight-caption="' + html_module.escape(caption, quote=True) + '" aria-label="查看高光帧大图"><img loading="lazy" src="' + html_module.escape(image_src(frame), quote=True) + '" alt="' + esc(caption) + '"></button></figure><div class="highlight-frame-meta"><small class="highlight-frame-kind">' + esc(frame_label(frame)) + '</small><span class="highlight-frame-metric">' + esc(frame.get("second")) + 's · ' + esc(click_text) + '</span><button class="highlight-material-title" type="button" data-jump-material="' + esc(material_id) + '">' + esc(material_title(frame)) + '</button></div></article>')
-        patterns = "".join(f"<li>{esc(item)}</li>" for item in group["common_patterns"])
-        directions = "<h4>裂变方向</h4>" + "".join(f'<article class="highlight-direction"><h5>{esc(item["title"])}</h5><p>{esc(item["body"])}</p></article>' for item in group["derivative_directions"])
-        page_count = max(1, math_module.ceil(len(refs) / 12))
-        panels.append('<article class="highlight-category highlight-category-panel" role="tabpanel" id="' + esc(panel_id) + '" aria-labelledby="' + esc(tab_id) + '"' + (" hidden" if not selected else "") + ' data-highlight-page-size="12" data-highlight-frame-count="' + esc(len(refs)) + '"><div class="highlight-analysis-pair"><div class="highlight-summary"><h4>共性洞察</h4><ul>' + patterns + '</ul></div><div class="highlight-directions">' + directions + '</div></div><div class="highlight-frame-grid">' + "".join(cards) + '</div><div class="highlight-pagination" data-highlight-pagination><button type="button" data-highlight-page="previous">上一页</button><span data-highlight-page-status>1 / ' + esc(page_count) + '</span><button type="button" data-highlight-page="next">下一页</button></div></article>')
-    return '<div class="highlight-dashboard-tabs" role="tablist" aria-label="高光画面分类">' + "".join(tabs) + '</div><div class="highlight-dashboard-panels">' + "".join(panels) + '</div>'
+
+    def render_groups(groups, frames, *, id_prefix="highlight"):
+        normalized_groups = {}
+        for raw_group in groups:
+            if not isinstance(raw_group, dict):
+                continue
+            category = category_aliases.get(raw_group.get("category"), raw_group.get("category"))
+            target = normalized_groups.setdefault(category, {"category": category, "frame_refs": [], "common_patterns": [], "derivative_directions": []})
+            target["frame_refs"].extend(raw_group.get("frame_refs", []))
+            target["common_patterns"].extend(raw_group.get("common_patterns", []))
+            target["derivative_directions"].extend(raw_group.get("derivative_directions", []))
+        normalized = {"groups": [normalized_groups[key] for key in ("portrait", "product", "other") if key in normalized_groups]}
+        frames_by_ref = {frame["frame_ref"]: frame for frame in frames}
+        groups_to_render = [group for category in category_order for group in normalized["groups"] if group["category"] == category]
+        tabs, panels = [], []
+        for index, group in enumerate(groups_to_render):
+            category = group["category"]
+            selected = index == 0
+            panel_id, tab_id = f"{id_prefix}-panel-{category}", f"{id_prefix}-tab-{category}"
+            refs = group["frame_refs"]
+            tabs.append('<button type="button" role="tab" id="' + esc(tab_id) + '" aria-controls="' + esc(panel_id) + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1") + '" data-highlight-category-tab data-highlight-category-target="' + esc(panel_id) + '">' + esc(category_labels[category]) + " · " + esc(len(refs)) + " 帧</button>")
+            cards = []
+            for ref in refs:
+                frame = frames_by_ref[ref]
+                material_id = str(frame.get("material_id", ""))
+                click_text = f"点击指数 {format_index_value(frame.get('click_value'))}"
+                caption = f"#{esc(frame.get('rank', '-'))} · {esc(material_title(frame))} · {esc(frame_label(frame))} · {esc(frame.get('second'))}s · {click_text}"
+                cards.append('<article class="highlight-frame-card" data-highlight-frame-card data-highlight-material-id="' + esc(material_id) + '"><figure><button class="highlight-frame-preview highlight-frame-button" type="button" data-highlight-src="' + html_module.escape(image_src(frame), quote=True) + '" data-highlight-caption="' + html_module.escape(caption, quote=True) + '" aria-label="查看高光帧大图"><img loading="lazy" src="' + html_module.escape(image_src(frame), quote=True) + '" alt="' + esc(caption) + '"></button></figure><div class="highlight-frame-meta"><small class="highlight-frame-kind">' + esc(frame_label(frame)) + '</small><span class="highlight-frame-metric">' + esc(frame.get("second")) + 's · ' + esc(click_text) + '</span><button class="highlight-material-title" type="button" data-jump-material="' + esc(material_id) + '">' + esc(material_title(frame)) + '</button></div></article>')
+            pattern_items = []
+            for item in group["common_patterns"]:
+                if isinstance(item, dict):
+                    pattern_items.append('<article class="highlight-insight"><h5>' + esc(item.get("title", "")) + '</h5><p>' + esc(item.get("body", "")) + '</p></article>')
+                else:
+                    pattern_items.append('<article class="highlight-insight"><p>' + esc(item) + '</p></article>')
+            patterns = "".join(pattern_items)
+            directions_data = list(group["derivative_directions"])
+            if len(pattern_items) != len(directions_data):
+                # Keep the two columns strictly paired in the rendered report.
+                # Legacy model outputs may contain one-sided entries; trim to
+                # the shared prefix rather than showing unmatched insights.
+                pair_count = min(len(pattern_items), len(directions_data))
+                pattern_items = pattern_items[:pair_count]
+                patterns = "".join(pattern_items)
+                directions_data = directions_data[:pair_count]
+            directions = "<h4>裂变方向</h4>" + "".join(f'<article class="highlight-direction"><h5>{esc(item["title"])}</h5><p>{esc(item["body"])}</p></article>' for item in directions_data)
+            page_count = max(1, math_module.ceil(len(refs) / 12))
+            panels.append('<article class="highlight-category highlight-category-panel" role="tabpanel" id="' + esc(panel_id) + '" aria-labelledby="' + esc(tab_id) + '"' + (" hidden" if not selected else "") + ' data-highlight-page-size="12" data-highlight-frame-count="' + esc(len(refs)) + '"><div class="highlight-analysis-pair"><div class="highlight-summary"><h4>共性洞察</h4><div class="highlight-patterns">' + patterns + '</div></div><div class="highlight-directions">' + directions + '</div></div><div class="highlight-frame-grid">' + "".join(cards) + '</div><div class="highlight-pagination" data-highlight-pagination><button type="button" data-highlight-page="previous">上一页</button><span data-highlight-page-status>1 / ' + esc(page_count) + '</span><button type="button" data-highlight-page="next">下一页</button></div></article>')
+        return '<div class="highlight-dashboard-tabs" role="tablist" aria-label="高光画面分类">' + "".join(tabs) + '</div><div class="highlight-dashboard-panels">' + "".join(panels) + '</div>'
+
+    def with_export_link(content):
+        if not export_href:
+            return content
+        link = '<a class="highlight-export-button" href="' + html_module.escape(str(export_href), quote=True) + '" download>导出高光帧资产（Excel）</a>'
+        return '<div class="highlight-export-toolbar">' + link + '</div>' + content
+
+    if brand_views:
+        brand_tabs = []
+        brand_panels = []
+        for index, view in enumerate(brand_views):
+            selected = index == 0
+            brand_id = str(view["id"] or f"highlight-brand-{index}")
+            panel_id = f"highlight-brand-panel-{brand_id}"
+            tab_id = f"highlight-brand-tab-{brand_id}"
+            brand_tabs.append('<button type="button" role="tab" id="' + esc(tab_id) + '" aria-controls="' + esc(panel_id) + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1") + '" data-highlight-brand-tab data-highlight-brand-target="' + esc(panel_id) + '">' + esc(view["brand"]) + '</button>')
+            category_html = render_groups(view["dashboard"]["groups"], view["frames"], id_prefix=f"highlight-{brand_id}")
+            brand_panels.append('<section class="highlight-brand-panel" role="tabpanel" id="' + esc(panel_id) + '" aria-labelledby="' + esc(tab_id) + '"' + (" hidden" if not selected else "") + ' data-highlight-brand-panel>' + category_html + '</section>')
+        return with_export_link('<div class="highlight-brand-tabs" role="tablist" aria-label="高光画面品牌分类">' + "".join(brand_tabs) + '</div><div class="highlight-brand-panels">' + "".join(brand_panels) + '</div>')
+
+    if dashboard is None:
+        dashboard = {"groups": []}
+    return with_export_link(render_groups(dashboard.get("groups", []), successful_frames))
 
 
 def render_material_deep_dive(

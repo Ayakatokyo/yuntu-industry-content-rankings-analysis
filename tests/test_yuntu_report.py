@@ -470,10 +470,13 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-brand-panel="万益蓝/WONDERLAB"', html)
         self.assertIn('data-brand-panel="五个女博士"', html)
         self.assertIn('data-brand-panel="燕之屋"', html)
-        self.assertIn('id="brand-panel-0" aria-labelledby="brand-tab-0" hidden ', html)
-        self.assertIn('id="brand-panel-1" aria-labelledby="brand-tab-1" ', html)
+        # With the current renderer the first available brand is selected by
+        # default (the fixture has no aggregate ``全品牌`` conclusion), so
+        # panel 0 is visible and the remaining panels are hidden.
+        self.assertIn('id="brand-panel-0" aria-labelledby="brand-tab-0" ', html)
+        self.assertIn('id="brand-panel-1" aria-labelledby="brand-tab-1" hidden ', html)
         self.assertIn('id="brand-panel-2" aria-labelledby="brand-tab-2" hidden ', html)
-        self.assertIn('aria-label="五个女博士，标题匹配归属"', html)
+        self.assertIn('aria-label="万益蓝/WONDERLAB，标题匹配归属"', html)
         self.assertNotIn('当前品牌：', html)
         self.assertIn('.brand-panel[hidden]{display:none!important}', html)
         self.assertIn('<noscript><style>.brand-panel[hidden]{display:block!important}</style></noscript>', html)
@@ -1547,6 +1550,31 @@ class YuntuReportTests(unittest.TestCase):
             rendered.index('class="highlight-pagination"'),
         )
         self.assertIn("highlight:101:click_peak:1", data["highlightFrames"])
+
+    def test_render_report_renders_brand_first_highlight_tabs(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["filters"] = {"brands": ["小仙炖", "五个女博士"]}
+        fact_pack["materialFacts"][0]["title"] = "小仙炖测试素材"
+        fact_pack["materialFacts"][1]["title"] = "五个女博士测试素材"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for material in fact_pack["materialFacts"]:
+                for frame in material["highlightFrames"]:
+                    source = root / frame["relative_path"]
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_bytes(b"fake-jpg")
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=fact_pack)
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertIn('aria-label="高光画面品牌分类"', rendered)
+        self.assertIn("highlight-brand-tab-brand-u5c0f-u4ed9-u7096", rendered)
+        self.assertIn("highlight-brand-tab-brand-u4e94-u4e2a-u5973-u535a-u58eb", rendered)
+        self.assertIn('data-highlight-brand-tab', rendered)
+        self.assertIn('data-highlight-brand-panel', rendered)
+        self.assertIn('aria-label="高光画面分类"', rendered)
 
     def test_render_report_copies_highlight_assets_from_explicit_source_root(self):
         report = load_module()

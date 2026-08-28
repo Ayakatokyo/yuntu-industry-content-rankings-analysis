@@ -4,6 +4,8 @@ from copy import deepcopy
 import math
 from pathlib import PurePosixPath
 
+from yuntu_highlight_export import match_brand_from_title
+
 
 PRESENTATION_SCHEMA_VERSION = 3
 REPORT_TITLE = "云图行业内容榜单分析"
@@ -261,6 +263,21 @@ def _project_chapter01(analysis, fact_pack):
     if not isinstance(brands, list):
         raise YuntuPresentationError("chapter01 brand conclusions are invalid")
     panels = []
+    aggregate = combination.get("allBrandsConclusion")
+    if isinstance(aggregate, dict) and _text(aggregate.get("dataSummary")):
+        panels.append({
+            "id": "all-brands",
+            "brand": "全品牌",
+            "insights": [{"text": _text(aggregate.get("dataSummary")), "dimension": "data"}],
+        })
+    elif isinstance(fact_pack.get("allBrandsRankingFacts"), dict):
+        facts = fact_pack["allBrandsRankingFacts"]
+        metrics = facts.get("metrics", {})
+        panels.append({
+            "id": "all-brands",
+            "brand": "全品牌",
+            "insights": [{"text": _ranking_scope_fallback_summary(facts), "dimension": "data"}],
+        })
     for item in brands:
         if not isinstance(item, dict) or not _text(item.get("brand")):
             raise YuntuPresentationError("chapter01 brand conclusion is invalid")
@@ -279,6 +296,18 @@ def _project_chapter01(analysis, fact_pack):
         "brandTabs": tabs,
         "brandPanels": panels,
     }
+
+
+def _ranking_scope_fallback_summary(facts):
+    metrics = facts.get("metrics", {}) if isinstance(facts, dict) else {}
+    sample = facts.get("sample_count", 0)
+    show = metrics.get("show_cnt", {}).get("total", 0)
+    ctr = metrics.get("ctr", {}).get("median")
+    cvr = metrics.get("cvr", {}).get("median")
+    play = metrics.get("play_3s_rate", {}).get("median")
+    def fmt(value, suffix=""):
+        return "数据不足" if value is None else f"{value:.2%}" if suffix == "%" else f"{value:,.0f}"
+    return f"全品牌范围覆盖 {sample} 条素材，累计曝光 {fmt(show)}；CTR 中位数 {fmt(ctr, '%')}、CVR 中位数 {fmt(cvr, '%')}、3 秒播放率中位数 {fmt(play, '%')}。该汇总用于观察多品牌素材池的整体表现，后续可结合各品牌 Tab 对比指标组合与标题主题。"
 
 
 def _available_frames(fact_pack):
@@ -332,6 +361,8 @@ def _project_chapter04(analysis, fact_pack):
         raise YuntuPresentationError("highlight dashboard is required")
     seen, categories, previous_index = [], [], -1
     merged = {}
+    brand_order = [str(brand).strip() for brand in (fact_pack.get("filters", {}) or {}).get("brands", []) if str(brand).strip()]
+    brand_merged = {}
     category_aliases = {"scene": "other", "text_overlay": "other"}
     for group in groups:
         if not isinstance(group, dict) or group.get("category") not in HIGHLIGHT_CATEGORIES:
@@ -344,13 +375,40 @@ def _project_chapter04(analysis, fact_pack):
         target = merged.setdefault(category, {"id": category, "label": category, "commonConclusion": [], "derivativeDirections": [], "frames": []})
         target["commonConclusion"].extend(deepcopy(group.get("common_patterns", [])))
         target["derivativeDirections"].extend(deepcopy(group.get("derivative_directions", [])))
-        target["frames"].extend(_frame_card(available[ref]) for ref in refs)
+        for ref in refs:
+            frame_card = _frame_card(available[ref])
+            frame_card["brand"] = match_brand_from_title(frame_card.get("title"), brand_order)
+            target["frames"].append(frame_card)
+            brand_target = brand_merged.setdefault(frame_card["brand"], {})
+            brand_category = brand_target.setdefault(category, {"id": category, "label": category, "commonConclusion": [], "derivativeDirections": [], "frames": []})
+            brand_category["frames"].append(frame_card)
+        for brand in set(frame.get("brand") for frame in target["frames"] if frame.get("brand")):
+            brand_category = brand_merged[brand][category]
+            if not brand_category["commonConclusion"]:
+                brand_category["commonConclusion"].extend(deepcopy(group.get("common_patterns", [])))
+            brand_refs = {frame["frameRef"] for frame in brand_category["frames"]}
+            for direction in group.get("derivative_directions", []):
+                if not isinstance(direction, dict):
+                    continue
+                direction_refs = [ref for ref in direction.get("frame_refs", []) if ref in brand_refs]
+                if direction_refs:
+                    copied = deepcopy(direction)
+                    copied["frame_refs"] = direction_refs
+                    brand_category["derivativeDirections"].append(copied)
     for category in ("portrait", "product", "other"):
         if category in merged:
             categories.append(merged[category])
     if set(seen) != set(available) or len(seen) != len(set(seen)):
         raise YuntuPresentationError("highlight frame coverage is invalid")
-    return {"scopeId": "all", "categories": categories, "availability": {"status": "complete", "reasons": []}}
+    ordered_brands = []
+    if categories:
+        ordered_brands.append({"id": "all-brands", "brand": "全品牌", "categories": deepcopy(categories)})
+    for brand in brand_order + [brand for brand in brand_merged if brand not in brand_order]:
+        if brand not in brand_merged:
+            continue
+        brand_categories = [brand_merged[brand][category] for category in ("portrait", "product", "other") if category in brand_merged[brand]]
+        ordered_brands.append({"id": _scope_id(brand), "brand": brand, "categories": brand_categories})
+    return {"scopeId": "all", "categories": categories, "brands": ordered_brands, "availability": {"status": "complete", "reasons": []}}
 
 
 def _project_second_level(metrics):

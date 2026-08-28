@@ -180,6 +180,7 @@
         });
       });
 
+      var highlightBrandTabs = document.querySelectorAll('[data-highlight-brand-tab]');
       var highlightTabs = document.querySelectorAll('[data-highlight-category-tab]');
       function paginateHighlightPanel(panel, nextPage) {
         if (!panel) return;
@@ -209,8 +210,10 @@
         if (next) next.disabled = currentPage >= pageCount;
       }
       function activateHighlightCategory(tab, focus) {
-        for (var highlightIndex = 0; highlightIndex < highlightTabs.length; highlightIndex += 1) {
-          var candidate = highlightTabs[highlightIndex];
+        var owner = tab.closest('[data-highlight-brand-panel]');
+        var scopedTabs = owner ? owner.querySelectorAll('[data-highlight-category-tab]') : highlightTabs;
+        for (var highlightIndex = 0; highlightIndex < scopedTabs.length; highlightIndex += 1) {
+          var candidate = scopedTabs[highlightIndex];
           var selected = candidate === tab;
           var panel = document.getElementById(candidate.getAttribute('data-highlight-category-target'));
           candidate.setAttribute('aria-selected', selected ? 'true' : 'false');
@@ -227,11 +230,44 @@
             var direction = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
             if (event.key === 'Home' || event.key === 'End' || direction[event.key]) {
               event.preventDefault();
-              var next = event.key === 'Home' ? 0 : event.key === 'End' ? highlightTabs.length - 1 : (tabIndex + direction[event.key] + highlightTabs.length) % highlightTabs.length;
-              activateHighlightCategory(highlightTabs[next], true);
+              var owner = tab.closest('[data-highlight-brand-panel]');
+              var scopedTabs = owner ? owner.querySelectorAll('[data-highlight-category-tab]') : highlightTabs;
+              var localIndex = Array.prototype.indexOf.call(scopedTabs, tab);
+              var next = event.key === 'Home' ? 0 : event.key === 'End' ? scopedTabs.length - 1 : (localIndex + direction[event.key] + scopedTabs.length) % scopedTabs.length;
+              activateHighlightCategory(scopedTabs[next], true);
             }
           });
         }(highlightTabs[highlightIndex], highlightIndex));
+      }
+      function activateHighlightBrand(tab, focus) {
+        for (var brandIndex = 0; brandIndex < highlightBrandTabs.length; brandIndex += 1) {
+          var candidate = highlightBrandTabs[brandIndex];
+          var selected = candidate === tab;
+          var panel = document.getElementById(candidate.getAttribute('data-highlight-brand-target'));
+          candidate.setAttribute('aria-selected', selected ? 'true' : 'false');
+          candidate.tabIndex = selected ? 0 : -1;
+          if (panel) {
+            panel.hidden = !selected;
+            if (selected) {
+              var firstCategory = panel.querySelector('[data-highlight-category-tab]');
+              if (firstCategory) activateHighlightCategory(firstCategory, false);
+            }
+          }
+        }
+        if (focus) tab.focus();
+      }
+      for (var brandIndex = 0; brandIndex < highlightBrandTabs.length; brandIndex += 1) {
+        (function (tab, tabIndex) {
+          tab.addEventListener('click', function () { activateHighlightBrand(tab, false); });
+          tab.addEventListener('keydown', function (event) {
+            var direction = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+            if (event.key === 'Home' || event.key === 'End' || direction[event.key]) {
+              event.preventDefault();
+              var next = event.key === 'Home' ? 0 : event.key === 'End' ? highlightBrandTabs.length - 1 : (tabIndex + direction[event.key] + highlightBrandTabs.length) % highlightBrandTabs.length;
+              activateHighlightBrand(highlightBrandTabs[next], true);
+            }
+          });
+        }(highlightBrandTabs[brandIndex], brandIndex));
       }
       document.querySelectorAll('[data-highlight-pagination]').forEach(function (pagination) {
         pagination.addEventListener('click', function (event) {

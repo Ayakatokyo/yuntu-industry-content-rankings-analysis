@@ -73,6 +73,9 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("all（全量 TOP1000）、万益蓝、燕之屋", prompt)
         self.assertNotIn("__BRANDS__", prompt)
         self.assertNotIn("__SCOPE_LABELS__", prompt)
+        self.assertNotIn("__BRAND_SCOPE_LABEL__", prompt)
+        self.assertIn("全品牌对象", prompt)
+        self.assertNotIn("不得生成任何综合结论或跨品牌结论字段", prompt)
 
     def _write_input(self, root, records, selected, details):
         (root / "normalized" / "detail-records").mkdir(parents=True)
@@ -399,6 +402,41 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertNotIn("marketingFacts", captured)
         self.assertNotIn("highlightFrameFacts", captured)
 
+    def test_prepare_analysis_does_not_duplicate_industry_facts_as_all_brand_facts(self):
+        analysis = load_module()
+        records = [{
+            "material_id": "1", "title": "素材", "rank": 1,
+            "metrics": {"ctr": 0.2, "show_cnt": 100},
+            "people_tags": [], "material_tags": [], "data_availability": {},
+        }]
+        selected = [{"rank": 1, "material_id": "1", "detailRecordPath": "normalized/detail-records/1.json"}]
+        details = {"1": {"material_id": "1", "high_points": [], "loss_points": [], "data_availability": {}}}
+        captured = {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            original = analysis._report_data
+
+            def capture(fact_pack):
+                captured.update(fact_pack)
+                return original(fact_pack)
+
+            with mock.patch.object(analysis, "_report_data", side_effect=capture):
+                analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
+
+            ranking = json.loads(
+                (root / "diagnostic-analysis" / "analysis-units" / "ranking-brand-input.json").read_text(encoding="utf-8")
+            )
+            report = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
+
+        self.assertNotIn("allBrandsRankingFacts", captured)
+        self.assertNotIn("allBrandsRankingFacts", ranking["evidence"])
+        self.assertNotIn("allBrandsRankingFacts", report)
+        self.assertNotIn("rankingFacts", captured)
+        self.assertNotIn("secondLevelFacts", captured)
+        self.assertNotIn("highlightAllBrandFacts", captured)
+
     def test_highlight_schema_requires_structured_common_patterns(self):
         analysis = load_module()
         schema = analysis._highlight_output_schema()
@@ -585,7 +623,6 @@ class YuntuAnalysisTests(unittest.TestCase):
                 "reportScope",
                 "industryTop1000Facts",
                 "brandRankingFacts",
-                "allBrandsRankingFacts",
             },
         )
         self.assertIn("industryTop1000Facts", ranking["evidence"])
@@ -597,7 +634,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(highlight["outputField"], "highlightDashboard")
         self.assertEqual(
             set(highlight["evidence"]),
-            {"reportScope", "visualAssets", "dataLimitations", "allBrandFacts"},
+            {"reportScope", "visualAssets", "dataLimitations"},
         )
         self.assertEqual(highlight["evidence"]["visualAssets"][0]["frame_ref"], frame["frame_ref"])
         self.assertEqual(deep_dive["outputField"], "materialDeepDives")

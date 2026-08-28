@@ -270,14 +270,23 @@ def _project_chapter01(analysis, fact_pack):
             "brand": "全品牌",
             "insights": [{"text": _text(aggregate.get("dataSummary")), "dimension": "data"}],
         })
-    elif isinstance(fact_pack.get("allBrandsRankingFacts"), dict):
-        facts = fact_pack["allBrandsRankingFacts"]
-        metrics = facts.get("metrics", {})
-        panels.append({
-            "id": "all-brands",
-            "brand": "全品牌",
-            "insights": [{"text": _ranking_scope_fallback_summary(facts), "dimension": "data"}],
-        })
+    else:
+        facts = fact_pack.get("industryTop1000Facts")
+        # Older persisted reports carried the same aggregate metrics under
+        # allBrandsRankingFacts; keep this read-only fallback for migration.
+        if (
+            not isinstance(facts, dict)
+            or not facts.get("metrics")
+        ) and isinstance(fact_pack.get("allBrandsRankingFacts"), dict):
+            facts = fact_pack["allBrandsRankingFacts"]
+        if not isinstance(facts, dict):
+            facts = None
+        if facts is not None:
+            panels.append({
+                "id": "all-brands",
+                "brand": "全品牌",
+                "insights": [{"text": _ranking_scope_fallback_summary(facts), "dimension": "data"}],
+            })
     for item in brands:
         if not isinstance(item, dict) or not _text(item.get("brand")):
             raise YuntuPresentationError("chapter01 brand conclusion is invalid")

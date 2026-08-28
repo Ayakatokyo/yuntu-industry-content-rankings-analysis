@@ -44,8 +44,6 @@ REPORT_DATA_FIELDS = (
     "chapter02AiFacts",
     "industryTop1000Facts",
     "brandRankingFacts",
-    "allBrandsRankingFacts",
-    "highlightAllBrandFacts",
 )
 
 
@@ -365,10 +363,7 @@ def _model_input_sections(
     pool_records,
     brand_facts,
     chapter02_ai_facts,
-    candidate_pool,
     brands,
-    trend_summary,
-    report_scopes,
 ):
     visual_assets = []
     for fact in material_facts:
@@ -395,46 +390,13 @@ def _model_input_sections(
                 }
             )
     return {
-        "reportScopes": report_scopes,
-        "rankingFacts": {
-            "candidatePool": candidate_pool,
-            "materials": [
-                {
-                    "material_id": str(fact["material_id"]),
-                    "rank": fact["rank"],
-                    "title": fact["title"],
-                    "metrics": fact["metrics"],
-                    "metricComparison": fact["metricComparison"],
-                }
-                for fact in material_facts
-            ],
-        },
         "industryTop1000Facts": _ranking_scope_facts(
             pool_records,
             source_scope="industry_top1000",
         ),
         "brandRankingFacts": brand_facts,
-        "allBrandsRankingFacts": _ranking_scope_facts(
-            pool_records,
-            source_scope="all_brands",
-        ),
         "chapter02AiFacts": chapter02_ai_facts,
-        "secondLevelFacts": {
-            "trendSummary": trend_summary,
-            "materials": [
-                {
-                    "material_id": str(fact["material_id"]),
-                    "metrics": fact["secondLevelBreakdown"]["metrics"],
-                }
-                for fact in material_facts
-            ],
-        },
         "visualAssets": visual_assets,
-        "highlightAllBrandFacts": {
-            "source_scope": "all_brands",
-            "sample_count": sum(1 for asset in visual_assets if asset.get("available")),
-            "frame_refs": [asset.get("frame_ref") for asset in visual_assets if asset.get("available")],
-        },
         "dataLimitations": _data_limitations(material_facts),
     }
 
@@ -465,13 +427,6 @@ def _report_data(fact_pack):
             if isinstance(facts, dict)
         },
     }
-    all_brands = fact_pack.get("allBrandsRankingFacts", {})
-    projected["allBrandsRankingFacts"] = {
-        key: all_brands[key]
-        for key in ("source_scope", "sample_count", "metrics")
-        if key in all_brands
-    }
-    projected["highlightAllBrandFacts"] = fact_pack.get("highlightAllBrandFacts", {})
     chapter02_ai = fact_pack.get("chapter02AiFacts", {})
     scope_order = chapter02_ai.get("scopeOrder", [])
     projected["chapter02AiFacts"] = {
@@ -736,7 +691,6 @@ def _write_analysis_units(fact_pack, output):
                 "reportScope": fact_pack["reportScopes"]["ranking"],
                 "industryTop1000Facts": fact_pack["industryTop1000Facts"],
                 "brandRankingFacts": fact_pack["brandRankingFacts"],
-                "allBrandsRankingFacts": fact_pack.get("allBrandsRankingFacts", {}),
             },
         ),
         (
@@ -757,7 +711,6 @@ def _write_analysis_units(fact_pack, output):
                     for item in fact_pack["dataLimitations"]
                     if str(item.get("field") or "").startswith("highlightFrames.")
                 ],
-                "allBrandFacts": fact_pack.get("highlightAllBrandFacts", {}),
             },
         ),
         (
@@ -980,10 +933,7 @@ def prepare_analysis(*, input_dir, output_dir):
             pool_records,
             brand_facts,
             chapter02_ai_facts,
-            candidate_pool,
             brands,
-            trend_summary,
-            report_scopes,
         )
     )
     write_json_atomically(

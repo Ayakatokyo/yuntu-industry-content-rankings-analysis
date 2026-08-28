@@ -358,9 +358,6 @@ def _validate_ranking_scope_contract(analysis, fact_pack):
     industry = fact_pack["industryTop1000Facts"]
     if industry.get("source_scope") != "industry_top1000":
         raise YuntuReportError("industryTop1000Facts must describe the industry ranking scope")
-    aggregate_facts = fact_pack.get("allBrandsRankingFacts")
-    if aggregate_facts is not None and aggregate_facts.get("source_scope") != "all_brands":
-        raise YuntuReportError("allBrandsRankingFacts must describe the all-brand scope")
     brands = fact_pack.get("filters", {}).get("brands") or []
     conclusions = analysis.get("topMaterialCombination", {}).get("brandConclusions", [])
     actual_names = [item.get("brand") for item in conclusions if isinstance(item, dict)]

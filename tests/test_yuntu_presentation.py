@@ -201,6 +201,31 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(brand_tabs["defaultItemId"], chapter["brandTabs"][0]["id"])
         self.assertEqual(brand_tabs["keyboard"], ["ArrowLeft", "ArrowRight", "Home", "End"])
 
+    def test_chapter01_uses_industry_facts_for_legacy_aggregate_fallback(self):
+        facts = self.fact_pack()
+        facts["industryTop1000Facts"] = {
+            "source_scope": "industry_top1000",
+            "sample_count": 2,
+            "metrics": {
+                "show_cnt": {"total": 3000},
+                "ctr": {"median": 0.2},
+                "cvr": {"median": 0.1},
+                "play_3s_rate": {"median": 0.4},
+            },
+        }
+        facts.pop("brandRankingFacts", None)
+        analysis = self.analysis()
+        analysis["topMaterialCombination"] = {"brandConclusions": [{
+                "brand": "WONDERLAB/万益蓝",
+                "classificationSource": "runtime_title_rule",
+                "dataSummary": "品牌全量素材的累计曝光、CTR、CVR 与 3 秒播放率呈现稳定。",
+                "evidence": [{"material_id": "101"}],
+            }]}
+        payload = build_yuntu_presentation(analysis, facts)
+
+        self.assertEqual(payload["chapters"]["chapter01"]["brandPanels"][0]["brand"], "全品牌")
+        self.assertIn("2 条素材", payload["chapters"]["chapter01"]["brandPanels"][0]["insights"][0]["text"])
+
     def test_brand_scope_ids_remain_unique_for_chinese_brand_names(self):
         facts = self.fact_pack()
         facts["chapter02Facts"]["scopeOrder"] = ["all", "五个女博士", "燕之屋"]

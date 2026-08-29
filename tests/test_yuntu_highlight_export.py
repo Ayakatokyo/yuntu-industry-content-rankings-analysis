@@ -52,8 +52,23 @@ class HighlightExportTests(unittest.TestCase):
             result = export_highlight_workbook(
                 fact_pack, {}, Path(tmp) / "highlight-frames.xlsx"
             )
-        self.assertIsNone(result)
-        self.assertIn("高光帧资产导出不可用", stderr.getvalue())
+        self.assertIsNotNone(result)
+        self.assertNotIn("高光帧资产导出不可用", stderr.getvalue())
+
+    def test_export_uses_python_fallback_when_node_runtime_is_unavailable(self):
+        fact_pack = {
+            "filters": {"brands": ["小仙炖"]},
+            "materialFacts": [{
+                "material_id": "101", "rank": 1, "title": "小仙炖测试素材",
+                "highlightFrames": [{"frame_ref": "f1", "available": True, "second": 0}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "yuntu_highlight_export._resolve_node_runtime", return_value=(None, None)
+        ):
+            output = export_highlight_workbook(fact_pack, {}, Path(tmp) / "highlight-frames.xlsx")
+            self.assertTrue(output.is_file())
+            self.assertGreater(output.stat().st_size, 0)
 
     def test_builds_report_aligned_rows_and_excludes_unavailable_frames(self):
         fact_pack = {

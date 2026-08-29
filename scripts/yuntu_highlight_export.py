@@ -151,8 +151,7 @@ def export_highlight_workbook(fact_pack, presentation, output_path, asset_root=N
     node_path, module_root = _resolve_node_runtime(skill_dir=Path(__file__).parent)
     builder = Path(__file__).with_name("build_highlight_workbook.mjs")
     if not node_path or module_root is None or not builder.is_file():
-        print("[yuntu] 高光帧资产导出不可用：未找到可用 Node/artifact-tool 运行时", file=sys.stderr)
-        return None
+        return _export_highlight_workbook_python(rows, output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="yuntu-highlight-xlsx-") as temp_dir:
         temp = Path(temp_dir)
@@ -170,7 +169,47 @@ def export_highlight_workbook(fact_pack, presentation, output_path, asset_root=N
         )
         if result.returncode != 0 or not output_path.is_file():
             detail = (result.stderr or result.stdout or "未知错误").strip().splitlines()[-1]
-            print(f"[yuntu] 高光帧资产导出不可用：{detail}", file=sys.stderr)
-            return None
+            print(f"[yuntu] Node 高光帧资产导出失败，改用 Python 兜底：{detail}", file=sys.stderr)
+            return _export_highlight_workbook_python(rows, output_path)
         output_path.with_name(output_path.name + ".inspect.ndjson").unlink(missing_ok=True)
     return output_path
+
+
+def _export_highlight_workbook_python(rows, output_path):
+    """Portable XLSX fallback when the optional Node runtime is unavailable."""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.drawing.image import Image as XLImage
+        from openpyxl.styles import Alignment, Font, PatternFill
+    except Exception as exc:
+        print(f"[yuntu] 高光帧资产导出不可用：Python XLSX 依赖加载失败：{exc}", file=sys.stderr)
+        return None
+    headers = ["品牌", "视觉类型", "素材排名", "素材 ID", "素材标题", "画面类型", "高光帧图片", "秒数", "点击峰值排名", "点击指数"]
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "高光帧资产"
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.fill = PatternFill("solid", fgColor="2C1810")
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for row in rows:
+        sheet.append([row.get("品牌"), row.get("视觉类型"), row.get("素材排名"), row.get("素材 ID"), row.get("素材标题"), row.get("画面类型"), None, row.get("秒数"), row.get("点击峰值排名"), row.get("点击指数")])
+        image_path = row.get("__image_path")
+        if image_path and Path(image_path).is_file():
+            try:
+                image = XLImage(image_path)
+                image.width, image.height = 92, 112
+                sheet.add_image(image, f"G{sheet.max_row}")
+            except Exception:
+                pass
+    widths = {"A": 18, "B": 14, "C": 10, "D": 22, "E": 42, "F": 22, "G": 18, "H": 12, "I": 12, "J": 12}
+    for column, width in widths.items(): sheet.column_dimensions[column].width = width
+    sheet.freeze_panes = "A2"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        workbook.save(output_path)
+    except Exception as exc:
+        print(f"[yuntu] 高光帧资产导出不可用：Python XLSX 写入失败：{exc}", file=sys.stderr)
+        return None
+    return output_path if output_path.is_file() and output_path.stat().st_size > 0 else None

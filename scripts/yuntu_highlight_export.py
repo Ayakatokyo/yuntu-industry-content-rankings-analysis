@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 
@@ -15,6 +16,33 @@ HIGHLIGHT_CATEGORY_LABELS = {
     "other": "其他画面",
 }
 OTHER_BRAND = "其他品牌"
+
+
+def _resolve_node_runtime(*, skill_dir=None, which_node=lambda: shutil.which("node"),
+                          legacy_node=Path("/Users/shuzida/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"),
+                          legacy_modules=Path("/Users/shuzida/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules")):
+    """Resolve a usable Node executable and artifact-tool module directory."""
+    env_node = os.environ.get("YUNTU_NODE_PATH")
+    node_candidates = [Path(env_node)] if env_node else []
+    detected = which_node()
+    if detected:
+        node_candidates.append(Path(detected))
+    node_candidates.append(Path(legacy_node))
+    node_path = next((candidate for candidate in node_candidates if candidate.is_file()), None)
+
+    env_modules = os.environ.get("YUNTU_NODE_MODULES")
+    module_candidates = [Path(env_modules)] if env_modules else []
+    roots = [Path.cwd()]
+    if skill_dir is not None:
+        roots.extend([Path(skill_dir), Path(skill_dir).parent])
+    if node_path is not None:
+        roots.extend([node_path.parent, node_path.parent.parent])
+    module_candidates.extend(root / "node_modules" for root in roots)
+    module_candidates.append(Path(legacy_modules))
+    module_root = next((candidate for candidate in module_candidates if candidate.is_dir()), None)
+    if node_path is None or module_root is None:
+        return None, None
+    return str(node_path), module_root
 
 
 def match_brand_from_title(title, brands):
@@ -111,16 +139,10 @@ def export_highlight_workbook(fact_pack, presentation, output_path, asset_root=N
     if not rows:
         return None
     output_path = Path(output_path).resolve()
-    node_path = os.environ.get("YUNTU_NODE_PATH") or shutil.which("node")
-    bundled_node = Path("/Users/shuzida/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node")
-    if bundled_node.is_file():
-        node_path = str(bundled_node)
-    configured_modules = os.environ.get("YUNTU_NODE_MODULES")
-    module_root = Path(configured_modules) if configured_modules else Path()
-    if not configured_modules or not module_root.is_dir():
-        module_root = Path("/Users/shuzida/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules")
+    node_path, module_root = _resolve_node_runtime(skill_dir=Path(__file__).parent)
     builder = Path(__file__).with_name("build_highlight_workbook.mjs")
-    if not node_path or not Path(node_path).is_file() or not module_root.is_dir() or not builder.is_file():
+    if not node_path or module_root is None or not builder.is_file():
+        print("[yuntu] 高光帧资产导出不可用：未找到可用 Node/artifact-tool 运行时", file=sys.stderr)
         return None
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="yuntu-highlight-xlsx-") as temp_dir:
@@ -138,6 +160,8 @@ def export_highlight_workbook(fact_pack, presentation, output_path, asset_root=N
             check=False,
         )
         if result.returncode != 0 or not output_path.is_file():
+            detail = (result.stderr or result.stdout or "未知错误").strip().splitlines()[-1]
+            print(f"[yuntu] 高光帧资产导出不可用：{detail}", file=sys.stderr)
             return None
         output_path.with_name(output_path.name + ".inspect.ndjson").unlink(missing_ok=True)
     return output_path

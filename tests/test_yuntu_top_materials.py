@@ -47,6 +47,24 @@ class YuntuTopMaterialsTests(unittest.TestCase):
             {"value": "未知品牌", "source": "unclassified"},
         )
 
+    def test_classify_brand_preserves_all_matching_brands(self):
+        subject = load_module()
+        result = subject.classify_brand(
+            "九阳豆浆和万益蓝wonderlab联名",
+            brands=["Joyoung soymilk/九阳豆浆", "WONDERLAB/万益蓝"],
+        )
+        self.assertEqual(result["value"], ["Joyoung soymilk/九阳豆浆", "WONDERLAB/万益蓝"])
+        self.assertEqual(result["matchedBrands"], result["value"])
+        self.assertEqual(result["source"], "runtime_title_rule")
+
+    def test_classify_brand_allows_observed_controlled_parent_alias(self):
+        subject = load_module()
+        result = subject.classify_brand(
+            "#九阳自律豆浆",
+            brands=["Joyoung soymilk/九阳豆浆"],
+        )
+        self.assertEqual(result["value"], "Joyoung soymilk/九阳豆浆")
+
     def test_classify_brand_uses_confirmed_title_rules(self):
         subject = load_module()
 
@@ -114,12 +132,12 @@ class YuntuTopMaterialsTests(unittest.TestCase):
         self.assertEqual(overall["people"]["age"][0]["exposureCoverage"], 600 / 1100)
         self.assertEqual(overall["marketing"]["成分/原料"][0]["rawTag"], "成分配方原料_铁元素")
         self.assertEqual(overall["marketing"]["内容形式"][0]["rawTag"], "单人口播")
-        self.assertEqual(result["brands"]["五个女博士"]["identifiedMaterialCount"], 1)
+        self.assertEqual(result["brands"]["五个女博士"]["identifiedMaterialCount"], 2)
         self.assertEqual(
             [item["material_id"] for item in result["brands"]["五个女博士"]["topMaterials"]],
-            ["1"],
+            ["1", "4"],
         )
-        self.assertIn("ambiguous_brand_title", result["warnings"])
+        self.assertNotIn("ambiguous_brand_title", result["warnings"])
 
     def test_build_combination_uses_runtime_brands_and_full_pool(self):
         subject = load_module()

@@ -12,7 +12,7 @@ from string import Template
 from rpa_io import write_json_atomically
 from yuntu_presentation import build_yuntu_presentation
 from yuntu_highlight_export import export_highlight_workbook
-from yuntu_highlight_export import match_brand_from_title
+from yuntu_highlight_export import match_brands_from_title
 from yuntu_report_sections import (
     render_audience_insights,
     render_highlight_insights,
@@ -700,7 +700,7 @@ def _validate_highlight_dashboard(analysis, fact_pack):
             expected_refs = known_refs if brand == "全品牌" else {
                 frame["frame_ref"]
                 for frame in successful_frames
-                if match_brand_from_title(frame.get("title"), brand_order) == brand
+                if brand in match_brands_from_title(frame.get("title"), brand_order)
             }
             if len(actual_refs) != len(set(actual_refs)) or set(actual_refs) != expected_refs:
                 raise YuntuReportError("highlightDashboard brand scope must classify its frames exactly once")

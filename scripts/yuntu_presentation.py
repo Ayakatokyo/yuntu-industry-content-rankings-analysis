@@ -4,7 +4,7 @@ from copy import deepcopy
 import math
 from pathlib import PurePosixPath
 
-from yuntu_highlight_export import match_brand_from_title
+from yuntu_highlight_export import match_brands_from_title
 
 
 PRESENTATION_SCHEMA_VERSION = 3
@@ -403,7 +403,7 @@ def _project_scoped_highlight_brands(scoped_brands, available, brand_order):
             target["derivativeDirections"].extend(deepcopy(group.get("derivative_directions", [])))
             for ref in refs:
                 frame_card = _frame_card(available[ref])
-                frame_card["brand"] = match_brand_from_title(frame_card.get("title"), brand_order)
+                frame_card["brand"] = "、".join(match_brands_from_title(frame_card.get("title"), brand_order)) or "其他品牌"
                 target["frames"].append(frame_card)
         if len(scope_refs) != len(set(scope_refs)):
             raise YuntuPresentationError("highlight frame coverage is invalid")
@@ -419,7 +419,7 @@ def _project_scoped_highlight_brands(scoped_brands, available, brand_order):
     for scope in projected[1:]:
         expected = {
             ref for ref, frame in available.items()
-            if match_brand_from_title(frame.get("title"), brand_order) == scope["brand"]
+            if scope["brand"] in match_brands_from_title(frame.get("title"), brand_order)
         }
         if scope["_refs"] != expected:
             raise YuntuPresentationError("brand highlight scope frame coverage is invalid")
@@ -458,12 +458,16 @@ def _project_chapter04(analysis, fact_pack):
         target["derivativeDirections"].extend(deepcopy(group.get("derivative_directions", [])))
         for ref in refs:
             frame_card = _frame_card(available[ref])
-            frame_card["brand"] = match_brand_from_title(frame_card.get("title"), brand_order)
+            matched_brands = match_brands_from_title(frame_card.get("title"), brand_order)
+            frame_card["brand"] = "、".join(matched_brands) or "其他品牌"
             target["frames"].append(frame_card)
-            brand_target = brand_merged.setdefault(frame_card["brand"], {})
-            brand_category = brand_target.setdefault(category, {"id": category, "label": category, "commonConclusion": [], "derivativeDirections": [], "frames": []})
-            brand_category["frames"].append(frame_card)
-        for brand in set(frame.get("brand") for frame in target["frames"] if frame.get("brand")):
+            for matched_brand in matched_brands or ["其他品牌"]:
+                brand_target = brand_merged.setdefault(matched_brand, {})
+                brand_category = brand_target.setdefault(category, {"id": category, "label": category, "commonConclusion": [], "derivativeDirections": [], "frames": []})
+                brand_category["frames"].append(frame_card)
+        for brand in list(brand_merged):
+            if category not in brand_merged[brand]:
+                continue
             brand_category = brand_merged[brand][category]
             if not brand_category["commonConclusion"]:
                 brand_category["commonConclusion"].extend(deepcopy(group.get("common_patterns", [])))

@@ -12,7 +12,7 @@ from yuntu_highlights import (
     load_highlights_manifest,
     write_highlights_manifest,
 )
-from yuntu_highlight_export import match_brand_from_title
+from yuntu_highlight_export import match_brands_from_title
 from yuntu_top_materials import (
     build_audience_dashboard,
     build_marketing_dashboard,
@@ -374,7 +374,7 @@ def _model_input_sections(
                 {
                     "material_id": str(fact["material_id"]),
                     "title": fact["title"],
-                    "brand": match_brand_from_title(fact["title"], brands),
+                    "brand": "、".join(match_brands_from_title(fact["title"], brands)) or "其他品牌",
                     "rank": fact["rank"],
                     "frame_ref": frame.get("frame_ref"),
                     "second": frame.get("second"),

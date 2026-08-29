@@ -1,6 +1,8 @@
 """Build post-RPA facts for the TOP material combination report block."""
 
 from statistics import median
+import re
+import unicodedata
 
 
 BRAND_RULES = (
@@ -54,6 +56,28 @@ def _runtime_brand_rules(brands):
     return tuple(rules)
 
 
+def _classification_brands(classification):
+    """Normalize single- and multi-brand classification results."""
+    if not isinstance(classification, dict):
+        return []
+    values = classification.get("matchedBrands")
+    if isinstance(values, list):
+        return [str(value) for value in values if str(value).strip()]
+    value = classification.get("value")
+    return [str(value)] if isinstance(value, str) and value not in {"未知品牌", "歧义品牌"} else []
+
+
+def _brand_token_matches(text, token):
+    normalized_text = unicodedata.normalize("NFKC", text).casefold()
+    normalized_token = unicodedata.normalize("NFKC", token).casefold()
+    if normalized_token in normalized_text:
+        return True
+    # Observed in the source data: 九阳自律豆浆 omits the configured 豆浆 suffix.
+    if normalized_token == "九阳豆浆":
+        return bool(re.search(r"九阳[^\s#，。！？]{0,6}豆浆", normalized_text))
+    return False
+
+
 def classify_brand(title, *, brands=None):
     """Classify a title using only the current run's user-provided brands."""
     if brands is None:
@@ -62,16 +86,16 @@ def classify_brand(title, *, brands=None):
     else:
         rules = _runtime_brand_rules(brands)
         source = "runtime_title_rule"
-    text = str(title or "").casefold()
+    text = str(title or "")
     matches = [
         brand
         for brand, keywords in rules
-        if any(keyword.casefold() in text for keyword in keywords)
+        if any(_brand_token_matches(text, keyword) for keyword in keywords)
     ]
     if len(matches) == 1:
         return {"value": matches[0], "source": source}
     if len(matches) > 1:
-        return {"value": "歧义品牌", "source": "ambiguous"}
+        return {"value": matches, "matchedBrands": matches, "source": source}
     return {"value": "未知品牌", "source": "unclassified"}
 
 
@@ -372,14 +396,11 @@ def build_top_material_combination(records, *, top_n=30, brands=None):
     ]
     pool_records = select_top_materials(classified, limit=len(classified))
     warnings = []
-    if any(record["brandClassification"]["source"] == "ambiguous" for record in classified):
-        warnings.append("ambiguous_brand_title")
     brands = {}
     for brand in classification_brands:
         brand_records = [
             record for record in classified
-            if record["brandClassification"] == {"value": brand, "source": "title_rule"}
-            or record["brandClassification"] == {"value": brand, "source": "runtime_title_rule"}
+            if brand in _classification_brands(record.get("brandClassification"))
         ]
         if not brand_records:
             continue

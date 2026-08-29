@@ -9,6 +9,8 @@ import subprocess
 import sys
 import tempfile
 
+from yuntu_top_materials import classify_brand
+
 
 HIGHLIGHT_CATEGORY_LABELS = {
     "portrait": "人像画面",
@@ -45,14 +47,20 @@ def _resolve_node_runtime(*, skill_dir=None, which_node=lambda: shutil.which("no
     return str(node_path), module_root
 
 
+def match_brands_from_title(title, brands):
+    """Return every requested brand occurring in a material title."""
+    result = classify_brand(title, brands=brands)
+    values = result.get("matchedBrands") if isinstance(result, dict) else None
+    if isinstance(values, list):
+        return values
+    value = result.get("value") if isinstance(result, dict) else None
+    return [value] if isinstance(value, str) and value not in {"未知品牌", "歧义品牌"} else []
+
+
 def match_brand_from_title(title, brands):
-    """Return the first requested brand occurring in a material title."""
-    text = str(title or "")
-    for brand in brands or ():
-        label = str(brand or "").strip()
-        if label and label in text:
-            return label
-    return OTHER_BRAND
+    """Backward-compatible single-label projection of title matches."""
+    matches = match_brands_from_title(title, brands)
+    return matches[0] if matches else OTHER_BRAND
 
 
 def _category_by_ref(presentation):
@@ -89,7 +97,8 @@ def build_highlight_export_rows(fact_pack, presentation=None):
             continue
         material_id = str(fact.get("material_id") or "")
         title = str(fact.get("title") or material_id)
-        brand = match_brand_from_title(title, brands)
+        matches = match_brands_from_title(title, brands)
+        brand = "、".join(matches) if matches else OTHER_BRAND
         for frame in fact.get("highlightFrames", []):
             if not isinstance(frame, dict) or frame.get("available") is not True:
                 continue

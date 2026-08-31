@@ -171,6 +171,32 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(panels[1]["charts"][0]["buckets"][0]["value"], 2)
         self.assertEqual(panels[1]["topMaterials"][0]["material_id"], "102")
 
+    def test_chapter02_projects_marketing_secondary_tags_and_raw_audit_tags(self):
+        facts = self.fact_pack()
+        dashboard = {
+            "taxonomyVersion": 2,
+            "categories": [{
+                "category": "功效功能",
+                "occurrenceCount": 2,
+                "tags": [{
+                    "tag": "补充营养_日常养护",
+                    "rawTag": "功效功能_补充营养_日常养护",
+                    "count": 2,
+                }],
+            }],
+        }
+        facts["chapter02Facts"]["all"]["marketingDashboard"] = dashboard
+        facts["chapter02AiFacts"]["all"]["marketingDashboard"] = dashboard
+
+        payload = build_yuntu_presentation(self.analysis(), facts)
+        chart = payload["chapters"]["chapter02"]["panels"][0]["charts"][0]
+        detail_bucket = payload["chapters"]["chapter02"]["panels"][0]["detailViews"][0]["pie"]["buckets"][0]
+
+        self.assertEqual(chart["buckets"][0]["label"], "功效功能")
+        self.assertEqual(detail_bucket["label"], "补充营养_日常养护")
+        self.assertEqual(detail_bucket["rawTag"], "功效功能_补充营养_日常养护")
+        self.assertEqual(payload["extensions"]["yuntu"]["marketingTagTaxonomyVersion"], 2)
+
     def test_projects_chapter01_top_material_conclusions(self):
         analysis = self.analysis()
         analysis["topMaterialCombination"] = {

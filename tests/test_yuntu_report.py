@@ -1138,6 +1138,58 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('.audience-chart-age,.audience-chart-gender{display:flex;flex-direction:column}', html)
         self.assertIn('flex:1;min-height:0;gap:14px;align-items:center', html)
         self.assertIn('@container (max-width:360px){.audience-pie-layout{grid-template-columns:1fr}', html)
+
+    def test_render_report_uses_adaptive_audience_drill_and_shared_chapter02_column_styles(self):
+        report = load_module()
+        chapter02 = {
+            "scopeOrder": ["all"],
+            "all": {
+                "label": "全量 TOP1000",
+                "topMaterials": [{
+                    "material_id": "1", "rank": 1, "title": "素材一",
+                    "people_tags": ["新锐白领"],
+                    "material_tags": ["功效功能_补充营养_日常养护", "未分层营销标签"],
+                }],
+                "audienceDashboard": {"dimensions": {"crowd": {
+                    "labelMode": "normalized_tag_share", "recordCount": 1,
+                    "buckets": [{"label": "新锐白领", "materialCount": 1, "chartShare": 1}],
+                }}},
+                "marketingDashboard": {
+                    "taxonomyVersion": 2,
+                    "tagCount": 2,
+                    "occurrenceCount": 2,
+                    "categories": [{
+                        "category": "功效功能", "tagCount": 1, "occurrenceCount": 1,
+                        "tags": [{"tag": "补充营养_日常养护", "rawTag": "功效功能_补充营养_日常养护", "count": 1}],
+                    }, {
+                        "category": "其他", "tagCount": 1, "occurrenceCount": 1,
+                        "tags": [{"tag": "未分层营销标签", "rawTag": "未分层营销标签", "count": 1}],
+                    }],
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "report", fact_pack={"chapter02Facts": chapter02})
+            html = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-marketing-taxonomy-version="2"', html)
+        self.assertIn("function parseMarketingTag(rawTag)", html)
+        self.assertNotIn("function marketingCategory(tag)", html)
+        self.assertIn("rawTag: parsed.rawTag", html)
+        self.assertIn("function formatExposure(record)", html)
+        self.assertIn("className = 'preference-exposure'", html)
+        self.assertIn("exposure.textContent = '曝光量：' + formatExposure(record)", html)
+        self.assertIn("grid-template-areas", html)
+        self.assertIn('.unified-yuntu .audience-drill-panel {', html)
+        self.assertIn('min-height: 0;', html)
+        self.assertIn('align-self: stretch;', html)
+        self.assertIn('height: auto;', html)
+        self.assertIn('.unified-yuntu :is(.audience-column-bar, .marketing-category-column .column-bar)', html)
+        self.assertIn('linear-gradient(180deg, #e1ac61 0%, #9b6a37 100%)', html)
+        self.assertIn('.unified-yuntu :is(.audience-column-item, .marketing-category-column):hover', html)
         self.assertIn('.pie-chart{position:relative;width:min(260px,100%);', html)
         self.assertIn('.audience-chart-gender .pie-chart{width:min(240px,100%)}', html)
         self.assertIn('.pie-legend .legend-item{position:relative;display:grid;grid-template-columns:minmax(80px,1fr) auto auto;', html)
@@ -2053,14 +2105,21 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("white-space: nowrap;", css)
         self.assertIn(".unified-yuntu .script-drill-layout", css)
         self.assertIn(".unified-yuntu .script-drill-primary", css)
-        self.assertIn("grid-template-rows: auto 150px auto;", css)
+        self.assertIn("grid-template-rows: auto 170px auto;", css)
         self.assertIn("min-height: 300px;", css)
+        self.assertIn(".unified-yuntu .script-drill-detail {", css)
+        self.assertIn("min-height: 0;", css)
         self.assertIn(".unified-yuntu .audience-drill-panel", css)
         self.assertIn("align-self: stretch;", css)
+        self.assertIn("height: auto;", css)
         self.assertIn(".unified-yuntu .audience-drill-panel .preference-list", css)
+        self.assertIn(".unified-yuntu .audience-drill-panel .material-link", css)
+        self.assertIn("font-size: 14px;", css)
+        self.assertIn(".unified-yuntu .audience-drill-panel .preference-exposure", css)
+        self.assertIn('grid-template-areas:\n    "rank exposure"\n    "title title";', css)
         self.assertIn(".unified-yuntu .audience-chart-crowd .audience-column-chart", css)
-        self.assertIn("min-height: 250px;", css)
-        self.assertIn("height: 170px;", css)
+        self.assertIn("min-height: var(--chapter02-column-container-height);", css)
+        self.assertIn("height: var(--chapter02-column-plot-height);", css)
         self.assertIn(".unified-yuntu .brand-tab[aria-selected=\"true\"]::after", css)
         self.assertIn(".unified-yuntu .audience-chart-gender .pie-legend", css)
         self.assertIn("margin-block: auto;", css)
@@ -2075,6 +2134,27 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn(".second-level-section {", css)
         self.assertIn("border-top: 0;", css)
         self.assertIn("padding-top: 0;", css)
+
+    def test_shared_style_keeps_audience_drill_height_and_compacts_pies(self):
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("--chapter02-audience-card-height: 420px;", css)
+        self.assertIn("--chapter02-audience-drill-height: 300px;", css)
+        self.assertIn(".unified-yuntu .audience-chart-crowd .script-drill-detail", css)
+        self.assertIn(".unified-yuntu .audience-chart-age,", css)
+        self.assertIn("min-height: var(--chapter02-audience-card-height);", css)
+        self.assertIn(".unified-yuntu .audience-chart-crowd .script-drill-detail", css)
+        self.assertIn("min-height: var(--chapter02-audience-drill-height);", css)
+        self.assertIn(".unified-yuntu .audience-chart-age .pie-chart", css)
+        self.assertIn("width: min(var(--chapter02-audience-pie-size), 100%) !important;", css)
+        self.assertIn("gap: 6px 10px;", css)
+        self.assertIn("padding: 2px 0;", css)
+        self.assertIn(".unified-yuntu .marketing-drill-primary {", css)
+        self.assertIn("align-content:center;", css)
+        self.assertIn(".unified-yuntu .marketing-drill-primary-plot {", css)
+        self.assertIn("justify-content: center;", css)
 
     def test_unified_report_mobile_navigation_does_not_force_page_overflow(self):
         css = (ROOT / "assets" / "report" / "unified-report.css").read_text(

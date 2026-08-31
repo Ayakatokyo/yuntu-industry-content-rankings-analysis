@@ -411,6 +411,18 @@
           return article;
         }
 
+        function formatExposure(record) {
+          var exposure = record && record.exposure;
+          if (typeof exposure === 'string' && exposure.trim()) return exposure.trim();
+          if (exposure && typeof exposure === 'object') {
+            if (typeof exposure.raw === 'string' && exposure.raw.trim()) return exposure.raw.trim();
+            var minimum = Number(exposure.min);
+            var maximum = Number(exposure.max);
+            if (Number.isFinite(minimum) && Number.isFinite(maximum)) return minimum + '-' + maximum;
+          }
+          return '未提供';
+        }
+
         function renderAudiencePreferencePanel(groupName, selectedRecords) {
           var panel = document.createElement('aside');
           panel.className = 'audience-drill-panel';
@@ -436,6 +448,9 @@
             var rank = document.createElement('span');
             rank.className = 'preference-rank';
             rank.textContent = 'TOP ' + (index + 1);
+            var exposure = document.createElement('span');
+            exposure.className = 'preference-exposure';
+            exposure.textContent = '曝光量：' + formatExposure(record);
             var button = document.createElement('button');
             button.className = 'material-link';
             button.type = 'button';
@@ -444,7 +459,7 @@
             button.addEventListener('click', function () {
               activateMaterialById(record.material_id);
             });
-            row.append(rank, button);
+            row.append(rank, exposure, button);
             list.append(row);
           });
           if (!materials.length) {
@@ -674,14 +689,16 @@
         var audienceDashboard = dashboard.closest('[data-audience-records]');
         var colors = ['#9b6a37', '#d79a4b', '#6f7f5f', '#a14f38', '#6d5d4d', '#c7a36a', '#7d8f9a', '#b77d54'];
 
-        function marketingCategory(tag) {
-          if (tag.indexOf('成分配方原料_') === 0) return '成分/原料';
-          if (tag.indexOf('功效功能_') === 0) return '功效';
-          if (tag.indexOf('痛点_') === 0) return '痛点';
-          if (tag.indexOf('使用场景_') === 0) return '使用场景';
-          if (['口播', '商品展示', '图文', '情景', '动画', '无语音'].some(function (token) { return tag.indexOf(token) >= 0; })) return '内容形式';
-          if (['优惠', '价格', '赠送', '限时', '抢购', '折', '划算', '促销'].some(function (token) { return tag.indexOf(token) >= 0; })) return '促销利益';
-          return '其他';
+        function parseMarketingTag(rawTag) {
+          var raw = typeof rawTag === 'string' ? rawTag : '';
+          var tag = raw.trim();
+          var separator = tag.indexOf('_');
+          if (separator < 0) return { category: '其他', tag: tag, rawTag: raw };
+          return {
+            category: tag.slice(0, separator).trim() || '其他',
+            tag: tag.slice(separator + 1).trim(),
+            rawTag: raw
+          };
         }
 
         function computeMarketingCategories(selectedRecords) {
@@ -691,16 +708,17 @@
             var tags = Array.isArray(record.material_tags) ? record.material_tags : [];
             tags.forEach(function (rawTag) {
               if (typeof rawTag !== 'string' || !rawTag.trim()) return;
-              var tag = rawTag.trim();
-              var category = marketingCategory(tag);
+              var parsed = parseMarketingTag(rawTag);
+              var category = parsed.category;
               categoryCounts[category] = (categoryCounts[category] || 0) + 1;
               categoryTags[category] = categoryTags[category] || {};
-              categoryTags[category][tag] = (categoryTags[category][tag] || 0) + 1;
+              categoryTags[category][parsed.rawTag] = categoryTags[category][parsed.rawTag] || { tag: parsed.tag, rawTag: parsed.rawTag, count: 0 };
+              categoryTags[category][parsed.rawTag].count += 1;
             });
           });
           return Object.keys(categoryCounts).map(function (category) {
-            var tags = Object.keys(categoryTags[category]).map(function (tag) {
-              return { tag: tag, count: categoryTags[category][tag] };
+            var tags = Object.keys(categoryTags[category]).map(function (rawTag) {
+              return categoryTags[category][rawTag];
             }).sort(function (left, right) {
               return Number(right.count) - Number(left.count) || String(left.tag).localeCompare(String(right.tag));
             });
@@ -721,7 +739,7 @@
           var chart = document.createElement('div');
           chart.className = 'chart-grid script-dashboard-overview marketing-column-chart';
           chart.setAttribute('role', 'group');
-          chart.setAttribute('aria-label', '营销卖点一级类别柱状图');
+          chart.setAttribute('aria-label', '营销卖点汇总柱状图');
           categories.forEach(function (item) {
             var column = document.createElement('button');
             column.type = 'button';
@@ -746,7 +764,7 @@
           view.replaceChildren(chart);
         }
 
-        if (audienceDashboard) {
+        if (audienceDashboard && dashboard.getAttribute('data-marketing-taxonomy-version') === '2') {
           audienceDashboard.addEventListener('audience-topn-change', function (event) {
             renderMarketingOverview(computeMarketingCategories(event.detail.records || []));
           });
@@ -856,6 +874,7 @@
             row.className = 'marketing-tag-detail-row';
             var label = document.createElement('span');
             label.textContent = tag.tag || '未命名标签';
+            label.title = tag.rawTag || tag.tag || '未命名标签';
             var value = document.createElement('span');
             value.textContent = Number(tag.count || 0) + ' 次';
             row.append(label, value);

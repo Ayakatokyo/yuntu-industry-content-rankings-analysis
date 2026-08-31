@@ -128,13 +128,16 @@ def _chapter02_sources(fact_pack):
     return chart_facts, ai_facts, chart_order
 
 
-def _chart_bucket(key, label, value, rank):
-    return {
+def _chart_bucket(key, label, value, rank, *, raw_tag=None):
+    bucket = {
         "key": _text(key),
         "label": _text(label),
         "value": _finite_number(value, "chart value"),
         "rank": rank,
     }
+    if _text(raw_tag):
+        bucket["rawTag"] = _text(raw_tag)
+    return bucket
 
 
 def _marketing_charts(scope_id, scope_fact):
@@ -158,7 +161,15 @@ def _marketing_charts(scope_id, scope_fact):
         for tag_index, tag in enumerate(tags, start=1):
             if not isinstance(tag, dict) or not _text(tag.get("tag")):
                 raise YuntuPresentationError("marketing tag is invalid")
-            tag_buckets.append(_chart_bucket(tag["tag"], tag["tag"], tag.get("count", 0), tag_index))
+            tag_buckets.append(
+                _chart_bucket(
+                    tag["tag"],
+                    tag["tag"],
+                    tag.get("count", 0),
+                    tag_index,
+                    raw_tag=tag.get("rawTag"),
+                )
+            )
         detail_views.append({
             "id": f"{scope_id}-marketing-level2-{index}",
             "category": name,
@@ -189,13 +200,13 @@ def _marketing_charts(scope_id, scope_fact):
     return [{
         "id": primary_id,
         "type": "column",
-        "title": "营销卖点一级类别",
+        "title": "营销卖点汇总",
         "dataSource": "chapter02Facts",
         "scopeId": scope_id,
         "value": {"field": "occurrenceCount", "unit": "count"},
         "buckets": primary_buckets,
         "interaction": {"type": "column-drilldown", "target": f"{scope_id}-marketing-level2"},
-        "accessibility": {"label": "营销卖点一级类别柱状图"},
+        "accessibility": {"label": "营销卖点汇总柱状图"},
     }], detail_views
 
 
@@ -242,6 +253,12 @@ def _project_chapter02(analysis, fact_pack):
             "topMaterials": deepcopy(scope_fact.get("topMaterials", [])),
             "charts": charts,
             "detailViews": detail_views,
+            **(
+                {"marketingTagTaxonomyVersion": scope_fact["marketingDashboard"]["taxonomyVersion"]}
+                if isinstance(scope_fact.get("marketingDashboard"), dict)
+                and scope_fact["marketingDashboard"].get("taxonomyVersion") is not None
+                else {}
+            ),
         })
         tab_items.append({"id": scope_id, "label": scopes[-1]["label"], "panelId": panels[-1]["id"]})
     return scopes, {
@@ -704,7 +721,7 @@ def build_yuntu_presentation(analysis, fact_pack, *, report_meta=None):
             "yuntu": {
                 "rankingMetric": "totalCost",
                 "brandOrder": [scope["label"] for scope in scopes if scope["kind"] == "brand"],
-                "marketingTagTaxonomyVersion": 1,
+                "marketingTagTaxonomyVersion": 2,
                 "secondLevelMetricOrder": list(SECOND_LEVEL_METRIC_ORDER),
                 "factSourceContract": {
                     "chapter02AiFacts": "AI 二次分析唯一来源",

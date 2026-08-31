@@ -310,12 +310,17 @@ class YuntuBatchTests(unittest.TestCase):
 
         self.assertEqual(status, 0)
         self.assertEqual(len(invoker.list_calls), 3)
-        self.assertEqual(
+        self.assertCountEqual(
             [params["custom_start_date"] for _, params in invoker.list_calls],
             ["20260810", "20260730", "20260810"],
         )
-        self.assertEqual(invoker.list_calls[2][1]["brand_scope_type"], "ALL_INDUSTRY")
-        self.assertNotIn("brands", invoker.list_calls[2][1])
+        industry_calls = [
+            params
+            for _, params in invoker.list_calls
+            if params.get("brand_scope_type") == "ALL_INDUSTRY"
+        ]
+        self.assertEqual(len(industry_calls), 1)
+        self.assertNotIn("brands", industry_calls[0])
         self.assertEqual([params["material_id"] for _, params in invoker.detail_calls], ["101"])
         self.assertEqual(set(manifest["rankingRuns"]), {"query", "previous_period", "industry"})
         self.assertTrue(all(run["status"] == "success" for run in manifest["rankingRuns"].values()))

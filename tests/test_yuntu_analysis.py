@@ -461,6 +461,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             audience["evidence"]["chapter02AiFacts"]["all"]["marketingDashboard"]["topTags"],
             [{
                 "tag": "产品展示",
+                "rawTag": "产品展示",
                 "count": 1,
                 "materialCount": 1,
                 "category": "其他",

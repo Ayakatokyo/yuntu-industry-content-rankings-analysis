@@ -365,9 +365,11 @@ def render_audience_insights(
             details = {item.get("category"): item for item in panel.get("detailViews", [])}
             for bucket in chart.get("buckets", []):
                 detail = details.get(bucket.get("label"), {})
-                tags = [{"tag": item.get("label"), "count": item.get("value", 0)} for item in (detail.get("pie", {}).get("buckets", []))]
+                tags = [{"tag": item.get("label"), "rawTag": item.get("rawTag"), "count": item.get("value", 0)} for item in (detail.get("pie", {}).get("buckets", []))]
                 categories.append({"category": bucket.get("label"), "occurrenceCount": bucket.get("value", 0), "tagCount": len(tags), "tags": tags})
             converted_facts[scope_key] = {"label": (scope_definition or {}).get("label", scope_key), "audienceDashboard": panel.get("audienceDashboard", {}), "topMaterials": panel.get("topMaterials", []), "marketingDashboard": {"categories": categories, "tagCount": sum(item.get("tagCount", 0) for item in categories), "occurrenceCount": sum(item.get("occurrenceCount", 0) for item in categories)}}
+            if panel.get("marketingTagTaxonomyVersion") is not None:
+                converted_facts[scope_key]["marketingDashboard"]["taxonomyVersion"] = panel["marketingTagTaxonomyVersion"]
             ai_insights = panel.get("aiInsights", {})
             converted_insights["scopes"][scope_key] = {
                 "audienceSummary": {"title": (ai_insights.get("audienceSummary") or {}).get("title", ""), "summary": (ai_insights.get("audienceSummary") or {}).get("text", "")},
@@ -409,6 +411,11 @@ def render_audience_insights(
     def marketing_html(dashboard):
         categories = dashboard.get("categories", []) if isinstance(dashboard, dict) else []
         payload = html_module.escape(json_module.dumps(categories, ensure_ascii=False, separators=(",", ":")), quote=True)
+        taxonomy_version = dashboard.get("taxonomyVersion") if isinstance(dashboard, dict) else None
+        taxonomy_attr = (
+            ' data-marketing-taxonomy-version="' + esc(taxonomy_version) + '"'
+            if taxonomy_version is not None else ""
+        )
         if not categories:
             return '<div class="marketing-dashboard"><h3>营销卖点汇总</h3><p class="data-note">暂无营销卖点汇总数据。</p></div>'
         maximum = max((item.get("occurrenceCount", 0) for item in categories), default=1) or 1
@@ -422,9 +429,9 @@ def render_audience_insights(
                 + f'{count / maximum * 100:.2f}%' + '"></i></span><strong>' + esc(item.get("category", ""))
                 + '</strong><span>' + esc(count) + ' 次</span></button>'
             )
-        return '<div class="marketing-dashboard marketing-dashboard-card chart-card" data-marketing-categories="' + payload + '"><h3>营销卖点汇总</h3><p class="script-dashboard-hint">共 ' \
+        return '<div class="marketing-dashboard marketing-dashboard-card chart-card"' + taxonomy_attr + ' data-marketing-categories="' + payload + '"><h3>营销卖点汇总</h3><p class="script-dashboard-hint">共 ' \
             + esc(dashboard.get("tagCount", 0)) + ' 个标签，' + esc(dashboard.get("occurrenceCount", 0)) \
-            + ' 次命中；点击类别柱查看该类别的标签比例。</p><div data-marketing-view><div class="chart-grid script-dashboard-overview marketing-column-chart" role="group" aria-label="营销卖点一级类别柱状图">' \
+            + ' 次命中；点击类别柱查看该类别的标签比例。</p><div data-marketing-view><div class="chart-grid script-dashboard-overview marketing-column-chart" role="group" aria-label="营销卖点汇总柱状图">' \
             + "".join(columns) + '</div></div></div>'
 
     tabs, panels = [], []

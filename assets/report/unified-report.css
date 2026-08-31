@@ -984,7 +984,11 @@ body.unified-report {
   background: #fff1dc;
 }
 
-.unified-yuntu .script-drill-detail,
+.unified-yuntu .script-drill-detail {
+  min-height: 0;
+  transition: opacity 260ms ease;
+}
+
 .unified-yuntu .script-dashboard-overview {
   min-height: 300px;
   transition: opacity 260ms ease;
@@ -1013,10 +1017,21 @@ body.unified-report {
 
 .unified-yuntu .script-drill-primary {
   display: grid;
-  grid-template-rows: auto 150px auto;
+  grid-template-rows: auto 170px auto;
   gap: 10px;
   min-width: 0;
   padding: 16px;
+}
+
+.unified-yuntu .audience-chart-crowd .script-drill-detail {
+  display: flex;
+  min-height: var(--chapter02-audience-drill-height);
+  box-sizing: border-box;
+}
+
+.unified-yuntu .audience-chart-crowd .script-drill-detail > .script-drill-layout {
+  flex: 1;
+  min-height: 0;
 }
 
 .unified-yuntu .script-drill-primary > b {
@@ -1055,6 +1070,7 @@ body.unified-report {
 .unified-yuntu .audience-drill-panel {
   align-self: stretch;
   min-width: 0;
+  height: auto;
   border: 1px solid var(--unified-line);
   border-radius: 8px;
   background: var(--unified-surface);
@@ -1063,8 +1079,9 @@ body.unified-report {
 
 .unified-yuntu .audience-drill-panel .preference-card {
   display: grid;
+  align-content: start;
   gap: 14px;
-  height: 100%;
+  height: auto;
   border: 0;
   background: transparent;
 }
@@ -1090,10 +1107,27 @@ body.unified-report {
 
 .unified-yuntu .audience-drill-panel .preference-list {
   display: grid;
-  gap: 8px;
+  gap: 12px;
   margin: 10px 0 0;
   padding: 0;
   list-style: none;
+}
+
+.unified-yuntu .audience-drill-panel .preference-item {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-areas:
+    "rank exposure"
+    "title title";
+  column-gap: 10px;
+  row-gap: 6px;
+  align-items: baseline;
+  padding: 4px 0;
+}
+
+.unified-yuntu .audience-drill-panel .preference-item + .preference-item {
+  padding-top: 8px;
+  border-top: 1px solid rgba(223, 207, 189, .7);
 }
 
 .unified-yuntu .audience-drill-panel .preference-item {
@@ -1107,17 +1141,29 @@ body.unified-report {
 }
 
 .unified-yuntu .audience-drill-panel .preference-rank {
+  grid-area: rank;
   color: #7d4a25;
   font-weight: 800;
   white-space: nowrap;
 }
 
+.unified-yuntu .audience-drill-panel .preference-exposure {
+  grid-area: exposure;
+  color: var(--unified-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .unified-yuntu .audience-drill-panel .material-link {
+  grid-area: title;
   min-width: 0;
   border: 0;
   background: transparent;
   color: var(--unified-accent-dark);
   padding: 0;
+  font-size: 14px;
+  line-height: 1.55;
   overflow-wrap: anywhere;
   text-align: left;
   cursor: pointer;
@@ -1138,11 +1184,11 @@ body.unified-report {
 }
 
 .unified-yuntu .audience-chart-crowd .audience-column-chart {
-  min-height: 250px;
+  min-height: var(--chapter02-column-container-height);
 }
 
 .unified-yuntu .audience-chart-crowd .audience-column-item {
-  height: 170px;
+  height: var(--chapter02-column-plot-height);
 }
 
 @media (max-width: 900px) {
@@ -1153,13 +1199,18 @@ body.unified-report {
 
 .unified-yuntu .audience-chart-age,
 .unified-yuntu .audience-chart-gender {
-  min-height: 512px;
+  min-height: var(--chapter02-audience-card-height);
+}
+
+.unified-yuntu .audience-chart-age .pie-chart,
+.unified-yuntu .audience-chart-gender .pie-chart {
+  width: min(var(--chapter02-audience-pie-size), 100%) !important;
 }
 
 .unified-yuntu .audience-chart-age .pie-legend,
 .unified-yuntu .audience-chart-gender .pie-legend {
   display: grid;
-  gap: 8px 12px;
+  gap: 6px 10px;
   overflow: visible;
   padding: 0;
 }
@@ -1185,7 +1236,7 @@ body.unified-report {
   gap: 6px;
   justify-content: start;
   min-width: 0;
-  padding: 4px 0;
+  padding: 2px 0;
   white-space: nowrap;
 }
 
@@ -1274,6 +1325,101 @@ body.unified-report {
     --highlight-grid-height: min(1880px, 288vw);
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows: repeat(6, minmax(0, 1fr));
+  }
+}
+
+/* Chapter 02 column charts share one visual scale while keeping their data and drill-down DOM independent. */
+.unified-yuntu {
+  --chapter02-audience-card-height: 420px;
+  --chapter02-audience-drill-height: 300px;
+  --chapter02-audience-pie-size: 220px;
+  --chapter02-column-container-height: 244px;
+  --chapter02-column-plot-height: 158px;
+  --chapter02-column-gap: 10px;
+  --chapter02-column-width: min(48px, 68%);
+  --chapter02-column-radius: 5px 5px 2px 2px;
+  --chapter02-column-gradient: linear-gradient(180deg, #e1ac61 0%, #9b6a37 100%);
+}
+
+.unified-yuntu :is(.audience-chart-crowd .audience-column-chart, .marketing-column-chart) {
+  min-height: var(--chapter02-column-container-height);
+  gap: var(--chapter02-column-gap);
+}
+
+.unified-yuntu :is(.audience-column-plot, .marketing-column-chart) {
+  gap: var(--chapter02-column-gap);
+  background-image: repeating-linear-gradient(to top, transparent 0, transparent 56px, rgba(223, 207, 189, .58) 57px);
+}
+
+.unified-yuntu .audience-column-chart {
+  padding: 18px 12px 0;
+}
+
+.unified-yuntu .audience-column-plot {
+  padding: 0 12px 42px;
+}
+
+.unified-yuntu .audience-column-item {
+  height: var(--chapter02-column-plot-height);
+}
+
+.unified-yuntu .marketing-category-column {
+  min-height: var(--chapter02-column-container-height);
+}
+
+.unified-yuntu .marketing-category-column-plot {
+  height: var(--chapter02-column-plot-height);
+}
+
+.unified-yuntu :is(.audience-column-bar, .marketing-category-column .column-bar) {
+  width: var(--chapter02-column-width);
+  border-radius: var(--chapter02-column-radius);
+  background: var(--chapter02-column-gradient) !important;
+  box-shadow: 0 3px 8px rgba(142, 85, 40, .16);
+  transition: filter .15s ease, transform .15s ease;
+}
+
+.unified-yuntu :is(.audience-column-label, .marketing-category-column strong) {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.unified-yuntu :is(.audience-column-item, .marketing-category-column):hover,
+.unified-yuntu :is(.audience-column-item, .marketing-category-column):focus-visible {
+  background: rgba(247, 230, 203, .58);
+}
+
+.unified-yuntu :is(.audience-column-item, .marketing-category-column):hover :is(.audience-column-bar, .column-bar),
+.unified-yuntu :is(.audience-column-item, .marketing-category-column):focus-visible :is(.audience-column-bar, .column-bar) {
+  filter: brightness(.9);
+  transform: translateY(-1px);
+}
+
+@media (max-width: 700px) {
+  .unified-yuntu {
+    --chapter02-column-container-height: 210px;
+    --chapter02-column-plot-height: 126px;
+    --chapter02-column-width: min(34px, 64%);
+  }
+
+  .unified-yuntu .marketing-category-column {
+    min-height: var(--chapter02-column-container-height);
+  }
+}
+
+@media (max-width: 560px) {
+  .unified-yuntu .audience-column-chart {
+    grid-template-columns: 38px minmax(0, 1fr);
+    padding-inline: 6px;
+  }
+
+  .unified-yuntu .audience-column-plot {
+    padding-inline: 2px;
+  }
+
+  .unified-yuntu :is(.audience-column-label, .marketing-category-column strong) {
+    font-size: 11px;
+    line-height: 1.25;
   }
 }
 
@@ -1496,13 +1642,12 @@ body.unified-report {
 /* Chapter 02 marketing dashboard: keep the data-panel hierarchy visible at every width. */
 .unified-yuntu .marketing-dashboard-card { margin-top:20px; padding:20px 22px 22px; border-color:rgba(142,85,40,.24); background:linear-gradient(180deg,#fffdf8 0%,#fff8ec 100%); box-shadow:0 8px 20px rgba(42,23,15,.06); }
 .unified-yuntu .marketing-dashboard-card > h3 { display:flex; align-items:baseline; gap:10px; margin:0; color:var(--unified-ink); font-size:18px; line-height:1.35; }
-.unified-yuntu .marketing-dashboard-card > h3::after { content:"一级类别"; color:var(--unified-muted); font-size:12px; font-weight:500; }
 .unified-yuntu .marketing-dashboard-card .script-dashboard-hint { max-width:68ch; margin-top:6px; line-height:1.55; }
-.unified-yuntu .marketing-column-chart { position:relative; grid-template-columns:repeat(auto-fit,minmax(86px,1fr)); gap:10px; min-height:244px; margin-top:18px; padding:18px 12px 12px; border:1px solid rgba(223,207,189,.86); border-radius:6px; background-color:rgba(255,253,248,.76); background-image:repeating-linear-gradient(to top,transparent 0,transparent 56px,rgba(223,207,189,.58) 57px); }
-.unified-yuntu .marketing-category-column { min-height:210px; justify-content:end; padding:4px 4px 2px; border-radius:4px; transition:background-color .15s ease; }
+.unified-yuntu .marketing-column-chart { position:relative; grid-template-columns:repeat(auto-fit,minmax(86px,1fr)); gap:var(--chapter02-column-gap); min-height:var(--chapter02-column-container-height); margin-top:18px; padding:18px 12px 12px; border:1px solid rgba(223,207,189,.86); border-radius:6px; background-color:rgba(255,253,248,.76); background-image:repeating-linear-gradient(to top,transparent 0,transparent 56px,rgba(223,207,189,.58) 57px); }
+.unified-yuntu .marketing-category-column { min-height:var(--chapter02-column-plot-height); justify-content:end; padding:4px 4px 2px; border-radius:4px; transition:background-color .15s ease; }
 .unified-yuntu .marketing-category-column:hover,.unified-yuntu .marketing-category-column:focus-visible { background:rgba(247,230,203,.58); }
-.unified-yuntu .marketing-category-column-plot { height:158px; align-items:end; }
-.unified-yuntu .marketing-category-column .column-bar { width:min(48px,68%); border-radius:5px 5px 2px 2px; background:linear-gradient(180deg,#e1ac61 0%,#9b6a37 100%); box-shadow:0 3px 8px rgba(142,85,40,.16); }
+.unified-yuntu .marketing-category-column-plot { height:var(--chapter02-column-plot-height); align-items:end; }
+.unified-yuntu .marketing-category-column .column-bar { width:var(--chapter02-column-width); border-radius:var(--chapter02-column-radius); background:var(--chapter02-column-gradient); box-shadow:0 3px 8px rgba(142,85,40,.16); }
 .unified-yuntu .marketing-category-column strong { max-width:10ch; margin-top:10px; line-height:1.35; }
 .unified-yuntu .marketing-category-column > span:last-child { margin-top:3px; color:var(--unified-muted); font-variant-numeric:tabular-nums; }
 .unified-yuntu .marketing-dashboard-control { margin:2px 0 12px; }
@@ -1522,10 +1667,10 @@ body.unified-report {
 .unified-yuntu .marketing-drill-chart .legend-share { flex:0 0 auto; color:var(--unified-muted); font-variant-numeric:tabular-nums; }
 @media (max-width:700px) {
   .unified-yuntu .marketing-dashboard-card { padding:16px 14px 18px; }
-  .unified-yuntu .marketing-column-chart { grid-template-columns:repeat(auto-fit,minmax(68px,1fr)); gap:6px; min-height:210px; padding:14px 6px 8px; }
-  .unified-yuntu .marketing-category-column { min-height:178px; }
-  .unified-yuntu .marketing-category-column-plot { height:126px; }
-  .unified-yuntu .marketing-category-column .column-bar { width:min(34px,64%); }
+  .unified-yuntu .marketing-column-chart { grid-template-columns:repeat(auto-fit,minmax(68px,1fr)); gap:var(--chapter02-column-gap); min-height:var(--chapter02-column-container-height); padding:14px 6px 8px; }
+  .unified-yuntu .marketing-category-column { min-height:var(--chapter02-column-plot-height); }
+  .unified-yuntu .marketing-category-column-plot { height:var(--chapter02-column-plot-height); }
+  .unified-yuntu .marketing-category-column .column-bar { width:var(--chapter02-column-width); }
   .unified-yuntu .marketing-drill-detail { grid-template-columns:1fr; gap:16px; padding:14px; }
   .unified-yuntu .marketing-drill-primary { grid-template-columns:auto minmax(0,1fr) auto; grid-template-rows:auto; align-items:center; gap:10px; padding:0 0 12px; border-right:0; border-bottom:1px solid var(--unified-line); }
   .unified-yuntu .marketing-drill-primary-plot { height:12px; min-width:72px; }
@@ -1553,8 +1698,9 @@ body.unified-report {
 .unified-yuntu .marketing-drill-chart .pie-legend { align-content:start; max-height:none; overflow:visible; }
 @media (max-width:700px) { .unified-yuntu .marketing-drill-primary-plot { height:12px; } }
 
-.unified-yuntu .marketing-drill-primary { grid-template-rows:auto 280px auto; }
+.unified-yuntu .marketing-drill-primary { grid-template-rows:auto 280px auto; align-content:center; }
 .unified-yuntu .marketing-drill-primary { padding:16px 12px 12px; }
+.unified-yuntu .marketing-drill-primary-plot { justify-content:center; }
 .unified-yuntu .marketing-drill-chart { padding:16px; }
 .unified-yuntu .marketing-drill-chart .pie-legend { gap:3px; }
 .unified-yuntu .marketing-drill-chart .legend-item { padding:3px 4px; font-size:11px; line-height:1.25; }

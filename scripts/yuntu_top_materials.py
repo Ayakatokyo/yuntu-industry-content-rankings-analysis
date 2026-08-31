@@ -229,30 +229,44 @@ def build_audience_dashboard(records, *, limit=1000):
     }
 
 
+MARKETING_TAXONOMY_VERSION = 2
+
+
+def parse_marketing_tag(raw_tag):
+    """Split one material tag into its first- and second-level labels."""
+    raw = str(raw_tag or "")
+    tag = raw.strip()
+    if not tag:
+        return {"category": "其他", "tag": "", "rawTag": raw}
+    if "_" not in tag:
+        return {"category": "其他", "tag": tag, "rawTag": raw}
+    category, secondary = tag.split("_", 1)
+    return {
+        "category": category.strip() or "其他",
+        "tag": secondary.strip(),
+        "rawTag": raw,
+    }
+
+
 def _marketing_category(tag):
-    if tag.startswith("成分配方原料_"):
-        return "成分/原料"
-    if tag.startswith("功效功能_"):
-        return "功效"
-    if tag.startswith("痛点_"):
-        return "痛点"
-    if tag.startswith("使用场景_"):
-        return "使用场景"
-    if any(token in tag for token in ("口播", "商品展示", "图文", "情景", "动画", "无语音")):
-        return "内容形式"
-    if any(token in tag for token in ("优惠", "价格", "赠送", "限时", "抢购", "折", "划算", "促销")):
-        return "促销利益"
-    return "其他"
+    """Return the first-level label using the current hierarchy contract."""
+    return parse_marketing_tag(tag)["category"]
 
 
 def _marketing_summary(records):
-    categories = {name: {} for name in ("成分/原料", "功效", "痛点", "使用场景", "内容形式", "促销利益", "其他")}
+    categories = {}
     total_exposure = sum(record["metrics"]["show_cnt"] for record in records)
     for record in records:
         for tag in record.get("material_tags", []):
-            if not isinstance(tag, str) or not tag:
+            if not isinstance(tag, str) or not tag.strip():
                 continue
-            item = categories[_marketing_category(tag)].setdefault(tag, {"materialIds": [], "exposure": 0})
+            parsed = parse_marketing_tag(tag)
+            category = parsed["category"]
+            raw_tag = parsed["rawTag"]
+            item = categories.setdefault(category, {}).setdefault(
+                raw_tag,
+                {"tag": parsed["tag"], "materialIds": [], "exposure": 0},
+            )
             if record["material_id"] not in item["materialIds"]:
                 item["materialIds"].append(record["material_id"])
                 item["exposure"] += record["metrics"]["show_cnt"]
@@ -260,6 +274,8 @@ def _marketing_summary(records):
         category: [
             {
                 "rawTag": tag,
+                "category": category,
+                "tag": item["tag"],
                 "materialCount": len(item["materialIds"]),
                 "materialIds": item["materialIds"],
                 "exposure": item["exposure"],
@@ -278,6 +294,7 @@ def build_marketing_dashboard(records, *, limit=1000):
     tag_material_ids = {}
     category_counts = {}
     category_material_ids = {}
+    parsed_tags = {}
     labeled_record_ids = set()
     for record in selected:
         material_id = record.get("material_id")
@@ -286,10 +303,12 @@ def build_marketing_dashboard(records, *, limit=1000):
             if not isinstance(tag, str) or not tag.strip():
                 continue
             has_marketing_tag = True
-            tag = tag.strip()
-            tag_counts[tag] = tag_counts.get(tag, 0) + 1
-            tag_material_ids.setdefault(tag, set()).add(material_id)
-            category = _marketing_category(tag)
+            parsed = parse_marketing_tag(tag)
+            raw_tag = parsed["rawTag"]
+            parsed_tags[raw_tag] = parsed
+            tag_counts[raw_tag] = tag_counts.get(raw_tag, 0) + 1
+            tag_material_ids.setdefault(raw_tag, set()).add(material_id)
+            category = parsed["category"]
             category_counts[category] = category_counts.get(category, 0) + 1
             category_material_ids.setdefault(category, set()).add(material_id)
         if has_marketing_tag and material_id is not None:
@@ -303,7 +322,8 @@ def build_marketing_dashboard(records, *, limit=1000):
     ):
         category_tags = [
             {
-                "tag": tag,
+                "tag": parsed_tags[tag]["tag"],
+                "rawTag": tag,
                 "count": count,
                 "materialCount": len(tag_material_ids.get(tag, set())),
             }
@@ -325,6 +345,7 @@ def build_marketing_dashboard(records, *, limit=1000):
         )
     return {
         "labelMode": "marketing_tag_category_share",
+        "taxonomyVersion": MARKETING_TAXONOMY_VERSION,
         "recordCount": len(selected),
         "labeledRecordCount": len(labeled_record_ids),
         "unlabeledRecordCount": len(selected) - len(labeled_record_ids),
@@ -332,10 +353,11 @@ def build_marketing_dashboard(records, *, limit=1000):
         "occurrenceCount": total_occurrence_count,
         "topTags": [
             {
-                "tag": tag,
+                "tag": parsed_tags[tag]["tag"],
+                "rawTag": tag,
                 "count": count,
                 "materialCount": len(tag_material_ids.get(tag, set())),
-                "category": _marketing_category(tag),
+                "category": parsed_tags[tag]["category"],
             }
             for tag, count in sorted_tags[:20]
         ],

@@ -95,6 +95,23 @@ class RpaConnectorTest(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertFalse(hasattr(connector, name))
 
+    def test_prepare_analysis_cli_passes_hot_material_config(self):
+        connector = self.connector()
+        with mock.patch.object(connector, "prepare_analysis", return_value=0) as prepare:
+            status = connector.main([
+                "prepare-analysis",
+                "--input-dir", "input",
+                "--output-dir", "output",
+                "--hot-material-config", "config/hot-material-rules.json",
+            ])
+
+        self.assertEqual(status, 0)
+        prepare.assert_called_once_with(
+            input_dir="input",
+            output_dir="output",
+            hot_material_config="config/hot-material-rules.json",
+        )
+
     def test_connector_script_exists(self):
         self.assertTrue(SCRIPT_PATH.exists(), "analysis connector has not been implemented")
 
@@ -113,6 +130,34 @@ class RpaConnectorTest(unittest.TestCase):
 
         self.assertEqual(status, 0)
         self.assertEqual(fetch_batch.call_args.kwargs["candidate_top_n"], 10)
+
+    def test_build_ranking_run_specs_shifts_custom_period_and_forces_industry_scope(self):
+        connector = self.connector()
+
+        specs = connector.build_ranking_run_specs(
+            {
+                "industry": "食品饮料",
+                "time_range_type": "CUSTOM",
+                "custom_start_date": "20260810",
+                "custom_end_date": "20260820",
+                "brand_scope_type": "SPECIFIED_BRANDS",
+                "brands": ["小仙炖", "燕之屋", "五个女博士"],
+            }
+        )
+
+        self.assertEqual(set(specs), {"query", "previous_period", "industry"})
+        self.assertEqual(
+            specs["previous_period"]["params"]["custom_start_date"], "20260730"
+        )
+        self.assertEqual(
+            specs["previous_period"]["params"]["custom_end_date"], "20260809"
+        )
+        self.assertEqual(specs["industry"]["params"]["brand_scope_type"], "ALL_INDUSTRY")
+        self.assertNotIn("brands", specs["industry"]["params"])
+        self.assertEqual(
+            specs["query"]["resolvedDateRange"],
+            {"startDate": "2026-08-10", "endDate": "2026-08-20"},
+        )
 
     def test_batch_invoker_forwards_to_current_public_invocations(self):
         connector = self.connector()

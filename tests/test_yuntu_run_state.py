@@ -40,6 +40,12 @@ class YuntuRunStateTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(first), 64)
 
+    def test_new_collection_summary_has_ranking_run_lifecycle_slot(self):
+        state = load_module()
+        summary = self.summary(state)
+
+        self.assertEqual(summary["rankingRuns"], {})
+
     def test_register_artifact_writes_relative_path_checksum_and_size(self):
         state = load_module()
         with tempfile.TemporaryDirectory() as directory:

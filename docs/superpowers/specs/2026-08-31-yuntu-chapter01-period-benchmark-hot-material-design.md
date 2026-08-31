@@ -9,10 +9,10 @@
 - 榜单列表 RPA 在一次分析中执行三次：用户查询周期、上一等长周期、当前周期全行业。
 - 上一周期必须由已解析的实际日期向前平移等长天数得到，不能再次使用滚动周期枚举造成口径漂移。
 - 当前查询数据继续作为第一章主素材范围；环比和大盘列表用于聚合比较。
-- 爆款规则是单一云图全局规则，不按账号配置：曝光量区间的最小值 `>= 200000` 即入选。
+- 爆款规则是单一云图全局规则，不按账号配置；具体指标、比较关系和阈值从项目级 `config/hot-material-rules.json` 的 `hotMaterialRule` 读取，当前默认配置为曝光量区间最小值 `>= 200000`。
 - 爆款事实由规则代码确定性计算，按曝光量区间下限降序排列；AI 不自行计算数量。
 - 爆款面板展示命中数量、素材名称、素材 ID、曝光区间和现有可用辅助指标。
-- AI 使用独立字段 `hotMaterialInsight`，不并入既有 `dataSummary`。
+- AI 输出每个品牌（含全品牌）一个 `dataSummary`，整体解释当前数据、环比、行业大盘和爆款事实；前端只呈现该品牌的一段普通正文，不增加“AI二次分析”标题或独立底色卡片。爆款素材清单继续由确定性事实面板负责展示。
 - 详情 RPA 只针对当前查询周期选中的素材执行；不得为比较周期重复抓取详情。
 
 ## 曝光区间事实
@@ -23,7 +23,7 @@
 {"min": 230000, "max": 260000, "raw": "23万-26万"}
 ```
 
-兼容旧批次的纯数值曝光量时，`min` 与 `max` 取同一数值，`raw` 保留原始文本。无法解析区间时标记不可用，不得将缺失值纳入爆款计数。
+兼容旧批次的纯数值曝光量时，`min` 与 `max` 取同一数值，`raw` 保留原始文本。云图实时列表若把展示区间放在顶层 `show_cnt`（如 `200-300w`），也按展示区间解析；嵌套 `object_index.show_cnt` 的精确数值不作为区间来源。无法解析区间时标记不可用，不得将缺失值纳入爆款计数。
 
 ## 数据流
 
@@ -34,7 +34,7 @@
   -> ranking-brand-input.json
   -> 当前/环比/大盘聚合与 hotMaterialFacts
   -> 当前对话模型
-  -> topMaterialCombination + hotMaterialInsight
+  -> topMaterialCombination
   -> Schema/证据/provenance 校验
   -> Presentation + HTML/Markdown
 ```
@@ -43,20 +43,19 @@
 
 `ranking-brand-input.json` 新增显式的 `current`、`previousPeriod`、`industryBenchmark`、`comparisonFacts` 和 `hotMaterialFacts`。各比较事实必须带实际日期、样本数、指标汇总、变化值、变化率和缺失原因。第一章的品牌范围仍是当前查询周期行业 TOP1000 内按标题匹配的全部素材。
 
-`hotMaterialFacts` 按 `all` 和每个品牌 scope 生成，包含 `thresholdExposureMin: 200000`、`qualifyingCount`、命中素材清单、排序规则和数据可用性。它只引用当前查询周期的素材。
+事实包根节点保存本批次实际生效的 `hotMaterialRule`；`hotMaterialFacts` 按 `all` 和每个品牌 scope 生成，包含由该规则计算出的 `thresholdExposureMin`、`qualifyingCount`、命中素材清单、排序规则和数据可用性。它只引用当前查询周期的素材。
 
 ## AI 输出契约
 
-每个品牌结论和全品牌结论保留现有 `dataSummary`，新增：
+每个品牌结论和全品牌结论保留现有 `dataSummary`，该字段同时承载当前数据、环比、行业大盘和爆款事实的整体分析：
 
 ```json
 {
-  "comparisonSummary": "...",
-  "hotMaterialInsight": {
-    "title": "爆款素材表现分析",
-    "summary": "...",
-    "evidence": {"scope": "brand", "material_ids": ["..."]}
-  }
+  "brand": "品牌名",
+  "classificationSource": "runtime_title_rule",
+  "dataSummary": "...",
+  "evidence": ["..."],
+  "material_ids": ["..."]
 }
 ```
 
@@ -64,7 +63,9 @@ Prompt 必须要求 AI 解释环比方向、相对全行业差异、爆款数量
 
 ## 展示契约
 
-第一章在各品牌 Tab 内按“当前数据 → 环比/大盘比较 → 爆款素材面板 → AI 爆款分析 → 榜单结论”展示。面板为确定性事实展示，包含无数据时的明确不可用状态；AI 文案单独展示，避免重复生成素材列表。
+第一章在各品牌 Tab 内按“品牌整体分析 → 爆款素材面板”展示。面板为确定性事实展示，包含无数据时的明确不可用状态；爆款清单与 AI 整体分析分工展示，避免重复生成素材列表。
+
+爆款面板的素材汇总默认可收起/展开，按钮文案为“收起/展开爆款素材汇总数据”；素材清单区域支持上下滚动。素材标题完整换行显示，已进入第五章的素材标题可点击并跳转到对应的单素材深度分析；卡片展示中文指标名称，单卡片底色为白色。
 
 Presentation 增加稳定字段 `comparison` 与 `hotMaterialPanel`，不把三份原始列表直接暴露给前端。历史缺少这些字段的单周期报告继续走旧渲染路径。
 
@@ -72,7 +73,7 @@ Presentation 增加稳定字段 `comparison` 与 `hotMaterialPanel`，不把三�
 
 - 三次列表请求参数、日期、行业范围可在 manifest 中逐一核验。
 - 当前、上一周期、全行业三种口径不会互相覆盖或串用。
-- 曝光区间下限判断边界正确：199999 不入选，200000 入选。
+- 默认配置下曝光区间下限判断边界正确：199999 不入选，200000 入选；修改配置后按配置阈值验证。
 - 爆款数量、名称和指标均能回溯到当前列表事实。
 - AI 输出通过 Schema、素材证据和 provenance 校验。
 - 历史单周期事实包和报告仍可读取。

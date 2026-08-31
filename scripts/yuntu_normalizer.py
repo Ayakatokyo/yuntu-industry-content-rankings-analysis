@@ -1,5 +1,7 @@
 """Normalize Yuntu ranking and material-detail RPA records."""
 
+import re
+
 
 class YuntuNormalizeError(RuntimeError):
     """Raised when raw Yuntu records cannot be normalized."""
@@ -34,6 +36,77 @@ def _number(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+_EXPOSURE_RANGE_RE = re.compile(
+    r"(?P<left>\d+(?:\.\d+)?)\s*(?P<left_unit>万|w|W|千|k|K)?\s*"
+    r"(?:-|–|—|~|至|到)\s*"
+    r"(?P<right>\d+(?:\.\d+)?)\s*(?P<right_unit>万|w|W|千|k|K)?"
+)
+_EXPOSURE_SINGLE_RE = re.compile(r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>万|w|W|千|k|K)?")
+
+
+def _exposure_number(value, unit=""):
+    multiplier = {"万": 10000, "w": 10000, "W": 10000, "千": 1000, "k": 1000, "K": 1000}.get(unit, 1)
+    return int(round(float(value) * multiplier))
+
+
+def parse_exposure_interval(value):
+    """Parse a Yuntu exposure display value without substituting another metric."""
+    if isinstance(value, dict):
+        raw = value.get("raw", value.get("text", ""))
+        minimum = _number(value.get("min"))
+        maximum = _number(value.get("max"))
+        return {
+            "min": int(minimum) if minimum is not None else None,
+            "max": int(maximum) if maximum is not None else None,
+            "raw": _text(raw),
+        }
+    raw = _text(value)
+    if not raw:
+        return {"min": None, "max": None, "raw": raw}
+    compact = raw.replace(",", "").replace("，", "").strip()
+    range_match = _EXPOSURE_RANGE_RE.search(compact)
+    if range_match:
+        left_unit = range_match.group("left_unit") or range_match.group("right_unit") or ""
+        right_unit = range_match.group("right_unit") or range_match.group("left_unit") or ""
+        return {
+            "min": _exposure_number(range_match.group("left"), left_unit),
+            "max": _exposure_number(range_match.group("right"), right_unit),
+            "raw": raw,
+        }
+    single_match = _EXPOSURE_SINGLE_RE.fullmatch(compact)
+    if single_match:
+        parsed = _exposure_number(single_match.group("value"), single_match.group("unit") or "")
+        return {"min": parsed, "max": parsed, "raw": raw}
+    greater_match = re.search(r"(\d+(?:\.\d+)?)\s*(万|w|W|千|k|K)?\s*(?:以上|起)", compact)
+    if greater_match:
+        return {
+            "min": _exposure_number(greater_match.group(1), greater_match.group(2) or ""),
+            "max": None,
+            "raw": raw,
+        }
+    return {"min": None, "max": None, "raw": raw}
+
+
+def _raw_exposure_value(raw, object_index):
+    for key in ("exposure", "exposure_range", "exposureRange"):
+        if key in raw and raw.get(key) not in (None, ""):
+            return raw.get(key)
+    for key in ("exposure", "exposure_range", "exposureRange"):
+        if key in object_index and object_index.get(key) not in (None, ""):
+            return object_index.get(key)
+    # The live Yuntu list response stores the display bucket in the top-level
+    # show_cnt column (for example, ``200-300w``), while object_index.show_cnt
+    # remains the exact numeric metric. Only accept an unmistakable display
+    # bucket here; never reinterpret a numeric show count as an exposure range.
+    show_cnt = raw.get("show_cnt")
+    if isinstance(show_cnt, str) and (
+        _EXPOSURE_RANGE_RE.search(show_cnt)
+        or re.search(r"(?:万|w|W|千|k|K|以上|起)", show_cnt)
+    ):
+        return show_cnt
+    return None
 
 
 def _require_material_id(value):
@@ -135,6 +208,8 @@ def normalize_list_records(raw_records, *, source_path):
         object_index = object_index_value
         if not isinstance(object_index_value, dict):
             object_index = {}
+        raw_exposure_value = _raw_exposure_value(raw, object_index)
+        exposure = parse_exposure_interval(raw_exposure_value)
         people_tag_entry = raw.get("people_tag_entry")
         material_tag_entry = raw.get("material_tag_entry")
         metrics = {}
@@ -157,6 +232,16 @@ def normalize_list_records(raw_records, *, source_path):
                     "brand_scope": _text(raw.get("page_brand_scope")),
                     "brands": raw.get("page_brands") if isinstance(raw.get("page_brands"), list) else [],
                     "ranking_limit": _text(raw.get("page_ranking_limit")),
+                    "actual_start_date": _text(
+                        raw.get("page_actual_start_date")
+                        or raw.get("actual_start_date")
+                        or raw.get("start_date")
+                    ),
+                    "actual_end_date": _text(
+                        raw.get("page_actual_end_date")
+                        or raw.get("actual_end_date")
+                        or raw.get("end_date")
+                    ),
                 },
                 "selection_group": _selection_group(raw),
                 "title": _text(raw.get("title")),
@@ -168,12 +253,23 @@ def normalize_list_records(raw_records, *, source_path):
                     object_index.get("publish_time") or raw.get("publish_time")
                 ),
                 "metrics": metrics,
+                "exposure": exposure,
                 "people_tags": _flatten_tag_entries(people_tag_entry),
                 "material_tags": _flatten_tag_entries(material_tag_entry),
                 "data_availability": {
                     "metrics": _availability(
                         object_index_value if object_index_value is not None else raw,
                         has_values=bool(metrics),
+                    ),
+                    **(
+                        {
+                            "exposure": _availability(
+                                raw_exposure_value,
+                                has_values=exposure["min"] is not None,
+                            )
+                        }
+                        if raw_exposure_value not in (None, "")
+                        else {}
                     ),
                     "people_tags": _availability(
                         people_tag_entry,

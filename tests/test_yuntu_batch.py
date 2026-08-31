@@ -100,6 +100,46 @@ class ConcurrentInvoker:
                 self._active -= 1
 
 
+class MultiPeriodInvoker:
+    def __init__(self):
+        self.list_calls = []
+        self.detail_calls = []
+
+    def invoke_list(self, shop_id, list_params):
+        self.list_calls.append((shop_id, dict(list_params)))
+        if list_params.get("custom_start_date") == "20260810":
+            material_id, title = "101", "小仙炖当前素材"
+        elif list_params.get("custom_start_date") == "20260730":
+            material_id, title = "201", "小仙炖上一周期素材"
+        else:
+            material_id, title = "301", "行业大盘素材"
+        return {
+            "success": True,
+            "data": [{
+                "material_id": material_id,
+                "title": title,
+                "show_cnt": "20万-25万",
+                "object_index": {"ctr": 0.2, "cvr": 0.1, "play_3s_rate": 0.3},
+                "people_tag_entry": [],
+                "material_tag_entry": [],
+                "page_industry": "食品饮料",
+                "page_brand_scope": "指定品牌",
+                "page_brands": ["小仙炖", "燕之屋", "五个女博士"],
+                "page_custom_date_range": (
+                    "2026-08-10 ~ 2026-08-20"
+                    if material_id == "101"
+                    else "2026-07-30 ~ 2026-08-09"
+                    if material_id == "201"
+                    else "2026-08-10 ~ 2026-08-20"
+                ),
+            }],
+        }
+
+    def invoke_detail(self, shop_id, detail_params):
+        self.detail_calls.append((shop_id, dict(detail_params)))
+        return detail_result(detail_params["material_id"])
+
+
 def detail_result(material_id):
     return {
         "success": True,
@@ -172,6 +212,47 @@ class YuntuBatchTests(unittest.TestCase):
             batch._expected_selection_group(manifest_item),
             candidate["selectionGroup"],
         )
+
+    def test_fetch_batch_collects_query_previous_and_industry_lists_but_details_only_query(self):
+        batch = load_batch()
+        invoker = MultiPeriodInvoker()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            status = batch.fetch_batch(
+                shop_id="shop-42",
+                list_params={
+                    "industry": "食品饮料",
+                    "time_range_type": "CUSTOM",
+                    "custom_start_date": "20260810",
+                    "custom_end_date": "20260820",
+                    "brand_scope_type": "SPECIFIED_BRANDS",
+                    "brands": ["小仙炖", "燕之屋", "五个女博士"],
+                },
+                detail_date_params={
+                    "date_range_type": "CUSTOM",
+                    "custom_start_date": "20260810",
+                    "custom_end_date": "20260820",
+                },
+                target_top_n=1,
+                candidate_top_n=1,
+                output_dir=root,
+                invoker=invoker,
+            )
+            manifest = json.loads((root / "batch-manifest.json").read_text(encoding="utf-8"))
+            summary = json.loads((root / "run-summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertEqual(len(invoker.list_calls), 3)
+        self.assertEqual(
+            [params["custom_start_date"] for _, params in invoker.list_calls],
+            ["20260810", "20260730", "20260810"],
+        )
+        self.assertEqual(invoker.list_calls[2][1]["brand_scope_type"], "ALL_INDUSTRY")
+        self.assertNotIn("brands", invoker.list_calls[2][1])
+        self.assertEqual([params["material_id"] for _, params in invoker.detail_calls], ["101"])
+        self.assertEqual(set(manifest["rankingRuns"]), {"query", "previous_period", "industry"})
+        self.assertTrue(all(run["status"] == "success" for run in manifest["rankingRuns"].values()))
+        self.assertEqual(summary["rankingRuns"]["previous_period"]["actualDateRange"], {"startDate": "2026-07-30", "endDate": "2026-08-09"})
 
     def files_result(self, url):
         return {

@@ -270,6 +270,7 @@ def _project_chapter01(analysis, fact_pack):
             "brand": "全品牌",
             "insights": [{"text": _text(aggregate.get("dataSummary")), "dimension": "data"}],
         })
+        _attach_chapter01_period_panels(panels[-1], aggregate, "all", fact_pack)
     else:
         facts = fact_pack.get("industryTop1000Facts")
         # Older persisted reports carried the same aggregate metrics under
@@ -287,6 +288,7 @@ def _project_chapter01(analysis, fact_pack):
                 "brand": "全品牌",
                 "insights": [{"text": _ranking_scope_fallback_summary(facts), "dimension": "data"}],
             })
+            _attach_chapter01_period_panels(panels[-1], {}, "all", fact_pack)
     for item in brands:
         if not isinstance(item, dict) or not _text(item.get("brand")):
             raise YuntuPresentationError("chapter01 brand conclusion is invalid")
@@ -298,12 +300,83 @@ def _project_chapter01(analysis, fact_pack):
                 {"text": _text(item.get("dataSummary")), "dimension": "data"}
             ] if _text(item.get("dataSummary")) else []),
         })
+        _attach_chapter01_period_panels(panels[-1], item, "brand", fact_pack)
+        ai_analysis = _chapter01_ai_analysis(item)
+        if ai_analysis is not None:
+            panels[-1]["aiAnalysis"] = ai_analysis
+    if panels:
+        aggregate_panel = panels[0]
+        aggregate_conclusion = aggregate if isinstance(aggregate, dict) else {}
+        ai_analysis = _chapter01_ai_analysis(aggregate_conclusion)
+        if ai_analysis is not None:
+            aggregate_panel["aiAnalysis"] = ai_analysis
     if not panels:
         raise YuntuPresentationError("chapter01 brand conclusions are required")
     tabs = [{"id": panel["id"], "label": panel["brand"], "panelId": panel["id"]} for panel in panels]
     return {
         "brandTabs": tabs,
         "brandPanels": panels,
+    }
+
+
+def _chapter01_ai_analysis(conclusion):
+    """Project one holistic first-chapter narrative per brand scope."""
+    if not isinstance(conclusion, dict):
+        return None
+    parts = [conclusion.get("dataSummary")]
+    legacy_insight = conclusion.get("hotMaterialInsight")
+    if conclusion.get("comparisonSummary"):
+        parts.append(conclusion.get("comparisonSummary"))
+    if isinstance(legacy_insight, dict):
+        parts.append(legacy_insight.get("summary"))
+    summary_parts = []
+    for value in parts:
+        text = _text(value)
+        if text:
+            summary_parts.append(text)
+    if not summary_parts:
+        return None
+    return {"summary": " ".join(summary_parts)}
+
+
+def _attach_chapter01_period_panels(panel, conclusion, scope_key, fact_pack):
+    comparison_facts = fact_pack.get("comparisonFacts") if isinstance(fact_pack, dict) else None
+    hot_facts = fact_pack.get("hotMaterialFacts") if isinstance(fact_pack, dict) else None
+    if not isinstance(comparison_facts, dict) or not isinstance(hot_facts, dict):
+        return
+    scoped_comparison = comparison_facts.get("scopes", {}).get(scope_key)
+    if not isinstance(scoped_comparison, dict):
+        scoped_comparison = {
+            key: value
+            for key, value in comparison_facts.items()
+            if key in {"previousPeriod", "industryBenchmark"}
+        }
+    panel["comparison"] = {
+        "summary": _text(conclusion.get("comparisonSummary")),
+        "facts": deepcopy(scoped_comparison),
+    }
+    hot_key = "all" if scope_key == "all" else panel["brand"]
+    hot = hot_facts.get(hot_key)
+    if not isinstance(hot, dict):
+        raise YuntuPresentationError(f"chapter01 hot material facts are missing for {panel['brand']}")
+    panel["hotMaterialPanel"] = {
+        "thresholdExposureMin": hot.get("thresholdExposureMin"),
+        "qualifyingCount": hot.get("qualifyingCount", 0),
+        "materials": deepcopy(hot.get("materials", [])),
+        "sortRule": hot.get("sortRule", "exposure.min descending"),
+        "available": bool(hot.get("available")),
+        "missingReason": _text(hot.get("missing_reason")),
+        "insight": _copy_chapter01_insight(conclusion.get("hotMaterialInsight")),
+    }
+
+
+def _copy_chapter01_insight(value):
+    if not isinstance(value, dict):
+        return None
+    return {
+        "title": _text(value.get("title")),
+        "summary": _text(value.get("summary")),
+        "evidence": deepcopy(value.get("evidence", {})),
     }
 
 

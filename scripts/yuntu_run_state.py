@@ -59,7 +59,7 @@ def new_collection_summary(contract):
     """Create a collection lifecycle summary with non-overlapping stage counts."""
     contract_snapshot = _snapshot(contract)
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "runId": uuid.uuid4().hex,
         "parameterFingerprint": parameter_fingerprint(contract_snapshot),
         "collectionContract": contract_snapshot,
@@ -72,6 +72,7 @@ def new_collection_summary(contract):
             },
             "details": {"requestStatus": "pending"},
         },
+        "rankingRuns": {},
         "stageCounts": {
             "candidateCount": 0,
             "detailSubmittedCount": 0,

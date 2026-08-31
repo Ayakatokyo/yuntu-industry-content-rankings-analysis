@@ -16,8 +16,16 @@ def render_top_material_combination(
     generic_text,
     brand_order,
     presentation=None,
+    jump_material_ids=None,
 ):
+    jump_material_ids = {str(value) for value in (jump_material_ids or [])}
+    presentation_panels = None
     if isinstance(presentation, dict) and presentation.get("brandPanels"):
+        presentation_panels = {
+            panel.get("brand"): panel
+            for panel in presentation["brandPanels"]
+            if isinstance(panel, dict)
+        }
         value = {"brandConclusions": []}
         for panel in presentation["brandPanels"]:
             summaries = {item.get("dimension"): item.get("text", "") for item in panel.get("insights", [])}
@@ -55,15 +63,35 @@ def render_top_material_combination(
         + f'data-brand-panel="{esc(item["brand"])}">'
         + '<p class="brand-classification-note">品牌归属：本次榜单标题匹配；分析范围：行业 TOP1000 内该品牌全部匹配素材</p>'
         + (
-            '<p class="brand-summary brand-summary-data">'
-            + esc(generic_text(item.get("dataSummary")))
-            + "</p>"
-            if generic_text(item.get("dataSummary"))
-            else ""
+            _render_chapter01_ai_analysis(
+                presentation_panels.get(item["brand"], {}).get("aiAnalysis"),
+                esc=esc,
+            )
+            if presentation_panels
+            and isinstance(presentation_panels.get(item["brand"]), dict)
+            and presentation_panels.get(item["brand"]).get("aiAnalysis")
+            else (
+                '<p class="brand-summary brand-summary-data">'
+                + esc(generic_text(item.get("dataSummary")))
+                + "</p>"
+                if generic_text(item.get("dataSummary"))
+                else ""
+            )
+        )
+        + _render_chapter01_period_panel(
+            presentation_panels.get(item["brand"]) if presentation_panels else None,
+            esc=esc,
+            merge_ai=bool(
+                presentation_panels
+                and isinstance(presentation_panels.get(item["brand"]), dict)
+                and presentation_panels.get(item["brand"]).get("aiAnalysis")
+            ),
+            jump_material_ids=jump_material_ids,
         )
         + "</article>"
         for index, item in enumerate(ordered_brands)
     )
+
     return (
         '<div class="top-material-brands yuntu-content-card">'
         + '<div class="brand-tabs" role="tablist" aria-label="各品牌榜单分析">'
@@ -72,6 +100,107 @@ def render_top_material_combination(
         + panels
         + "</div></div>"
     )
+
+
+def _render_chapter01_ai_analysis(value, *, esc):
+    if not isinstance(value, dict):
+        return ""
+    summary = value.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        return ""
+    return '<p class="chapter01-ai-summary">' + esc(summary) + "</p>"
+
+
+def _render_chapter01_period_panel(panel, *, esc, merge_ai=False, jump_material_ids=None):
+    if not isinstance(panel, dict):
+        return ""
+    comparison = panel.get("comparison") if isinstance(panel.get("comparison"), dict) else None
+    hot = panel.get("hotMaterialPanel") if isinstance(panel.get("hotMaterialPanel"), dict) else None
+    chunks = []
+    if comparison is not None and not merge_ai:
+        summary = comparison.get("summary")
+        if summary:
+            chunks.append(
+                '<section class="chapter01-comparison"><h4>环比与大盘比较</h4><p>'
+                + esc(summary)
+                + "</p></section>"
+            )
+    if hot is not None:
+        if hot.get("available"):
+            cards = []
+            for material in hot.get("materials", []):
+                exposure = material.get("exposure", {}) if isinstance(material, dict) else {}
+                interval = exposure.get("raw") or (
+                    f"{exposure.get('min')} - {exposure.get('max')}"
+                    if exposure.get("min") is not None else "不可用"
+                )
+                metrics = material.get("metrics", {}) if isinstance(material, dict) else {}
+                material_id = material.get("material_id") if isinstance(material, dict) else None
+                title = material.get("title") or material.get("material_id", "")
+                title_html = esc(title)
+                if material_id and str(material_id) in jump_material_ids:
+                    title_html = (
+                        '<button type="button" class="hot-material-title" data-jump-material="'
+                        + esc(material_id)
+                        + '" title="跳转到第五部分单素材深度分析">'
+                        + esc(title)
+                        + "</button>"
+                    )
+                metric_labels = {
+                    "show_cnt": "曝光量",
+                    "ctr": "CTR",
+                    "cvr": "CVR",
+                    "play_3s_rate": "3 秒播放率",
+                    "interact_rate": "互动率",
+                    "play_5s_rate": "5 秒播放率",
+                    "play_over_rate": "完播率",
+                }
+                def format_metric(key, value):
+                    if not isinstance(value, (int, float)):
+                        return "-"
+                    if key == "show_cnt":
+                        return f"{value / 10000:.1f} 万" if value >= 10000 else f"{value:,.0f}"
+                    return f"{value * 100:.2f}%"
+                metric_text = "、".join(
+                    f"{metric_labels.get(key, key)} {format_metric(key, metrics[key])}"
+                    for key in metric_labels
+                    if key in metrics and metrics[key] is not None
+                )
+                cards.append(
+                    '<article class="hot-material-card"><h5>'
+                    + title_html
+                    + '</h5>'
+                    + ('<p>素材 ID：' + esc(material_id) + '</p>' if material_id else '')
+                    + '<p>曝光区间：'
+                    + esc(interval)
+                    + '</p><small>'
+                    + esc(metric_text or "辅助指标不可用")
+                    + "</small></article>"
+                )
+            chunks.append(
+                '<section class="hot-material-panel">'
+                + '<div class="collapsible-head"><button class="collapsible-toggle hot-material-toggle" type="button" data-collapsible-toggle data-collapsible-expanded-label="收起爆款素材汇总数据" data-collapsible-collapsed-label="展开爆款素材汇总数据" aria-expanded="true" aria-controls="'
+                + esc("hot-material-details-" + str(panel.get("id") or panel.get("brand") or "scope").replace(" ", "-"))
+                + '"><span class="collapsible-toggle-action">收起爆款素材汇总数据</span></button></div>'
+                + '<h4>爆款素材面板</h4>'
+                + '<div class="collapsible-body" id="'
+                + esc("hot-material-details-" + str(panel.get("id") or panel.get("brand") or "scope").replace(" ", "-"))
+                + '"><p class="hot-material-rule">曝光量区间下限 ≥ '
+                + esc(hot.get("thresholdExposureMin"))
+                + '｜命中 '
+                + esc(hot.get("qualifyingCount", 0))
+                + " 条素材</p>"
+                + '<div class="hot-material-scroll"><div class="hot-material-grid">'
+                + "".join(cards)
+                + "</div></div></div></section>"
+            )
+        else:
+            chunks.append(
+                '<section class="hot-material-panel data-state"><h4>爆款素材面板</h4><p>曝光区间事实不可用。'
+                + esc(hot.get("missingReason") or "数据不足")
+                + "</p></section>"
+            )
+    return "".join(chunks)
 
 
 def _render_audience_scope(

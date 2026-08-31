@@ -168,6 +168,7 @@ def validate_analysis_input(*, analysis_json, fact_pack=None):
         strict_top_material_contract=strict_top_material_contract,
     )
     _validate_ranking_scope_contract(analysis, fact_pack)
+    _validate_period_and_hot_material_contract(analysis, fact_pack)
     _validate_highlight_dashboard(analysis, fact_pack)
     _validate_material_deep_dives(analysis, fact_pack)
     return analysis
@@ -408,6 +409,123 @@ def _validate_ranking_scope_contract(analysis, fact_pack):
             raise YuntuReportError(f"brand conclusion references material outside brand facts for {brand}")
 
 
+def _validate_hot_material_facts(fact_pack):
+    hot_facts = fact_pack.get("hotMaterialFacts")
+    if not isinstance(hot_facts, dict):
+        raise YuntuReportError("hotMaterialFacts must be an object")
+    configured_rule = fact_pack.get("hotMaterialRule")
+    configured_threshold = None
+    if configured_rule is not None:
+        if not isinstance(configured_rule, dict):
+            raise YuntuReportError("hotMaterialRule must be an object")
+        if configured_rule.get("metric") != "exposure_interval_min":
+            raise YuntuReportError("hotMaterialRule metric is unsupported")
+        if configured_rule.get("comparison") != "gte":
+            raise YuntuReportError("hotMaterialRule comparison is unsupported")
+        configured_threshold = configured_rule.get("threshold")
+        if (
+            isinstance(configured_threshold, bool)
+            or not isinstance(configured_threshold, int)
+            or configured_threshold <= 0
+        ):
+            raise YuntuReportError("hotMaterialRule threshold must be a positive integer")
+    for scope, facts in hot_facts.items():
+        if not isinstance(facts, dict):
+            raise YuntuReportError("hotMaterialFacts scope must be an object")
+        threshold = configured_threshold
+        if threshold is None:
+            threshold = facts.get("thresholdExposureMin")
+        if (
+            isinstance(threshold, bool)
+            or not isinstance(threshold, int)
+            or threshold <= 0
+            or facts.get("thresholdExposureMin") != threshold
+        ):
+            raise YuntuReportError("hotMaterialFacts threshold does not match the configured rule")
+        materials = facts.get("materials")
+        if not isinstance(materials, list):
+            raise YuntuReportError("hotMaterialFacts materials must be a list")
+        if (
+            isinstance(facts.get("qualifyingCount"), bool)
+            or not isinstance(facts.get("qualifyingCount"), int)
+            or facts.get("qualifyingCount") != len(materials)
+        ):
+            raise YuntuReportError("hotMaterialFacts qualifyingCount does not match materials")
+        previous_min = None
+        seen_ids = set()
+        for material in materials:
+            if not isinstance(material, dict) or not isinstance(material.get("material_id"), str):
+                raise YuntuReportError("hotMaterialFacts material identity is invalid")
+            material_id = material["material_id"]
+            if material_id in seen_ids:
+                raise YuntuReportError("hotMaterialFacts material IDs must be unique")
+            seen_ids.add(material_id)
+            exposure = material.get("exposure")
+            minimum = exposure.get("min") if isinstance(exposure, dict) else None
+            if (
+                not isinstance(minimum, (int, float))
+                or isinstance(minimum, bool)
+                or minimum < threshold
+            ):
+                raise YuntuReportError("hotMaterialFacts exposure minimum is below the threshold")
+            if previous_min is not None and minimum > previous_min:
+                raise YuntuReportError("hotMaterialFacts materials must be sorted by exposure minimum")
+            previous_min = minimum
+        if facts.get("available") is False and not facts.get("missing_reason"):
+            raise YuntuReportError("unavailable hotMaterialFacts must include missing_reason")
+
+
+def _validate_period_and_hot_material_contract(analysis, fact_pack):
+    if not isinstance(fact_pack, dict) or not fact_pack.get("hotMaterialFacts"):
+        return
+    _validate_hot_material_facts(fact_pack)
+    combination = analysis.get("topMaterialCombination", {})
+    conclusions = list(combination.get("brandConclusions", []))
+    aggregate = combination.get("allBrandsConclusion")
+    if isinstance(aggregate, dict):
+        conclusions.append(aggregate)
+    hot_facts = fact_pack["hotMaterialFacts"]
+    if "all" in hot_facts and not isinstance(combination.get("allBrandsConclusion"), dict):
+        raise YuntuReportError("new chapter01 contract requires allBrandsConclusion")
+    for item in conclusions:
+        brand = item.get("brand")
+        expected_scope = "all" if brand == "全品牌" else "brand"
+        allowed = {
+            "brand", "classificationSource", "dataSummary", "evidence", "material_ids",
+            "comparisonSummary", "hotMaterialInsight",
+        }
+        if set(item) - allowed:
+            raise YuntuReportError(f"{brand} contains unsupported chapter01 fields")
+        if "comparisonSummary" in item and (
+            not isinstance(item["comparisonSummary"], str)
+            or not item["comparisonSummary"].strip()
+        ):
+            raise YuntuReportError(f"{brand} comparisonSummary must be nonempty when present")
+        insight = item.get("hotMaterialInsight")
+        if insight is None:
+            continue
+        if not isinstance(insight, dict):
+            raise YuntuReportError(f"{brand} hotMaterialInsight must be an object when present")
+        for field in ("title", "summary"):
+            if not isinstance(insight.get(field), str) or not insight[field].strip():
+                raise YuntuReportError(f"{brand} hotMaterialInsight {field} is required")
+        evidence = insight.get("evidence")
+        if not isinstance(evidence, dict) or evidence.get("scope") != expected_scope:
+            raise YuntuReportError(f"{brand} hotMaterialInsight evidence scope is invalid")
+        material_ids = evidence.get("material_ids")
+        if not isinstance(material_ids, list) or not all(
+            isinstance(value, str) and value.isdigit() for value in material_ids
+        ):
+            raise YuntuReportError(f"{brand} hotMaterialInsight evidence material_ids are invalid")
+        scope_key = "all" if expected_scope == "all" else brand
+        scope_facts = hot_facts.get(scope_key)
+        if not isinstance(scope_facts, dict):
+            raise YuntuReportError(f"{brand} hotMaterialInsight scope facts are missing")
+        known_ids = {str(item.get("material_id")) for item in scope_facts.get("materials", []) if isinstance(item, dict)}
+        if not set(material_ids).issubset(known_ids):
+            raise YuntuReportError(f"{brand} hotMaterialInsight references an unknown material ID")
+
+
 def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
     lines = ["# 云图行业内容榜单分析报告", ""]
     combination = analysis["topMaterialCombination"]
@@ -433,10 +551,31 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
             f"### {item['brand']}",
             "",
         ])
+        summary_parts = [item.get("dataSummary", "")]
+        if item.get("comparisonSummary"):
+            summary_parts.append(item["comparisonSummary"])
+        legacy_insight = item.get("hotMaterialInsight")
+        if isinstance(legacy_insight, dict) and legacy_insight.get("summary"):
+            summary_parts.append(legacy_insight["summary"])
         lines.extend([
-            item["dataSummary"],
+            " ".join(part for part in summary_parts if part),
             "",
         ])
+        hot_facts = (fact_pack or {}).get("hotMaterialFacts", {}) if isinstance(fact_pack, dict) else {}
+        if isinstance(hot_facts, dict) and hot_facts:
+            scope_key = "all" if item.get("brand") == "全品牌" else item.get("brand")
+            hot = hot_facts.get(scope_key, {})
+            lines.extend(["#### 爆款素材面板", ""])
+            if not hot.get("available"):
+                lines.extend([f"曝光区间事实不可用：{hot.get('missing_reason') or '数据不足'}。", ""])
+            else:
+                lines.extend([f"规则：曝光量区间下限 ≥ {hot.get('thresholdExposureMin')}；命中 {hot.get('qualifyingCount', 0)} 条素材。", ""])
+                for material in hot.get("materials", []):
+                    exposure = material.get("exposure", {})
+                    lines.append(
+                        f"- {material.get('title') or material.get('material_id')}（ID：{material.get('material_id')}）：{exposure.get('raw') or '曝光区间不可用'}"
+                    )
+                lines.append("")
     lines.extend(["## 02｜人群及营销卖点洞察", ""])
     chapter02 = (fact_pack or {}).get("chapter02Facts") if isinstance(fact_pack, dict) else None
     chapter02_insights = analysis.get("chapter02Insights", {})
@@ -1163,6 +1302,7 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None, highli
         generic_text=_generic_text,
         brand_order=(fact_pack.get("filters", {}).get("brands") or TOP_MATERIAL_BRAND_ORDER),
         presentation=(presentation or {}).get("chapters", {}).get("chapter01") if isinstance(presentation, dict) else None,
+        jump_material_ids=_selected_material_ids(fact_pack),
     )
     audience_insights = render_audience_insights(
         fact_pack.get("audienceDashboard"),

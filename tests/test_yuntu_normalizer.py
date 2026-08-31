@@ -37,6 +37,44 @@ class YuntuNormalizerTests(unittest.TestCase):
         self.assertEqual(record["account_id"], "shop-1")
         self.assertEqual(record["list_context"]["industry"], "食品饮料")
 
+    def test_normalize_list_records_preserves_exposure_interval_facts(self):
+        normalizer = load_module()
+        records = normalizer.normalize_list_records(
+            [
+                {"material_id": "101", "exposure": "199999", "show_cnt": "9999999"},
+                {"material_id": "102", "exposure": "20万-25万", "show_cnt": "9999999"},
+                {"material_id": "103", "exposure": "200000", "show_cnt": "9999999"},
+                {"material_id": "104", "exposure": "无法解析", "show_cnt": "9999999"},
+            ],
+            source_path="raw-csv/list.csv",
+        )
+
+        self.assertEqual(records[0]["exposure"], {"min": 199999, "max": 199999, "raw": "199999"})
+        self.assertEqual(records[1]["exposure"], {"min": 200000, "max": 250000, "raw": "20万-25万"})
+        self.assertEqual(records[2]["exposure"], {"min": 200000, "max": 200000, "raw": "200000"})
+        self.assertEqual(records[3]["exposure"], {"min": None, "max": None, "raw": "无法解析"})
+        self.assertEqual(records[3]["data_availability"]["exposure"]["missing_reason"], "unparsed_source_value")
+
+    def test_normalize_list_records_does_not_substitute_show_count_for_exposure(self):
+        normalizer = load_module()
+        record = normalizer.normalize_list_records(
+            [{"material_id": "105", "show_cnt": "9999999"}],
+            source_path="raw-csv/list.csv",
+        )[0]
+
+        self.assertEqual(record["exposure"], {"min": None, "max": None, "raw": ""})
+        self.assertNotIn("exposure", record["data_availability"])
+
+    def test_normalize_list_records_reads_display_exposure_range_from_show_cnt(self):
+        normalizer = load_module()
+        record = normalizer.normalize_list_records(
+            [{"material_id": "106", "show_cnt": "200-300w", "object_index": {"show_cnt": "2456789"}}],
+            source_path="raw-csv/list.csv",
+        )[0]
+
+        self.assertEqual(record["exposure"], {"min": 2000000, "max": 3000000, "raw": "200-300w"})
+        self.assertEqual(record["metrics"]["show_cnt"], 2456789)
+
     def test_normalize_list_records_extracts_metrics_tags_and_rank(self):
         normalizer = load_module()
         raw = [

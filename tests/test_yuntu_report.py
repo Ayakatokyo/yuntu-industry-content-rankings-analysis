@@ -1,4 +1,5 @@
 import importlib.util
+import copy
 import json
 import sys
 import tempfile
@@ -677,6 +678,104 @@ class YuntuReportTests(unittest.TestCase):
             ],
             [material_id],
         )
+
+    def test_schema_v7_accepts_unified_summary_and_legacy_evidence_when_present(self):
+        report = load_module()
+        analysis = {
+            "topMaterialCombination": {
+                "brandConclusions": [{
+                    "brand": "小仙炖",
+                    "classificationSource": "runtime_title_rule",
+                    "dataSummary": "小仙炖本周期覆盖 1 条素材，累计曝光 20 万，CTR 2%、CVR 3%、3 秒播放率 40%。",
+                    "evidence": ["品牌榜单聚合事实"],
+                    "material_ids": ["101"],
+                    "comparisonSummary": "本周期相较上一周期样本增加，表现与行业大盘接近。",
+                    "hotMaterialInsight": {
+                        "title": "爆款素材表现分析",
+                        "summary": "爆款素材达到曝光门槛，建议继续验证其指标组合。",
+                        "evidence": {"scope": "brand", "material_ids": ["101"]},
+                    },
+                }]
+            }
+        }
+        fact_pack = {
+            "schemaVersion": 7,
+            "filters": {"brands": ["小仙炖"]},
+            "industryTop1000Facts": {"source_scope": "industry_top1000"},
+            "brandRankingFacts": {"brands": {"小仙炖": {"source_scope": "brand_in_top1000", "sample_count": 1, "materials": [{"material_id": "101"}]}}},
+            "comparisonFacts": {"previousPeriod": {}, "industryBenchmark": {}},
+            "hotMaterialFacts": {"小仙炖": {"thresholdExposureMin": 200000, "qualifyingCount": 1, "materials": [{"material_id": "101", "exposure": {"min": 200000, "max": 220000, "raw": "20万-22万"}}], "available": True, "missing_reason": ""}},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+            unified_analysis = copy.deepcopy(analysis)
+            unified_item = unified_analysis["topMaterialCombination"]["brandConclusions"][0]
+            unified_item.pop("comparisonSummary")
+            unified_item.pop("hotMaterialInsight")
+            path.write_text(json.dumps(unified_analysis, ensure_ascii=False), encoding="utf-8")
+            report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+            analysis["topMaterialCombination"]["brandConclusions"][0]["hotMaterialInsight"]["evidence"]["scope"] = "all"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "scope"):
+                report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+            invalid_cases = (
+                ("unknown material evidence", lambda item, facts: item["hotMaterialInsight"]["evidence"].update(material_ids=["999"]), "unknown material ID"),
+                ("wrong deterministic count", lambda item, facts: facts["hotMaterialFacts"]["小仙炖"].update(qualifyingCount=2), "qualifyingCount"),
+                ("below deterministic threshold", lambda item, facts: facts["hotMaterialFacts"]["小仙炖"]["materials"][0]["exposure"].update(min=199999), "below the threshold"),
+            )
+            for _label, mutate, expected in invalid_cases:
+                invalid_analysis = copy.deepcopy(self._schema_v7_analysis_fixture(analysis))
+                invalid_facts = copy.deepcopy(fact_pack)
+                mutate(invalid_analysis["topMaterialCombination"]["brandConclusions"][0], invalid_facts)
+                path.write_text(json.dumps(invalid_analysis, ensure_ascii=False), encoding="utf-8")
+                with self.assertRaisesRegex(report.YuntuReportError, expected):
+                    report.validate_analysis_input(analysis_json=path, fact_pack=invalid_facts)
+
+    def test_schema_v7_accepts_configured_hot_material_threshold(self):
+        report = load_module()
+        analysis = {
+            "topMaterialCombination": {
+                "brandConclusions": [{
+                    "brand": "小仙炖",
+                    "classificationSource": "runtime_title_rule",
+                    "dataSummary": "小仙炖本周期覆盖 1 条素材，累计曝光 60 万，CTR 2%、CVR 3%、3 秒播放率 40%。",
+                    "evidence": ["品牌榜单聚合事实"],
+                    "material_ids": ["101"],
+                }]
+            }
+        }
+        fact_pack = {
+            "schemaVersion": 7,
+            "filters": {"brands": ["小仙炖"]},
+            "industryTop1000Facts": {"source_scope": "industry_top1000"},
+            "brandRankingFacts": {"brands": {"小仙炖": {"source_scope": "brand_in_top1000", "sample_count": 1, "materials": [{"material_id": "101"}]}}},
+            "comparisonFacts": {"previousPeriod": {}, "industryBenchmark": {}},
+            "hotMaterialRule": {"metric": "exposure_interval_min", "comparison": "gte", "threshold": 500000},
+            "hotMaterialFacts": {"小仙炖": {"thresholdExposureMin": 500000, "qualifyingCount": 1, "materials": [{"material_id": "101", "exposure": {"min": 600000, "max": 650000, "raw": "60万-65万"}}], "available": True, "missing_reason": ""}},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+
+            report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+    @staticmethod
+    def _schema_v7_analysis_fixture(analysis):
+        """Restore the valid fixture after the scope mutation above."""
+        restored = copy.deepcopy(analysis)
+        insight = restored["topMaterialCombination"]["brandConclusions"][0].setdefault(
+            "hotMaterialInsight", {}
+        )
+        insight.setdefault("title", "爆款素材表现分析")
+        insight.setdefault("summary", "爆款素材达到曝光门槛，建议继续验证其指标组合。")
+        insight["evidence"] = {"scope": "brand", "material_ids": ["101"]}
+        restored["topMaterialCombination"]["brandConclusions"][0]["comparisonSummary"] = (
+            "本周期相较上一周期样本增加，表现与行业大盘接近。"
+        )
+        return restored
 
     def test_render_report_renders_section_scope_labels_without_deep_frame_coverage(self):
         report = load_module()

@@ -61,6 +61,122 @@ class YuntuAnalysisTests(unittest.TestCase):
             ):
                 self.assertTrue((output / relative_path).is_file(), relative_path)
 
+    def test_prepare_analysis_emits_period_comparisons_and_deterministic_hot_material_facts(self):
+        analysis = load_module()
+        query_records = [
+            {
+                "material_id": "101", "title": "小仙炖鲜炖燕窝", "rank": 1,
+                "metrics": {"show_cnt": 10, "ctr": 0.1},
+                "exposure": {"min": 199999, "max": 210000, "raw": "19.9999万-21万"},
+                "people_tags": [], "material_tags": [], "data_availability": {},
+            },
+            {
+                "material_id": "102", "title": "小仙炖礼盒", "rank": 2,
+                "metrics": {"show_cnt": 20, "ctr": 0.2},
+                "exposure": {"min": 200000, "max": 240000, "raw": "20万-24万"},
+                "people_tags": [], "material_tags": [], "data_availability": {},
+            },
+            {
+                "material_id": "103", "title": "小仙炖高曝光", "rank": 3,
+                "metrics": {"show_cnt": 30, "ctr": 0.3},
+                "exposure": {"min": 300000, "max": 350000, "raw": "30万-35万"},
+                "people_tags": [], "material_tags": [], "data_availability": {},
+            },
+        ]
+        previous_records = [
+            {**query_records[0], "material_id": "201", "exposure": {"min": 100000, "max": 120000, "raw": "10万-12万"}},
+        ]
+        industry_records = [
+            {**query_records[0], "material_id": "301", "exposure": {"min": 250000, "max": 280000, "raw": "25万-28万"}},
+        ]
+        selected = [{"rank": 1, "material_id": "101", "detailRecordPath": "normalized/detail-records/101.json"}]
+        details = {"101": {"material_id": "101", "high_points": [], "loss_points": [], "data_availability": {}}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, query_records, selected, details)
+            (root / "normalized" / "list-records-previous-period.json").write_text(json.dumps(previous_records), encoding="utf-8")
+            (root / "normalized" / "list-records-industry.json").write_text(json.dumps(industry_records), encoding="utf-8")
+            manifest_path = root / "batch-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest.update({
+                "schemaVersion": 3,
+                "filters": {"industry": "食品饮料", "time_range_type": "CUSTOM", "custom_start_date": "20260810", "custom_end_date": "20260820", "brands": ["小仙炖"]},
+                "rankingRuns": {
+                    "query": {"normalizedPath": "normalized/list-records.json", "actualDateRange": {"startDate": "2026-08-10", "endDate": "2026-08-20"}, "status": "success"},
+                    "previous_period": {"normalizedPath": "normalized/list-records-previous-period.json", "actualDateRange": {"startDate": "2026-07-30", "endDate": "2026-08-09"}, "status": "success"},
+                    "industry": {"normalizedPath": "normalized/list-records-industry.json", "actualDateRange": {"startDate": "2026-08-10", "endDate": "2026-08-20"}, "status": "success"},
+                },
+            })
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            with mock.patch.object(analysis, "generate_standard_highlights_for_detail", return_value=[]):
+                analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
+            ranking = json.loads((root / "diagnostic-analysis" / "analysis-units" / "ranking-brand-input.json").read_text(encoding="utf-8"))
+
+        evidence = ranking["evidence"]
+        self.assertEqual(set(evidence), {"reportScope", "industryTop1000Facts", "brandRankingFacts", "current", "previousPeriod", "industryBenchmark", "comparisonFacts", "hotMaterialRule", "hotMaterialFacts"})
+        self.assertEqual(evidence["hotMaterialFacts"]["all"]["qualifyingCount"], 2)
+        self.assertEqual([item["material_id"] for item in evidence["hotMaterialFacts"]["all"]["materials"]], ["103", "102"])
+        self.assertEqual(evidence["comparisonFacts"]["previousPeriod"]["sampleCountDelta"], 2)
+
+    def test_prepare_analysis_uses_configured_hot_material_threshold(self):
+        analysis = load_module()
+        query_records = [
+            {
+                "material_id": "101", "title": "中等曝光素材", "rank": 1,
+                "metrics": {"show_cnt": 10, "ctr": 0.1},
+                "exposure": {"min": 300000, "max": 350000, "raw": "30万-35万"},
+                "people_tags": [], "material_tags": [], "data_availability": {},
+            },
+            {
+                "material_id": "102", "title": "高曝光素材", "rank": 2,
+                "metrics": {"show_cnt": 20, "ctr": 0.2},
+                "exposure": {"min": 600000, "max": 650000, "raw": "60万-65万"},
+                "people_tags": [], "material_tags": [], "data_availability": {},
+            },
+        ]
+        selected = [{"rank": 1, "material_id": "101", "detailRecordPath": "normalized/detail-records/101.json"}]
+        details = {"101": {"material_id": "101", "high_points": [], "loss_points": [], "data_availability": {}}}
+        custom_config = {
+            "schemaVersion": 1,
+            "hotMaterialRule": {
+                "metric": "exposure_interval_min",
+                "comparison": "gte",
+                "threshold": 500000,
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, query_records, selected, details)
+            manifest_path = root / "batch-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest.update({
+                "schemaVersion": 3,
+                "filters": {"industry": "食品饮料", "time_range_type": "CUSTOM", "custom_start_date": "20260810", "custom_end_date": "20260820", "brands": ["小仙炖"]},
+                "rankingRuns": {
+                    "query": {"normalizedPath": "normalized/list-records.json", "actualDateRange": {"startDate": "2026-08-10", "endDate": "2026-08-20"}, "status": "success"},
+                    "previous_period": {"normalizedPath": "normalized/list-records.json", "actualDateRange": {"startDate": "2026-07-30", "endDate": "2026-08-09"}, "status": "success"},
+                    "industry": {"normalizedPath": "normalized/list-records.json", "actualDateRange": {"startDate": "2026-08-10", "endDate": "2026-08-20"}, "status": "success"},
+                },
+            })
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            config_path = root / "hot-material-rules.json"
+            config_path.write_text(json.dumps(custom_config), encoding="utf-8")
+            with mock.patch.object(analysis, "generate_standard_highlights_for_detail", return_value=[]):
+                analysis.prepare_analysis(
+                    input_dir=root,
+                    output_dir=root / "diagnostic-analysis",
+                    hot_material_config=config_path,
+                )
+            report_data = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
+            ranking = json.loads((root / "diagnostic-analysis" / "analysis-units" / "ranking-brand-input.json").read_text(encoding="utf-8"))
+            prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
+
+        self.assertEqual(report_data["hotMaterialRule"]["threshold"], 500000)
+        self.assertEqual(report_data["hotMaterialFacts"]["all"]["thresholdExposureMin"], 500000)
+        self.assertEqual(report_data["hotMaterialFacts"]["all"]["qualifyingCount"], 1)
+        self.assertEqual(ranking["evidence"]["hotMaterialRule"]["threshold"], 500000)
+        self.assertIn("threshold=500000", prompt)
+
     def test_prompt_template_is_loaded_and_runtime_scope_is_injected(self):
         analysis = load_module()
 
@@ -76,6 +192,21 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertNotIn("__BRAND_SCOPE_LABEL__", prompt)
         self.assertIn("全品牌对象", prompt)
         self.assertNotIn("不得生成任何综合结论或跨品牌结论字段", prompt)
+
+    def test_period_first_chapter_contract_uses_one_unified_brand_summary(self):
+        analysis = load_module()
+        schema = analysis._ranking_output_schema(include_period_contract=True)
+        brand_schema = schema["properties"]["brandConclusions"]["items"]
+
+        self.assertNotIn("comparisonSummary", brand_schema["required"])
+        self.assertNotIn("hotMaterialInsight", brand_schema["required"])
+        self.assertNotIn("comparisonSummary", brand_schema["properties"])
+        self.assertNotIn("hotMaterialInsight", brand_schema["properties"])
+
+        prompt = analysis._prompt_text(filters={"brands": ["小仙炖"]})
+        self.assertIn("一段整体分析", prompt)
+        self.assertIn("每个对象只输出 `brand`、`classificationSource`、`dataSummary`、`evidence`、`material_ids`", prompt)
+        self.assertNotIn("必须额外输出 comparisonSummary 和独立的 hotMaterialInsight", prompt)
 
     def _write_input(self, root, records, selected, details):
         (root / "normalized" / "detail-records").mkdir(parents=True)
@@ -652,12 +783,12 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertNotIn("brandComparisonConclusion", prompt)
         self.assertNotIn("executiveSummary", prompt)
         self.assertNotIn("peopleSummary", prompt.split("02 章必须读取", 1)[0])
-        self.assertIn("每个 `dataSummary` 控制在 4 至 6 句", prompt)
-        self.assertIn("数据陈述之外至少写 3 句分析", prompt)
+        self.assertIn("每个 `dataSummary` 控制在 6 至 10 句", prompt)
+        self.assertIn("不能将当前数据、环比、大盘或爆款另拆成标题、段落或独立字段", prompt)
         self.assertIn("第一章不输出人群维度分析", prompt)
         self.assertIn("只分析该品牌在行业 TOP1000 内匹配到的全部素材聚合结果", prompt)
         self.assertIn("不得引用单条素材的素材 ID、标题、排名或指标", prompt)
-        self.assertIn("素材 ID 只保留在 `evidence` 与 `material_ids` 审计字段", prompt)
+        self.assertIn("素材 ID 只保留在 `evidence`、`material_ids` 和爆款事实引用中", prompt)
         for metric in ("累计曝光", "CTR", "CVR", "3 秒播放率"):
             self.assertIn(metric, prompt)
         self.assertNotIn("读取同目录的 `yuntu-analysis-data.json`", prompt)
@@ -816,7 +947,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("每个维度只输出一段", prompt)
         self.assertIn("八大人群、性别和年龄三个维度", prompt)
         self.assertIn("至少 4 句", prompt)
-        self.assertIn("数据陈述之外", prompt)
+        self.assertIn("每个范围的 `dataSummary` 是唯一的 AI 正文", prompt)
         self.assertIn("为什么形成这种表现", prompt)
         self.assertIn("如何转化为内容策略", prompt)
         self.assertNotIn("渲染层会自动添加“1. ”、“2. ”等编号", prompt)

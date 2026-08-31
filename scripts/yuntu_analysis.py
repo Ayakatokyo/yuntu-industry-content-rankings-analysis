@@ -19,6 +19,10 @@ from yuntu_top_materials import (
     build_top_material_combination,
     select_top_materials,
 )
+from yuntu_hot_material_config import (
+    HotMaterialConfigError,
+    load_hot_material_rule,
+)
 
 
 class YuntuAnalysisError(RuntimeError):
@@ -44,6 +48,12 @@ REPORT_DATA_FIELDS = (
     "chapter02AiFacts",
     "industryTop1000Facts",
     "brandRankingFacts",
+    "current",
+    "previousPeriod",
+    "industryBenchmark",
+    "comparisonFacts",
+    "hotMaterialRule",
+    "hotMaterialFacts",
 )
 
 
@@ -121,8 +131,132 @@ def _ranking_material_fact(record):
             for name in RANKING_FACT_METRICS
             if name in record.get("metrics", {})
         },
+        "exposure": dict(record.get("exposure", {"min": None, "max": None, "raw": ""})),
         "people_tags": list(record.get("people_tags", [])),
         "material_tags": list(record.get("material_tags", [])),
+    }
+
+
+def _ranking_aggregate(records, *, source_scope, actual_date_range=None, available=True, missing_reason=""):
+    metrics = {}
+    for name in RANKING_FACT_METRICS:
+        summary = _metric_summary(records, name)
+        if name == "show_cnt":
+            metrics[name] = {
+                "count": summary["count"] if summary else 0,
+                "total": sum(_numeric_metric_values(records, name)),
+                "mean": summary["mean"] if summary else None,
+                "median": summary["median"] if summary else None,
+            }
+        else:
+            metrics[name] = summary or {
+                "count": 0,
+                "mean": None,
+                "median": None,
+            }
+    return {
+        "source_scope": source_scope,
+        "actualDateRange": actual_date_range,
+        "sampleCount": len(records),
+        "metrics": metrics,
+        "available": bool(available),
+        "missingReason": missing_reason,
+    }
+
+
+def _comparison_fact(current, baseline, *, baseline_name):
+    current_sample = current.get("sampleCount", 0)
+    baseline_sample = baseline.get("sampleCount", 0)
+    sample_delta = current_sample - baseline_sample
+    sample_rate = sample_delta / baseline_sample if baseline_sample else None
+    metric_changes = {}
+    for name in RANKING_FACT_METRICS:
+        current_value = (current.get("metrics", {}).get(name) or {}).get("median")
+        baseline_value = (baseline.get("metrics", {}).get(name) or {}).get("median")
+        if isinstance(current_value, (int, float)) and isinstance(baseline_value, (int, float)):
+            delta = current_value - baseline_value
+            rate = delta / baseline_value if baseline_value else None
+            metric_changes[name] = {
+                "current": current_value,
+                "baseline": baseline_value,
+                "delta": delta,
+                "rate": rate,
+                "available": True,
+                "missingReason": "",
+            }
+        else:
+            metric_changes[name] = {
+                "current": current_value,
+                "baseline": baseline_value,
+                "delta": None,
+                "rate": None,
+                "available": False,
+                "missingReason": "current_or_baseline_metric_unavailable",
+            }
+    return {
+        "baseline": baseline_name,
+        "currentDateRange": current.get("actualDateRange"),
+        "baselineDateRange": baseline.get("actualDateRange"),
+        "currentSampleCount": current_sample,
+        "baselineSampleCount": baseline_sample,
+        "sampleCountDelta": sample_delta,
+        "sampleCountRate": sample_rate,
+        "metrics": metric_changes,
+        "available": bool(current.get("available") and baseline.get("available")),
+        "missingReason": (
+            ""
+            if current.get("available") and baseline.get("available")
+            else baseline.get("missingReason") or "comparison_data_unavailable"
+        ),
+    }
+
+
+def _hot_material_scope_facts(records, *, scope, hot_material_rule):
+    threshold = hot_material_rule["threshold"]
+    qualifying = [
+        record
+        for record in records
+        if isinstance(record.get("exposure"), dict)
+        and isinstance(record["exposure"].get("min"), (int, float))
+        and not isinstance(record["exposure"].get("min"), bool)
+        and record["exposure"]["min"] >= threshold
+    ]
+    qualifying.sort(
+        key=lambda record: (
+            -record["exposure"]["min"],
+            record.get("rank", 0),
+            str(record.get("material_id", "")),
+        )
+    )
+    usable_count = sum(
+        isinstance(record.get("exposure"), dict)
+        and isinstance(record["exposure"].get("min"), (int, float))
+        and not isinstance(record["exposure"].get("min"), bool)
+        for record in records
+    )
+    return {
+        "scope": scope,
+        "thresholdExposureMin": threshold,
+        "rule": dict(hot_material_rule),
+        "qualifyingCount": len(qualifying),
+        "materials": [
+            {
+                "material_id": str(record.get("material_id", "")),
+                "rank": record.get("rank"),
+                "title": record.get("title", ""),
+                "exposure": dict(record["exposure"]),
+                "metrics": {
+                    name: record.get("metrics", {}).get(name)
+                    for name in RANKING_FACT_METRICS
+                    if name in record.get("metrics", {})
+                },
+            }
+            for record in qualifying
+        ],
+        "sortRule": "exposure.min descending, rank ascending, material_id ascending",
+        "available": bool(usable_count),
+        "missing_reason": "" if usable_count else "exposure_interval_unavailable",
+        "sampleCount": len(records),
     }
 
 
@@ -364,6 +498,10 @@ def _model_input_sections(
     brand_facts,
     chapter02_ai_facts,
     brands,
+    ranking_period_facts=None,
+    comparison_facts=None,
+    hot_material_rule=None,
+    hot_material_facts=None,
 ):
     visual_assets = []
     for fact in material_facts:
@@ -395,6 +533,18 @@ def _model_input_sections(
             source_scope="industry_top1000",
         ),
         "brandRankingFacts": brand_facts,
+        **(
+            {
+                "current": (ranking_period_facts or {}).get("current", {}),
+                "previousPeriod": (ranking_period_facts or {}).get("previousPeriod", {}),
+                "industryBenchmark": (ranking_period_facts or {}).get("industryBenchmark", {}),
+                "comparisonFacts": comparison_facts or {},
+                "hotMaterialRule": dict(hot_material_rule or {}),
+                "hotMaterialFacts": hot_material_facts or {},
+            }
+            if hot_material_facts is not None
+            else {}
+        ),
         "chapter02AiFacts": chapter02_ai_facts,
         "visualAssets": visual_assets,
         "dataLimitations": _data_limitations(material_facts),
@@ -478,7 +628,7 @@ def _model_material_facts(material_facts):
     return projected
 
 
-def _ranking_output_schema():
+def _ranking_output_schema(*, include_period_contract=False):
     brand_conclusion_schema = {
         "type": "object",
         "additionalProperties": False,
@@ -500,10 +650,15 @@ def _ranking_output_schema():
             "material_ids": {"type": "array", "items": {"type": "string"}},
         },
     }
+    # Period and hot-material facts remain in the ranking fact package, but
+    # the model writes one holistic narrative per scope instead of separate
+    # comparison and hot-material AI sections.
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["brandConclusions"],
+        "required": ["brandConclusions", "allBrandsConclusion"]
+        if include_period_contract
+        else ["brandConclusions"],
         "properties": {
             "brandConclusions": {
                 "type": "array",
@@ -660,8 +815,11 @@ def _material_deep_dive_output_schema(fact_pack):
 
 
 def _analysis_output_schema(fact_pack):
+    include_period_contract = "hotMaterialFacts" in fact_pack
     properties = {
-        "topMaterialCombination": _ranking_output_schema(),
+        "topMaterialCombination": _ranking_output_schema(
+            include_period_contract=include_period_contract
+        ),
         "chapter02Insights": _chapter02_output_schema(fact_pack),
     }
     required = ["topMaterialCombination", "chapter02Insights"]
@@ -691,6 +849,18 @@ def _write_analysis_units(fact_pack, output):
                 "reportScope": fact_pack["reportScopes"]["ranking"],
                 "industryTop1000Facts": fact_pack["industryTop1000Facts"],
                 "brandRankingFacts": fact_pack["brandRankingFacts"],
+                **(
+                    {
+                        "current": fact_pack["current"],
+                        "previousPeriod": fact_pack["previousPeriod"],
+                        "industryBenchmark": fact_pack["industryBenchmark"],
+                        "comparisonFacts": fact_pack["comparisonFacts"],
+                        "hotMaterialRule": fact_pack["hotMaterialRule"],
+                        "hotMaterialFacts": fact_pack["hotMaterialFacts"],
+                    }
+                    if "hotMaterialFacts" in fact_pack
+                    else {}
+                ),
             },
         ),
         (
@@ -727,13 +897,18 @@ def _write_analysis_units(fact_pack, output):
     for filename, unit_name, output_field, evidence in units:
         path = unit_dir / filename
         payload = {
-            "schemaVersion": 4 if unit_name == "ranking_brand" else 1,
+            "schemaVersion": (
+                5 if unit_name == "ranking_brand" and "hotMaterialFacts" in fact_pack
+                else 4 if unit_name == "ranking_brand" else 1
+            ),
             "unit": unit_name,
             "outputField": output_field,
             "evidence": evidence,
         }
         if unit_name == "ranking_brand":
-            payload["outputSchema"] = _ranking_output_schema()
+            payload["outputSchema"] = _ranking_output_schema(
+                include_period_contract="hotMaterialFacts" in fact_pack
+            )
         write_json_atomically(payload, path, indent=None)
         manifest_units.append(
             {
@@ -747,7 +922,7 @@ def _write_analysis_units(fact_pack, output):
     output_schema_path = Path(output) / "yuntu-ai-analysis.schema.json"
     write_json_atomically(_analysis_output_schema(fact_pack), output_schema_path)
     manifest = {
-        "schemaVersion": 4,
+        "schemaVersion": 5 if "hotMaterialFacts" in fact_pack else 4,
         "executionMode": "single_model_call",
         "sharedContext": {
             "filters": fact_pack["filters"],
@@ -770,6 +945,7 @@ PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "prompts" / "yuntu-
 PROMPT_PLACEHOLDERS = (
     "__BRANDS__",
     "__SCOPE_LABELS__",
+    "__HOT_MATERIAL_RULE__",
 )
 
 
@@ -788,7 +964,15 @@ def _load_prompt_template():
     return template
 
 
-def _prompt_text(*, filters):
+def _format_hot_material_rule(hot_material_rule=None):
+    rule = hot_material_rule or load_hot_material_rule()
+    return (
+        f"metric=`{rule['metric']}`，comparison=`{rule['comparison']}`，"
+        f"threshold={rule['threshold']}（本批次配置）"
+    )
+
+
+def _prompt_text(*, filters, hot_material_rule=None):
     brands = "、".join(str(brand) for brand in filters.get("brands", []) if brand)
     scope_labels = "、".join(
         ["all（全量 TOP1000）", *(str(brand) for brand in filters.get("brands", []) if brand)]
@@ -797,12 +981,108 @@ def _prompt_text(*, filters):
         _load_prompt_template()
         .replace("__BRANDS__", brands or "未指定品牌")
         .replace("__SCOPE_LABELS__", scope_labels)
+        .replace(
+            "__HOT_MATERIAL_RULE__",
+            _format_hot_material_rule(hot_material_rule),
+        )
     )
 
 
-def prepare_analysis(*, input_dir, output_dir):
+def _load_ranking_run(root, manifest, run_key, fallback_records=None):
+    runs = manifest.get("rankingRuns", {})
+    run = runs.get(run_key) if isinstance(runs, dict) else None
+    if not isinstance(run, dict) or run.get("status") != "success":
+        return fallback_records if fallback_records is not None else []
+    path = run.get("normalizedPath")
+    if not isinstance(path, str) or not path:
+        return fallback_records if fallback_records is not None else []
+    try:
+        records = _load_json(root / path)
+    except YuntuAnalysisError:
+        return fallback_records if fallback_records is not None else []
+    return records if isinstance(records, list) else []
+
+
+def _scope_records(records, scope, brands):
+    if scope == "all":
+        return list(records)
+    return [
+        record
+        for record in records
+        if scope in match_brands_from_title(record.get("title", ""), brands)
+    ]
+
+
+def _build_period_facts(manifest, query_records, previous_records, industry_records):
+    runs = manifest.get("rankingRuns", {})
+    runs = runs if isinstance(runs, dict) else {}
+
+    def aggregate(records, run_key, source_scope, unavailable_reason=""):
+        run = runs.get(run_key, {}) if isinstance(runs.get(run_key, {}), dict) else {}
+        return _ranking_aggregate(
+            records,
+            source_scope=source_scope,
+            actual_date_range=run.get("actualDateRange"),
+            available=bool(records) and run.get("status") == "success",
+            missing_reason=(
+                unavailable_reason
+                or ("" if records and run.get("status") == "success" else "comparison_data_unavailable")
+            ),
+        )
+
+    current = aggregate(query_records, "query", "query")
+    previous = aggregate(
+        previous_records,
+        "previous_period",
+        "previous_period",
+        "previous_period_not_collected" if not previous_records else "",
+    )
+    industry = aggregate(
+        industry_records,
+        "industry",
+        "industry",
+        "industry_benchmark_not_collected" if not industry_records else "",
+    )
+    return {
+        "current": current,
+        "previousPeriod": previous,
+        "industryBenchmark": industry,
+    }, {
+        "previousPeriod": _comparison_fact(current, previous, baseline_name="previousPeriod"),
+        "industryBenchmark": _comparison_fact(current, industry, baseline_name="industryBenchmark"),
+    }
+
+
+def _scope_period_facts(manifest, records_by_run, *, scope, brands):
+    runs = manifest.get("rankingRuns", {})
+    runs = runs if isinstance(runs, dict) else {}
+    periods = {}
+    for run_key, records in records_by_run.items():
+        run = runs.get(run_key, {}) if isinstance(runs.get(run_key, {}), dict) else {}
+        periods[run_key] = _ranking_aggregate(
+            _scope_records(records, scope, brands),
+            source_scope=run_key,
+            actual_date_range=run.get("actualDateRange"),
+            available=bool(records) and run.get("status") == "success",
+            missing_reason=("comparison_data_unavailable" if not records else ""),
+        )
+    return periods, {
+        "previousPeriod": _comparison_fact(
+            periods["query"], periods["previous_period"], baseline_name="previousPeriod"
+        ),
+        "industryBenchmark": _comparison_fact(
+            periods["query"], periods["industry"], baseline_name="industryBenchmark"
+        ),
+    }
+
+
+def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
     root = Path(input_dir)
     output = Path(output_dir)
+    try:
+        hot_material_rule = load_hot_material_rule(hot_material_config)
+    except HotMaterialConfigError as exc:
+        raise YuntuAnalysisError(str(exc)) from exc
     manifest = _load_json(root / "batch-manifest.json")
     list_records = _load_json(root / "normalized" / "list-records.json")
     selected = manifest.get("selectedMaterials", [])
@@ -810,6 +1090,8 @@ def prepare_analysis(*, input_dir, output_dir):
     if not isinstance(selected, list) or not selected:
         raise YuntuAnalysisError("selectedMaterials must contain at least one material")
     pool_records = [record for record in list_records if isinstance(record, dict)]
+    previous_records = _load_ranking_run(root, manifest, "previous_period")
+    industry_records = _load_ranking_run(root, manifest, "industry")
     list_by_id = {record.get("material_id"): record for record in pool_records}
     selected_ids = {item.get("material_id") for item in selected}
     details = []
@@ -828,6 +1110,7 @@ def prepare_analysis(*, input_dir, output_dir):
                 "rank": item.get("rank"),
                 "title": list_record.get("title", ""),
                 "metrics": list_record.get("metrics", {}),
+                "exposure": list_record.get("exposure", {"min": None, "max": None, "raw": ""}),
                 "metricComparison": _metric_comparison(list_record, pool_records),
                 "people_tags": list_record.get("people_tags", []),
                 "material_tags": list_record.get("material_tags", []),
@@ -857,6 +1140,10 @@ def prepare_analysis(*, input_dir, output_dir):
     tag_insights = _tag_insights(pool_records, selected_ids)
     trend_summary = _trend_summary(details)
     brands = manifest.get("filters", {}).get("brands", [])
+    ranking_period_facts, comparison_facts = _build_period_facts(
+        manifest, pool_records, previous_records, industry_records
+    )
+    has_period_contract = bool(manifest.get("rankingRuns"))
     combination = build_top_material_combination(
         pool_records,
         top_n=len(pool_records),
@@ -875,6 +1162,30 @@ def prepare_analysis(*, input_dir, output_dir):
             for brand, group in combination.get("brands", {}).items()
         },
     }
+    configured_brands = brands or list(brand_facts["brands"])
+    comparison_facts["scopes"] = {}
+    records_by_run = {
+        "query": pool_records,
+        "previous_period": previous_records,
+        "industry": industry_records,
+    }
+    for scope in ["all", *configured_brands]:
+        _periods, scope_comparisons = _scope_period_facts(
+            manifest, records_by_run, scope=scope, brands=configured_brands
+        )
+        comparison_facts["scopes"][scope] = scope_comparisons
+    hot_material_facts = None
+    if has_period_contract:
+        hot_material_facts = {
+            "all": _hot_material_scope_facts(
+                pool_records, scope="all", hot_material_rule=hot_material_rule
+            )
+        }
+        for brand in configured_brands:
+            brand_records = _scope_records(pool_records, brand, configured_brands)
+            hot_material_facts[brand] = _hot_material_scope_facts(
+                brand_records, scope="brand", hot_material_rule=hot_material_rule
+            )
     scope_order = ["all"]
     chapter02_facts = {
         "scopeOrder": scope_order,
@@ -884,7 +1195,6 @@ def prepare_analysis(*, input_dir, output_dir):
         "scopeOrder": scope_order,
         "all": _chapter02_scope_fact(pool_records, label="全量 TOP1000", limit=1000),
     }
-    configured_brands = brands or list(brand_facts["brands"])
     for brand in configured_brands:
         if brand not in brand_facts["brands"]:
             continue
@@ -912,7 +1222,7 @@ def prepare_analysis(*, input_dir, output_dir):
             limit=len(ai_brand_records) or 1,
         )
     fact_pack = {
-        "schemaVersion": 6,
+        "schemaVersion": 7 if has_period_contract else 6,
         "filters": manifest.get("filters", {}),
         "selectedMaterials": selected,
         "rejectedMaterials": rejected,
@@ -926,6 +1236,18 @@ def prepare_analysis(*, input_dir, output_dir):
         "materialFacts": material_facts,
         "chapter02Facts": chapter02_facts,
         "chapter02AiFacts": chapter02_ai_facts,
+        **(
+            {
+                "current": ranking_period_facts["current"],
+                "previousPeriod": ranking_period_facts["previousPeriod"],
+                "industryBenchmark": ranking_period_facts["industryBenchmark"],
+                "comparisonFacts": comparison_facts,
+                "hotMaterialRule": dict(hot_material_rule),
+                "hotMaterialFacts": hot_material_facts,
+            }
+            if has_period_contract
+            else {}
+        ),
     }
     fact_pack.update(
         _model_input_sections(
@@ -934,6 +1256,10 @@ def prepare_analysis(*, input_dir, output_dir):
             brand_facts,
             chapter02_ai_facts,
             brands,
+            ranking_period_facts,
+            comparison_facts,
+            hot_material_rule,
+            hot_material_facts,
         )
     )
     write_json_atomically(
@@ -942,7 +1268,10 @@ def prepare_analysis(*, input_dir, output_dir):
     _write_analysis_units(fact_pack, output)
     output.mkdir(parents=True, exist_ok=True)
     (output / "yuntu-analysis-prompt.md").write_text(
-        _prompt_text(filters=manifest.get("filters", {})),
+        _prompt_text(
+            filters=manifest.get("filters", {}),
+            hot_material_rule=hot_material_rule,
+        ),
         encoding="utf-8",
     )
     return 0

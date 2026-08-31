@@ -20,6 +20,7 @@ if str(SCRIPT_DIR) not in sys.path:
 try:
     from yuntu_batch import (
         ConnectorInvoker,
+        build_ranking_run_specs,
         collection_status,
         fetch_batch,
         retry_failed_batch,
@@ -27,6 +28,7 @@ try:
     )
 except ImportError:
     ConnectorInvoker = None
+    build_ranking_run_specs = None
     collection_status = None
     fetch_batch = None
     retry_failed_batch = None
@@ -494,6 +496,8 @@ def fetch_batch_analysis(
 ):
     if fetch_batch is None or ConnectorInvoker is None:
         raise RpaConnectorError("batch fetch support is unavailable")
+    if "time_range_type" not in raw_list_params:
+        raw_list_params = {**raw_list_params, "time_range_type": "LAST_7_DAYS"}
     list_params = validate_list_business_params(raw_list_params)
     detail_date_params = _validate_detail_date_params(raw_detail_params)
     detail_date_range = {
@@ -566,6 +570,10 @@ def _parser():
     )
     prepare_parser.add_argument("--input-dir", required=True)
     prepare_parser.add_argument("--output-dir", required=True)
+    prepare_parser.add_argument(
+        "--hot-material-config",
+        help="Path to the project-scoped hot-material rules JSON",
+    )
     attest_parser = commands.add_parser(
         "attest-analysis", help="Record the source of a model-authored analysis JSON"
     )
@@ -680,10 +688,13 @@ def main(argv=None):
         if args.command == "prepare-analysis":
             if prepare_analysis is None:
                 raise RpaConnectorError("analysis preparation support is unavailable")
-            return prepare_analysis(
-                input_dir=args.input_dir,
-                output_dir=args.output_dir,
-            )
+            prepare_kwargs = {
+                "input_dir": args.input_dir,
+                "output_dir": args.output_dir,
+            }
+            if args.hot_material_config:
+                prepare_kwargs["hot_material_config"] = args.hot_material_config
+            return prepare_analysis(**prepare_kwargs)
         if args.command == "attest-analysis":
             if attest_analysis is None:
                 raise RpaConnectorError("analysis provenance support is unavailable")

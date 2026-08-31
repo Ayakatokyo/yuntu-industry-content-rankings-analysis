@@ -1,6 +1,7 @@
 """Batch fetch orchestration for Yuntu rankings analysis."""
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import time
@@ -46,6 +47,75 @@ class ConnectorInvoker:
 
     def invoke_detail(self, shop_id, detail_params):
         return self._invoke_detail(shop_id, detail_params)
+
+
+def _parse_period_date(value):
+    text = str(value or "")
+    for fmt in ("%Y%m%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _iso_date_range(start, end):
+    if not start or not end:
+        return None
+    return {"startDate": start.isoformat(), "endDate": end.isoformat()}
+
+
+def _compact_date(value):
+    return value.strftime("%Y%m%d")
+
+
+def build_ranking_run_specs(list_params, *, resolved_date_range=None):
+    """Build immutable query, previous-period, and industry list request specs."""
+    if not isinstance(list_params, dict):
+        raise YuntuBatchError("list_params must be an object")
+    query_params = dict(list_params)
+    start = end = None
+    if query_params.get("time_range_type") == "CUSTOM":
+        start = _parse_period_date(query_params.get("custom_start_date"))
+        end = _parse_period_date(query_params.get("custom_end_date"))
+    elif isinstance(resolved_date_range, dict):
+        start = _parse_period_date(resolved_date_range.get("startDate"))
+        end = _parse_period_date(resolved_date_range.get("endDate"))
+
+    query_range = _iso_date_range(start, end)
+    previous_params = None
+    previous_range = None
+    if start and end:
+        period_days = (end - start).days + 1
+        previous_end = start - timedelta(days=1)
+        previous_start = previous_end - timedelta(days=period_days - 1)
+        previous_params = {
+            **query_params,
+            "time_range_type": "CUSTOM",
+            "custom_start_date": _compact_date(previous_start),
+            "custom_end_date": _compact_date(previous_end),
+        }
+        previous_range = _iso_date_range(previous_start, previous_end)
+
+    industry_params = {
+        key: value
+        for key, value in query_params.items()
+        if key not in {"brand_scope_type", "brands"}
+    }
+    industry_params["brand_scope_type"] = "ALL_INDUSTRY"
+    return {
+        "query": {"params": query_params, "resolvedDateRange": query_range},
+        "previous_period": {
+            "params": previous_params,
+            "resolvedDateRange": previous_range,
+            "unavailableReason": (
+                "query actual date range is unavailable; previous period cannot be derived"
+                if previous_params is None
+                else ""
+            ),
+        },
+        "industry": {"params": industry_params, "resolvedDateRange": query_range},
+    }
 
 
 class FileDownloader:
@@ -174,11 +244,12 @@ def _new_manifest(
     summary,
 ):
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "runId": summary["runId"],
         "parameterFingerprint": summary["parameterFingerprint"],
         "collectionContract": summary["collectionContract"],
         "status": "running",
+        "rankingRuns": {},
         "filters": list_params,
         "detailDateRange": detail_date_params,
         "targetTopN": target_top_n,
@@ -230,7 +301,7 @@ def _open_or_new_manifest(
         )
     manifest.update(
         {
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "runId": summary["runId"],
             "parameterFingerprint": summary["parameterFingerprint"],
             "collectionContract": summary["collectionContract"],
@@ -238,6 +309,7 @@ def _open_or_new_manifest(
         }
     )
     for key in (
+        "rankingRuns",
         "candidateMaterials",
         "selectionGroups",
         "submittedMaterials",
@@ -248,6 +320,8 @@ def _open_or_new_manifest(
     ):
         manifest.setdefault(key, [])
     manifest.setdefault("timingsSec", {})
+    if not isinstance(manifest.get("rankingRuns"), dict):
+        manifest["rankingRuns"] = {}
     return manifest
 
 
@@ -459,6 +533,90 @@ def _reusable_list_artifact(root, list_params, detail_date_params):
     return list_path
 
 
+def _ranking_list_paths(root, run_key):
+    if run_key == "query":
+        return (
+            root / "raw-csv" / "list.csv",
+            root / "raw-json" / "list-response.json",
+            root / "normalized" / "list-records.json",
+        )
+    suffix = "previous-period" if run_key == "previous_period" else "industry"
+    return (
+        root / "raw-csv" / f"list-{suffix}.csv",
+        root / "raw-json" / f"list-response-{suffix}.json",
+        root / "normalized" / f"list-records-{suffix}.json",
+    )
+
+
+def _ranking_run_snapshot(*, root, run_key, spec, status="pending"):
+    raw_csv, raw_json, normalized = _ranking_list_paths(root, run_key)
+    return {
+        "runKey": run_key,
+        "requestParams": spec.get("params"),
+        "actualDateRange": spec.get("resolvedDateRange"),
+        "status": status,
+        "rawPath": _relative(root, raw_csv),
+        "rawJsonPath": _relative(root, raw_json),
+        "normalizedPath": _relative(root, normalized),
+        "sampleCount": 0,
+        "contextVerification": {"valid": False, "issues": [], "observed": {}},
+    }
+
+
+def _persist_ranking_run(
+    *, root, manifest, summary, run_key, shop_id, spec, invoker, downloader
+):
+    raw_csv, raw_json, normalized_path = _ranking_list_paths(root, run_key)
+    entry = _ranking_run_snapshot(root=root, run_key=run_key, spec=spec)
+    manifest["rankingRuns"][run_key] = entry
+    summary["rankingRuns"] = manifest["rankingRuns"]
+    summary["stages"]["list"].setdefault("runs", {})[run_key] = entry
+    _save_summary(root, summary)
+    try:
+        raw_list, list_source = _materialize_records(
+            invoker.invoke_list(shop_id, spec["params"]),
+            csv_path=raw_csv,
+            json_path=raw_json,
+            downloader=downloader,
+        )
+        list_records = normalize_list_records(
+            raw_list, source_path=_relative(root, list_source)
+        )
+        write_json_atomically(list_records, normalized_path)
+        verification = _validate_list_context(list_records, spec["params"])
+        entry.update(
+            {
+                "status": "success" if verification["valid"] else "context_mismatch",
+                "sampleCount": len(list_records),
+                "contextVerification": verification,
+                "actualDateRange": _actual_date_range_from_records(list_records)
+                or spec.get("resolvedDateRange"),
+            }
+        )
+        _record_artifact(
+            summary,
+            root,
+            f"rankingList:{run_key}",
+            normalized_path,
+            f"normalized_ranking_{run_key}",
+        )
+        return list_records, entry
+    except Exception as exc:
+        entry.update({"status": "failed", "error": str(exc)})
+        return None, entry
+
+
+def _actual_date_range_from_records(records):
+    if not records:
+        return None
+    context = records[0].get("list_context", {})
+    if not isinstance(context, dict):
+        return None
+    start = _parse_period_date(context.get("actual_start_date"))
+    end = _parse_period_date(context.get("actual_end_date"))
+    return _iso_date_range(start, end)
+
+
 def _selected_ids(manifest):
     return {item["material_id"] for item in manifest.get("selectedMaterials", [])}
 
@@ -499,6 +657,13 @@ def _finalize_details(
         not manifest.get("rejectedMaterials")
         and (not require_no_unresolved or not manifest.get("unresolvedMaterials"))
         and _target_satisfied(manifest)
+        and (
+            not manifest.get("rankingRuns")
+            or all(
+                isinstance(run, dict) and run.get("status") == "success"
+                for run in manifest["rankingRuns"].values()
+            )
+        )
     )
     manifest["status"] = "success" if succeeded else incomplete_status
     summary["status"] = manifest["status"]
@@ -686,50 +851,116 @@ def fetch_batch(
     write_json_atomically(manifest, manifest_path)
 
     started = time.monotonic()
-    try:
-        reusable_list = _reusable_list_artifact(root, list_params, detail_date_params)
-        if reusable_list is not None:
-            raw_list, list_source = parse_csv_records(reusable_list), str(reusable_list)
-            summary["stages"]["list"]["requestStatus"] = "reused"
-        else:
-            summary["stages"]["list"]["requestStatus"] = "requested"
-            _save_summary(root, summary)
-            raw_list, list_source = _materialize_records(
-                invoker.invoke_list(shop_id, list_params),
-                csv_path=root / "raw-csv" / "list.csv",
-                json_path=root / "raw-json" / "list-response.json",
-                downloader=downloader,
+    legacy_single_run = (
+        "time_range_type" not in list_params
+        or
+        summary.get("schemaVersion", 0) < 3
+        and _reusable_list_artifact(root, list_params, detail_date_params) is not None
+    )
+    if legacy_single_run:
+        try:
+            reusable_list = _reusable_list_artifact(root, list_params, detail_date_params)
+            if reusable_list is not None:
+                raw_list = parse_csv_records(reusable_list)
+                list_source = reusable_list
+                request_status = "reused"
+            else:
+                raw_list, list_source = _materialize_records(
+                    invoker.invoke_list(shop_id, list_params),
+                    csv_path=root / "raw-csv" / "list.csv",
+                    json_path=root / "raw-json" / "list-response.json",
+                    downloader=downloader,
+                )
+                request_status = "requested"
+            list_records = normalize_list_records(
+                raw_list, source_path=_relative(root, list_source)
             )
-        list_records = normalize_list_records(raw_list, source_path=_relative(root, list_source))
-        list_record_path = root / "normalized" / "list-records.json"
-        write_json_atomically(list_records, list_record_path)
-        _record_artifact(summary, root, "listRecords", list_record_path, "normalized_list")
-        summary["stages"]["list"]["normalized"] = True
-        context_verification = _validate_list_context(list_records, list_params)
-        summary["stages"]["list"]["contextVerified"] = context_verification["valid"]
-        summary["stages"]["list"]["contextIssues"] = context_verification["issues"]
-        summary["stages"]["list"]["observedContext"] = context_verification["observed"]
-        if not context_verification["valid"]:
-            manifest["status"] = "list_context_mismatch"
-            manifest["error"] = "list context does not match requested filters: " + ", ".join(
-                context_verification["issues"]
+            write_json_atomically(list_records, root / "normalized" / "list-records.json")
+            context_verification = _validate_list_context(list_records, list_params)
+            summary["stages"]["list"].update(
+                {
+                    "requestStatus": request_status,
+                    "normalized": True,
+                    "contextVerified": context_verification["valid"],
+                    "contextIssues": context_verification["issues"],
+                    "observedContext": context_verification["observed"],
+                }
             )
-            manifest["timingsSec"]["totalSec"] = _elapsed(started)
-            summary["status"] = "list_context_mismatch"
+            if not context_verification["valid"]:
+                manifest["status"] = "list_context_mismatch"
+                manifest["error"] = "list context does not match requested filters: " + ", ".join(
+                    context_verification["issues"]
+                )
+                summary["status"] = manifest["status"]
+                _sync_stage_counts(summary, manifest, root)
+                write_json_atomically(manifest, manifest_path)
+                _save_summary(root, summary)
+                return 1
+        except Exception as exc:
+            manifest["status"] = "list_failed"
+            manifest["error"] = str(exc)
+            summary["status"] = "list_failed"
+            summary["stages"]["list"]["requestStatus"] = "failed"
             _sync_stage_counts(summary, manifest, root)
             write_json_atomically(manifest, manifest_path)
             _save_summary(root, summary)
             return 1
-    except Exception as exc:
-        manifest["status"] = "list_failed"
-        manifest["error"] = str(exc)
-        manifest["timingsSec"]["totalSec"] = _elapsed(started)
-        summary["status"] = "list_failed"
-        summary["stages"]["list"]["requestStatus"] = "failed"
-        _sync_stage_counts(summary, manifest, root)
-        write_json_atomically(manifest, manifest_path)
+    else:
+        specs = build_ranking_run_specs(list_params)
+        query_spec = specs["query"]
+        query_records, query_entry = _persist_ranking_run(
+            root=root,
+            manifest=manifest,
+            summary=summary,
+            run_key="query",
+            shop_id=shop_id,
+            spec=query_spec,
+            invoker=invoker,
+            downloader=downloader,
+        )
+        if query_records is None or query_entry["status"] != "success":
+            manifest["status"] = "list_context_mismatch" if query_entry["status"] == "context_mismatch" else "list_failed"
+            manifest["error"] = query_entry.get("error") or "query list context does not match requested filters"
+            manifest["timingsSec"]["totalSec"] = _elapsed(started)
+            summary["status"] = manifest["status"]
+            summary["stages"]["list"]["requestStatus"] = "failed"
+            _sync_stage_counts(summary, manifest, root)
+            write_json_atomically(manifest, manifest_path)
+            _save_summary(root, summary)
+            return 1
+        list_records = query_records
+        query_range = query_entry.get("actualDateRange")
+        if not specs["previous_period"].get("params") and query_range:
+            specs = build_ranking_run_specs(list_params, resolved_date_range=query_range)
+        for run_key in ("previous_period", "industry"):
+            spec = specs[run_key]
+            if not spec.get("params"):
+                entry = _ranking_run_snapshot(root=root, run_key=run_key, spec=spec, status="unavailable")
+                entry["error"] = spec.get("unavailableReason") or "actual date range unavailable"
+                manifest["rankingRuns"][run_key] = entry
+                summary["rankingRuns"] = manifest["rankingRuns"]
+                continue
+            _records, entry = _persist_ranking_run(
+                root=root,
+                manifest=manifest,
+                summary=summary,
+                run_key=run_key,
+                shop_id=shop_id,
+                spec=spec,
+                invoker=invoker,
+                downloader=downloader,
+            )
+        summary["stages"]["list"].update(
+            {
+                "requestStatus": "completed"
+                if all(item.get("status") == "success" for item in manifest["rankingRuns"].values())
+                else "partial",
+                "normalized": True,
+                "contextVerified": True,
+                "runs": manifest["rankingRuns"],
+            }
+        )
         _save_summary(root, summary)
-        return 1
 
     candidates = _candidate_materials_from_list(list_records, candidate_top_n)
     manifest["candidateMaterials"] = [_manifest_material(item) for item in candidates]
@@ -953,6 +1184,7 @@ def collection_status(*, output_dir):
         "runId": summary.get("runId") or manifest.get("runId"),
         "parameterFingerprint": summary.get("parameterFingerprint"),
         "collectionContract": summary.get("collectionContract"),
+        "rankingRuns": summary.get("rankingRuns") or manifest.get("rankingRuns", {}),
         "stages": {
             "list": {
                 "requestStatus": list_stage.get("requestStatus", "unknown"),

@@ -188,7 +188,7 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(set(chapter), {"brandTabs", "brandPanels"})
         self.assertEqual(chapter["brandPanels"][0]["brand"], "WONDERLAB/万益蓝")
         self.assertNotIn("topN", chapter["brandPanels"][0])
-        self.assertEqual(set(chapter["brandPanels"][0]), {"id", "brand", "insights"})
+        self.assertEqual(set(chapter["brandPanels"][0]), {"id", "brand", "insights", "aiAnalysis"})
         self.assertEqual(
             set(chapter["brandPanels"][0]["insights"][0]), {"text", "dimension"}
         )
@@ -200,6 +200,48 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(brand_tabs["items"], chapter["brandTabs"])
         self.assertEqual(brand_tabs["defaultItemId"], chapter["brandTabs"][0]["id"])
         self.assertEqual(brand_tabs["keyboard"], ["ArrowLeft", "ArrowRight", "Home", "End"])
+
+    def test_projects_period_comparison_and_hot_material_panel_without_raw_lists(self):
+        facts = self.fact_pack()
+        facts["comparisonFacts"] = {"brand": {"previousPeriod": {"sampleCountDelta": 1}}}
+        facts["hotMaterialFacts"] = {
+            "WONDERLAB/万益蓝": {
+                "thresholdExposureMin": 200000,
+                "qualifyingCount": 1,
+                "materials": [{"material_id": "101", "title": "测试素材 101", "exposure": {"min": 200000, "max": 220000, "raw": "20万-22万"}, "metrics": {"ctr": 0.1}}],
+                "available": True,
+                "missing_reason": "",
+            }
+        }
+        analysis = self.analysis()
+        analysis["topMaterialCombination"] = {}
+        analysis["topMaterialCombination"]["brandConclusions"] = [{
+            "brand": "WONDERLAB/万益蓝",
+            "classificationSource": "runtime_title_rule",
+            "dataSummary": "品牌全量素材的累计曝光、CTR、CVR 与 3 秒播放率呈现稳定。",
+            "comparisonSummary": "本周期样本较上一周期增加，整体表现高于行业大盘。",
+            "hotMaterialInsight": {"title": "爆款素材表现分析", "summary": "爆款素材集中在高曝光区间，指标组合值得继续验证。", "evidence": {"scope": "brand", "material_ids": ["101"]}},
+            "evidence": [{"material_id": "101"}],
+            "material_ids": ["101"],
+        }]
+
+        payload = build_yuntu_presentation(analysis, facts)
+
+        panel = payload["chapters"]["chapter01"]["brandPanels"][0]
+        self.assertIn("comparison", panel)
+        self.assertIn("hotMaterialPanel", panel)
+        self.assertEqual(
+            panel["aiAnalysis"],
+            {
+                "summary": (
+                    "品牌全量素材的累计曝光、CTR、CVR 与 3 秒播放率呈现稳定。 "
+                    "本周期样本较上一周期增加，整体表现高于行业大盘。 "
+                    "爆款素材集中在高曝光区间，指标组合值得继续验证。"
+                )
+            },
+        )
+        self.assertNotIn("current", panel)
+        self.assertNotIn("previousPeriod", panel)
 
     def test_chapter01_uses_industry_facts_for_legacy_aggregate_fallback(self):
         facts = self.fact_pack()

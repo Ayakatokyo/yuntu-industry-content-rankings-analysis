@@ -26,8 +26,9 @@ class YuntuBatchError(RuntimeError):
     """Raised when a Yuntu batch cannot be started."""
 
 
-DETAIL_WAVE_CONCURRENCY = 2
+DETAIL_WAVE_CONCURRENCY = 3
 HIGHLIGHT_CONCURRENCY = 3
+RANKING_RUN_ORDER = ("query", "previous_period", "industry")
 SELECTION_GROUP_FIELDS = {
     "selectionGroupId": "id",
     "brandId": "brand_id",
@@ -563,18 +564,44 @@ def _ranking_run_snapshot(*, root, run_key, spec, status="pending"):
     }
 
 
-def _persist_ranking_run(
-    *, root, manifest, summary, run_key, shop_id, spec, invoker, downloader
+def _invoke_ranking_result(*, run_key, shop_id, spec, invoker):
+    """Run only one ranking gateway request in a worker thread."""
+    started = time.monotonic()
+    try:
+        return {
+            "runKey": run_key,
+            "result": invoker.invoke_list(shop_id, spec["params"]),
+            "duration": _elapsed(started),
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "runKey": run_key,
+            "result": None,
+            "duration": _elapsed(started),
+            "error": exc,
+        }
+
+
+def _persist_ranking_response(
+    *, root, manifest, summary, run_key, spec, response, downloader
 ):
+    """Materialize and normalize one worker response on the main thread."""
+    entry = manifest["rankingRuns"][run_key]
+    if response["error"] is not None:
+        entry.update(
+            {
+                "status": "failed",
+                "error": str(response["error"]),
+                "timingsSec": {"listFetchSec": response["duration"]},
+            }
+        )
+        return None, entry
+
     raw_csv, raw_json, normalized_path = _ranking_list_paths(root, run_key)
-    entry = _ranking_run_snapshot(root=root, run_key=run_key, spec=spec)
-    manifest["rankingRuns"][run_key] = entry
-    summary["rankingRuns"] = manifest["rankingRuns"]
-    summary["stages"]["list"].setdefault("runs", {})[run_key] = entry
-    _save_summary(root, summary)
     try:
         raw_list, list_source = _materialize_records(
-            invoker.invoke_list(shop_id, spec["params"]),
+            response["result"],
             csv_path=raw_csv,
             json_path=raw_json,
             downloader=downloader,
@@ -591,6 +618,7 @@ def _persist_ranking_run(
                 "contextVerification": verification,
                 "actualDateRange": _actual_date_range_from_records(list_records)
                 or spec.get("resolvedDateRange"),
+                "timingsSec": {"listFetchSec": response["duration"]},
             }
         )
         _record_artifact(
@@ -604,6 +632,46 @@ def _persist_ranking_run(
     except Exception as exc:
         entry.update({"status": "failed", "error": str(exc)})
         return None, entry
+
+
+def _reusable_ranking_records(root, manifest, run_key):
+    """Return a verified normalized ranking list from a previous checkpoint."""
+    entry = manifest.get("rankingRuns", {}).get(run_key)
+    if not isinstance(entry, dict) or entry.get("status") != "success":
+        return None
+    relative_path = entry.get("normalizedPath")
+    if not isinstance(relative_path, str) or not relative_path:
+        return None
+    path = root / relative_path
+    try:
+        records = _load_json(path)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(records, list) or not records:
+        return None
+    return records
+
+
+def _persist_ranking_run(
+    *, root, manifest, summary, run_key, shop_id, spec, invoker, downloader
+):
+    entry = _ranking_run_snapshot(root=root, run_key=run_key, spec=spec)
+    manifest["rankingRuns"][run_key] = entry
+    summary["rankingRuns"] = manifest["rankingRuns"]
+    summary["stages"]["list"].setdefault("runs", {})[run_key] = entry
+    _save_summary(root, summary)
+    response = _invoke_ranking_result(
+        run_key=run_key, shop_id=shop_id, spec=spec, invoker=invoker
+    )
+    return _persist_ranking_response(
+        root=root,
+        manifest=manifest,
+        summary=summary,
+        run_key=run_key,
+        spec=spec,
+        response=response,
+        downloader=downloader,
+    )
 
 
 def _actual_date_range_from_records(records):
@@ -907,20 +975,143 @@ def fetch_batch(
             return 1
     else:
         specs = build_ranking_run_specs(list_params)
-        query_spec = specs["query"]
-        query_records, query_entry = _persist_ranking_run(
-            root=root,
-            manifest=manifest,
-            summary=summary,
-            run_key="query",
-            shop_id=shop_id,
-            spec=query_spec,
-            invoker=invoker,
-            downloader=downloader,
-        )
-        if query_records is None or query_entry["status"] != "success":
-            manifest["status"] = "list_context_mismatch" if query_entry["status"] == "context_mismatch" else "list_failed"
-            manifest["error"] = query_entry.get("error") or "query list context does not match requested filters"
+        ranking_records = {}
+        existing_ranking_runs = manifest.get("rankingRuns", {})
+        manifest["rankingRuns"] = {}
+        pending_specs = {}
+        reused_records = {}
+        for run_key in RANKING_RUN_ORDER:
+            spec = specs[run_key]
+            reusable = _reusable_ranking_records(
+                root, {"rankingRuns": existing_ranking_runs}, run_key
+            )
+            if reusable is not None:
+                entry = dict(existing_ranking_runs[run_key])
+                entry["requestStatus"] = "reused"
+                manifest["rankingRuns"][run_key] = entry
+                reused_records[run_key] = reusable
+            elif not spec.get("params"):
+                entry = _ranking_run_snapshot(
+                    root=root, run_key=run_key, spec=spec, status="unavailable"
+                )
+                entry["error"] = spec.get("unavailableReason") or "actual date range unavailable"
+                manifest["rankingRuns"][run_key] = entry
+            else:
+                entry = _ranking_run_snapshot(
+                    root=root, run_key=run_key, spec=spec, status="running"
+                )
+                entry["requestStatus"] = "requested"
+                manifest["rankingRuns"][run_key] = entry
+                pending_specs[run_key] = spec
+
+        summary["rankingRuns"] = manifest["rankingRuns"]
+        summary["stages"]["list"]["runs"] = manifest["rankingRuns"]
+        write_json_atomically(manifest, manifest_path)
+        _save_summary(root, summary)
+
+        def persist_ranking_result(run_key, spec, response):
+            records, entry = _persist_ranking_response(
+                root=root,
+                manifest=manifest,
+                summary=summary,
+                run_key=run_key,
+                spec=spec,
+                response=response,
+                downloader=downloader,
+            )
+            if records is not None and entry["status"] == "success":
+                ranking_records[run_key] = records
+            write_json_atomically(manifest, manifest_path)
+            _save_summary(root, summary)
+            return records, entry
+
+        for run_key, records in reused_records.items():
+            ranking_records[run_key] = records
+
+        # Relative periods cannot be derived until the query response exposes
+        # its actual closed date range. Query and industry still run together;
+        # the previous-period request is submitted as soon as that range is
+        # available, without moving any persistence into a worker.
+        if (
+            not specs["previous_period"].get("params")
+            and "query" in reused_records
+            and manifest["rankingRuns"]["query"].get("actualDateRange")
+        ):
+            specs = build_ranking_run_specs(
+                list_params,
+                resolved_date_range=manifest["rankingRuns"]["query"]["actualDateRange"],
+            )
+            previous_spec = specs["previous_period"]
+            entry = _ranking_run_snapshot(
+                root=root, run_key="previous_period", spec=previous_spec, status="running"
+            )
+            entry["requestStatus"] = "requested"
+            manifest["rankingRuns"]["previous_period"] = entry
+            pending_specs["previous_period"] = previous_spec
+
+        with ThreadPoolExecutor(max_workers=3) as ranking_executor:
+            pending = {
+                ranking_executor.submit(
+                    _invoke_ranking_result,
+                    run_key=run_key,
+                    shop_id=shop_id,
+                    spec=spec,
+                    invoker=invoker,
+                ): run_key
+                for run_key, spec in pending_specs.items()
+            }
+            while pending:
+                done, _ = wait(set(pending), return_when=FIRST_COMPLETED)
+                for future in sorted(
+                    done, key=lambda item: RANKING_RUN_ORDER.index(pending[item])
+                ):
+                    run_key = pending.pop(future)
+                    response = future.result()
+                    records, entry = persist_ranking_result(
+                        run_key, pending_specs[run_key], response
+                    )
+                    if (
+                        run_key == "query"
+                        and records is not None
+                        and entry["status"] == "success"
+                        and not specs["previous_period"].get("params")
+                    ):
+                        query_range = entry.get("actualDateRange")
+                        if query_range:
+                            specs = build_ranking_run_specs(
+                                list_params, resolved_date_range=query_range
+                            )
+                            previous_spec = specs["previous_period"]
+                            previous_entry = _ranking_run_snapshot(
+                                root=root,
+                                run_key="previous_period",
+                                spec=previous_spec,
+                                status="running",
+                            )
+                            previous_entry["requestStatus"] = "requested"
+                            manifest["rankingRuns"]["previous_period"] = previous_entry
+                            pending_specs["previous_period"] = previous_spec
+                            pending[
+                                ranking_executor.submit(
+                                    _invoke_ranking_result,
+                                    run_key="previous_period",
+                                    shop_id=shop_id,
+                                    spec=previous_spec,
+                                    invoker=invoker,
+                                )
+                            ] = "previous_period"
+
+        list_records = ranking_records.get("query")
+        query_entry = manifest["rankingRuns"]["query"]
+        if list_records is None or query_entry["status"] != "success":
+            manifest["status"] = (
+                "list_context_mismatch"
+                if query_entry["status"] == "context_mismatch"
+                else "list_failed"
+            )
+            manifest["error"] = query_entry.get("error") or (
+                "query list context does not match requested filters"
+            )
             manifest["timingsSec"]["totalSec"] = _elapsed(started)
             summary["status"] = manifest["status"]
             summary["stages"]["list"]["requestStatus"] = "failed"
@@ -928,32 +1119,13 @@ def fetch_batch(
             write_json_atomically(manifest, manifest_path)
             _save_summary(root, summary)
             return 1
-        list_records = query_records
-        query_range = query_entry.get("actualDateRange")
-        if not specs["previous_period"].get("params") and query_range:
-            specs = build_ranking_run_specs(list_params, resolved_date_range=query_range)
-        for run_key in ("previous_period", "industry"):
-            spec = specs[run_key]
-            if not spec.get("params"):
-                entry = _ranking_run_snapshot(root=root, run_key=run_key, spec=spec, status="unavailable")
-                entry["error"] = spec.get("unavailableReason") or "actual date range unavailable"
-                manifest["rankingRuns"][run_key] = entry
-                summary["rankingRuns"] = manifest["rankingRuns"]
-                continue
-            _records, entry = _persist_ranking_run(
-                root=root,
-                manifest=manifest,
-                summary=summary,
-                run_key=run_key,
-                shop_id=shop_id,
-                spec=spec,
-                invoker=invoker,
-                downloader=downloader,
-            )
         summary["stages"]["list"].update(
             {
                 "requestStatus": "completed"
-                if all(item.get("status") == "success" for item in manifest["rankingRuns"].values())
+                if all(
+                    item.get("status") == "success"
+                    for item in manifest["rankingRuns"].values()
+                )
                 else "partial",
                 "normalized": True,
                 "contextVerified": True,

@@ -140,6 +140,73 @@ class MultiPeriodInvoker:
         return detail_result(detail_params["material_id"])
 
 
+class ParallelRankingInvoker:
+    def __init__(self, *, fail_keys=None, fail_details=False):
+        self.fail_keys = set(fail_keys or ())
+        self.fail_details = fail_details
+        self.list_calls = []
+        self.detail_calls = []
+        self._lock = threading.Lock()
+        self._active_lists = 0
+        self.max_list_active = 0
+
+    def _list_key(self, list_params):
+        if list_params.get("brand_scope_type") == "ALL_INDUSTRY":
+            return "industry"
+        start = list_params.get("custom_start_date")
+        return {
+            "20260810": "query",
+            "20260730": "previous_period",
+        }.get(start, "industry")
+
+    def invoke_list(self, shop_id, list_params):
+        params = dict(list_params)
+        run_key = self._list_key(params)
+        with self._lock:
+            self.list_calls.append((shop_id, params))
+            self._active_lists += 1
+            self.max_list_active = max(self.max_list_active, self._active_lists)
+        try:
+            time.sleep(0.05)
+            if run_key in self.fail_keys:
+                raise RuntimeError(f"{run_key} list failed")
+            date_range = (
+                "2026-07-30 ~ 2026-08-09"
+                if run_key == "previous_period"
+                else "2026-08-10 ~ 2026-08-20"
+            )
+            material_id = {
+                "query": "101",
+                "previous_period": "201",
+                "industry": "301",
+            }[run_key]
+            return {
+                "success": True,
+                "data": [{
+                    "material_id": material_id,
+                    "title": f"素材-{material_id}",
+                    "object_index": {},
+                    "people_tag_entry": [],
+                    "material_tag_entry": [],
+                    "page_industry": "食品饮料",
+                    "page_brand_scope": "指定品牌" if run_key != "industry" else "全行业",
+                    "page_brands": ["小仙炖", "燕之屋", "五个女博士"],
+                    "page_custom_date_range": date_range,
+                }],
+            }
+        finally:
+            with self._lock:
+                self._active_lists -= 1
+
+    def invoke_detail(self, shop_id, detail_params):
+        material_id = detail_params["material_id"]
+        with self._lock:
+            self.detail_calls.append((shop_id, dict(detail_params)))
+        if self.fail_details:
+            raise RuntimeError("detail should not be requested on resume")
+        return detail_result(material_id)
+
+
 def detail_result(material_id):
     return {
         "success": True,
@@ -289,7 +356,7 @@ class YuntuBatchTests(unittest.TestCase):
         self.assertTrue(result["valid"])
         self.assertEqual(result["issues"], [])
 
-    def test_fetch_batch_runs_two_detail_rpas_concurrently(self):
+    def test_fetch_batch_runs_three_detail_rpas_concurrently(self):
         batch = load_batch()
 
         def slow_detail(material_id):
@@ -309,7 +376,154 @@ class YuntuBatchTests(unittest.TestCase):
             )
 
         self.assertEqual(status, 0)
-        self.assertEqual(invoker.max_active, 2)
+        self.assertEqual(invoker.max_active, 3)
+
+    def test_fetch_batch_requests_ranking_runs_concurrently_and_commits_in_fixed_order(self):
+        batch = load_batch()
+        invoker = ParallelRankingInvoker()
+        list_params = {
+            "industry": "食品饮料",
+            "time_range_type": "CUSTOM",
+            "custom_start_date": "20260810",
+            "custom_end_date": "20260820",
+            "brand_scope_type": "SPECIFIED_BRANDS",
+            "brands": ["小仙炖", "燕之屋", "五个女博士"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            status = batch.fetch_batch(
+                shop_id="shop-42",
+                list_params=list_params,
+                detail_date_params={
+                    "date_range_type": "CUSTOM",
+                    "custom_start_date": "20260810",
+                    "custom_end_date": "20260820",
+                },
+                target_top_n=1,
+                candidate_top_n=1,
+                output_dir=directory,
+                invoker=invoker,
+            )
+            manifest = json.loads(
+                (Path(directory) / "batch-manifest.json").read_text(encoding="utf-8")
+            )
+            summary = json.loads(
+                (Path(directory) / "run-summary.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(invoker.max_list_active, 3)
+        self.assertEqual(
+            list(manifest["rankingRuns"]), ["query", "previous_period", "industry"]
+        )
+        self.assertEqual(
+            list(summary["rankingRuns"]), ["query", "previous_period", "industry"]
+        )
+        self.assertEqual(
+            [item["status"] for item in manifest["rankingRuns"].values()],
+            ["success", "success", "success"],
+        )
+
+    def test_fetch_batch_isolates_comparison_failure_but_query_failure_blocks_details(self):
+        batch = load_batch()
+        list_params = {
+            "industry": "食品饮料",
+            "time_range_type": "CUSTOM",
+            "custom_start_date": "20260810",
+            "custom_end_date": "20260820",
+            "brand_scope_type": "SPECIFIED_BRANDS",
+            "brands": ["小仙炖", "燕之屋", "五个女博士"],
+        }
+        detail_params = {
+            "date_range_type": "CUSTOM",
+            "custom_start_date": "20260810",
+            "custom_end_date": "20260820",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            comparison_failure = ParallelRankingInvoker(fail_keys={"industry"})
+            status = batch.fetch_batch(
+                shop_id="shop-42",
+                list_params=list_params,
+                detail_date_params=detail_params,
+                target_top_n=1,
+                candidate_top_n=1,
+                output_dir=Path(directory) / "comparison-failure",
+                invoker=comparison_failure,
+            )
+            comparison_manifest = json.loads(
+                (Path(directory) / "comparison-failure" / "batch-manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            query_failure = ParallelRankingInvoker(fail_keys={"query"})
+            blocked_status = batch.fetch_batch(
+                shop_id="shop-42",
+                list_params=list_params,
+                detail_date_params=detail_params,
+                target_top_n=1,
+                candidate_top_n=1,
+                output_dir=Path(directory) / "query-failure",
+                invoker=query_failure,
+            )
+            blocked_manifest = json.loads(
+                (Path(directory) / "query-failure" / "batch-manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(comparison_failure.detail_calls[0][1]["material_id"], "101")
+        self.assertEqual(comparison_manifest["rankingRuns"]["industry"]["status"], "failed")
+        self.assertEqual(blocked_status, 1)
+        self.assertEqual(query_failure.detail_calls, [])
+        self.assertEqual(blocked_manifest["status"], "list_failed")
+
+    def test_fetch_batch_reuses_successful_ranking_runs_and_persisted_details(self):
+        batch = load_batch()
+        list_params = {
+            "industry": "食品饮料",
+            "time_range_type": "CUSTOM",
+            "custom_start_date": "20260810",
+            "custom_end_date": "20260820",
+            "brand_scope_type": "SPECIFIED_BRANDS",
+            "brands": ["小仙炖", "燕之屋", "五个女博士"],
+        }
+        detail_params = {
+            "date_range_type": "CUSTOM",
+            "custom_start_date": "20260810",
+            "custom_end_date": "20260820",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            first = ParallelRankingInvoker()
+            self.assertEqual(
+                batch.fetch_batch(
+                    shop_id="shop-42",
+                    list_params=list_params,
+                    detail_date_params=detail_params,
+                    target_top_n=1,
+                    candidate_top_n=1,
+                    output_dir=directory,
+                    invoker=first,
+                ),
+                0,
+            )
+            resumed = ParallelRankingInvoker(
+                fail_keys={"query", "previous_period", "industry"},
+                fail_details=True,
+            )
+            status = batch.fetch_batch(
+                shop_id="shop-42",
+                list_params=list_params,
+                detail_date_params=detail_params,
+                target_top_n=1,
+                candidate_top_n=1,
+                output_dir=directory,
+                invoker=resumed,
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(resumed.list_calls, [])
+        self.assertEqual(resumed.detail_calls, [])
 
     def test_fetch_batch_starts_highlights_before_other_wave_details_finish(self):
         batch = load_batch()

@@ -45,7 +45,7 @@ python <skill-root>/scripts/rpa_connector.py fetch \
 
 自定义范围时，两端改为 `CUSTOM` 并传入 `--custom-start-date`、`--custom-end-date`、`--detail-custom-start-date`、`--detail-custom-end-date`。上例中的 `--target-top-n 10` 表示秒级拆解素材数为 10；`--candidate-top-n` 是候选池数量，默认是目标数的 2 倍；`--top-n` 仅为旧版列表参数兼容，不控制第一部分品牌分析范围。列表筛选使用 `--industry`、时间范围、`--ages`、`--genders`、`--crowd-groups`、`--brand-scope-type`、`--brands`、`--ranking-limit-type`。
 
-`fetch` 是长任务：通过异步会话和 `status` 观察落盘，单次 RPA 最多等待 300 秒。新批次列表调用三次并分别写入 `rankingRuns` 与独立路径；query 完成后选择 `material_id` 才发详情，详情只消费 query 的 `normalized/detail-request-params.json`。上一周期使用当前实际闭区间向前平移等长天数，industry 请求强制 `ALL_INDUSTRY`。详情每波最多并行 2 个素材；本波详情与高光任务全部终态后才启动下一波。高光处理失败只记录原因，不补拉详情。
+`fetch` 是长任务：通过异步会话和 `status` 观察落盘，单次 RPA 最多等待 300 秒。新批次列表调用三次并分别写入 `rankingRuns` 与独立路径；三个已确定参数的榜单请求（`query`、`previous_period`、`industry`）并行执行，工作线程只负责请求和返回响应，主线程统一规范化、原子落盘并更新 manifest/run-summary，最终输出顺序固定。相对周期的上一周期须等 query 返回实际日期后再提交；query 完成后选择 `material_id` 才发详情，详情只消费 query 的 `normalized/detail-request-params.json`。上一周期使用当前实际闭区间向前平移等长天数，industry 请求强制 `ALL_INDUSTRY`。详情每波最多并行 3 个素材；本波详情与高光任务全部终态后才启动下一波。高光处理失败只记录原因，不补拉详情；已成功榜单和已落盘详情在恢复时不重复请求。
 
 ## 批次门禁与恢复
 

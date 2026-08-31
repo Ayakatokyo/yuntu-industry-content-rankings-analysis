@@ -147,7 +147,6 @@ def _render_chapter01_period_panel(panel, *, esc, merge_ai=False, jump_material_
                         + "</button>"
                     )
                 metric_labels = {
-                    "show_cnt": "曝光量",
                     "ctr": "CTR",
                     "cvr": "CVR",
                     "play_3s_rate": "3 秒播放率",
@@ -158,8 +157,6 @@ def _render_chapter01_period_panel(panel, *, esc, merge_ai=False, jump_material_
                 def format_metric(key, value):
                     if not isinstance(value, (int, float)):
                         return "-"
-                    if key == "show_cnt":
-                        return f"{value / 10000:.1f} 万" if value >= 10000 else f"{value:,.0f}"
                     return f"{value * 100:.2f}%"
                 metric_text = "、".join(
                     f"{metric_labels.get(key, key)} {format_metric(key, metrics[key])}"

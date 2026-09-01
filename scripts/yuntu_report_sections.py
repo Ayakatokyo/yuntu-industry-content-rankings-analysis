@@ -411,13 +411,22 @@ def render_audience_insights(
     def marketing_html(dashboard):
         categories = dashboard.get("categories", []) if isinstance(dashboard, dict) else []
         payload = html_module.escape(json_module.dumps(categories, ensure_ascii=False, separators=(",", ":")), quote=True)
+        interaction_hint = "点击一级标签柱状图可查看二级标签分布"
+        taxonomy_note = (
+            "营销卖点标签分类规则以完整营销卖点中括号里的内容为一级标签。"
+        )
         taxonomy_version = dashboard.get("taxonomyVersion") if isinstance(dashboard, dict) else None
         taxonomy_attr = (
             ' data-marketing-taxonomy-version="' + esc(taxonomy_version) + '"'
             if taxonomy_version is not None else ""
         )
         if not categories:
-            return '<div class="marketing-dashboard"><h3>营销卖点汇总</h3><p class="data-note">暂无营销卖点汇总数据。</p></div>'
+            return (
+                '<div class="marketing-dashboard"><div class="section-title-row"><h3>营销卖点汇总</h3>'
+                '<p class="script-dashboard-hint chart-interaction-hint">' + interaction_hint + '</p></div>'
+                '<p class="marketing-taxonomy-note">' + taxonomy_note + '</p>'
+                '<p class="data-note">暂无营销卖点汇总数据。</p></div>'
+            )
         maximum = max((item.get("occurrenceCount", 0) for item in categories), default=1) or 1
         columns = []
         for item in categories:
@@ -429,10 +438,14 @@ def render_audience_insights(
                 + f'{count / maximum * 100:.2f}%' + '"></i></span><strong>' + esc(item.get("category", ""))
                 + '</strong><span>' + esc(count) + ' 次</span></button>'
             )
-        return '<div class="marketing-dashboard marketing-dashboard-card chart-card"' + taxonomy_attr + ' data-marketing-categories="' + payload + '"><h3>营销卖点汇总</h3><p class="script-dashboard-hint">共 ' \
-            + esc(dashboard.get("tagCount", 0)) + ' 个标签，' + esc(dashboard.get("occurrenceCount", 0)) \
-            + ' 次命中；点击类别柱查看该类别的标签比例。</p><div data-marketing-view><div class="chart-grid script-dashboard-overview marketing-column-chart" role="group" aria-label="营销卖点汇总柱状图">' \
+        return (
+            '<div class="marketing-dashboard marketing-dashboard-card chart-card"' + taxonomy_attr
+            + ' data-marketing-categories="' + payload + '"><div class="section-title-row"><h3>营销卖点汇总</h3>'
+            + '<p class="script-dashboard-hint chart-interaction-hint">' + interaction_hint + '</p></div>'
+            + '<p class="marketing-taxonomy-note">' + taxonomy_note + '</p><div data-marketing-view>'
+            + '<div class="chart-grid script-dashboard-overview marketing-column-chart" role="region" tabindex="0" aria-label="营销卖点汇总柱状图">'
             + "".join(columns) + '</div></div></div>'
+        )
 
     tabs, panels = [], []
     for index, scope_key in enumerate(chapter02_facts["scopeOrder"]):

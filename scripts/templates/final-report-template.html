@@ -479,8 +479,13 @@
           if (!dimension.buckets.length) return emptyChart(title);
           var article = document.createElement('article');
           article.className = 'chart-card audience-chart audience-chart-crowd column-chart-card';
+          var titleRow = document.createElement('div');
+          titleRow.className = 'section-title-row';
           var heading = document.createElement('h3');
           heading.textContent = title + '分布';
+          var hint = document.createElement('p');
+          hint.className = 'chart-interaction-hint audience-crowd-hint';
+          hint.textContent = '点击柱状图查看对应人群 TOP3 素材';
           var chart = document.createElement('div');
           chart.className = 'script-dashboard-overview';
           var columnChart = document.createElement('div');
@@ -500,9 +505,6 @@
           var plot = document.createElement('div');
           plot.className = 'audience-column-plot';
           plot.style.gridTemplateColumns = 'repeat(' + dimension.buckets.length + ',minmax(0,1fr))';
-          var hint = document.createElement('p');
-          hint.className = 'audience-crowd-hint';
-          hint.textContent = '点击柱状图查看对应人群 TOP3 素材';
 
           dimension.buckets.forEach(function (bucket, index) {
             var item = document.createElement('div');
@@ -535,8 +537,9 @@
             plot.append(item);
           });
           columnChart.append(axis, plot);
-          chart.append(hint, columnChart);
-          article.append(heading, chart);
+          titleRow.append(heading, hint);
+          chart.append(columnChart);
+          article.append(titleRow, chart);
           return article;
         }
 
@@ -731,14 +734,13 @@
         function renderMarketingOverview(nextCategories) {
           categories = Array.isArray(nextCategories) ? nextCategories : categories;
           if (summary) {
-            var tagCount = categories.reduce(function (sum, item) { return sum + Number(item.tagCount || 0); }, 0);
-            var occurrenceCount = categories.reduce(function (sum, item) { return sum + Number(item.occurrenceCount || 0); }, 0);
-            summary.textContent = '共 ' + tagCount + ' 个标签，' + occurrenceCount + ' 次命中；点击类别柱查看该类别的标签比例。';
+            summary.textContent = '点击一级标签柱状图可查看二级标签分布';
           }
           var maximum = Math.max.apply(null, categories.map(function (item) { return Number(item.occurrenceCount || 0); })) || 1;
           var chart = document.createElement('div');
           chart.className = 'chart-grid script-dashboard-overview marketing-column-chart';
-          chart.setAttribute('role', 'group');
+          chart.setAttribute('role', 'region');
+          chart.setAttribute('tabindex', '0');
           chart.setAttribute('aria-label', '营销卖点汇总柱状图');
           categories.forEach(function (item) {
             var column = document.createElement('button');

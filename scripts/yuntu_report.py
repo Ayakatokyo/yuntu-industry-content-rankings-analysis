@@ -535,11 +535,13 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
     brand_conclusions = {item["brand"]: item for item in combination["brandConclusions"]}
     configured_brands = (fact_pack or {}).get("filters", {}).get("brands", [])
     brand_order = configured_brands or TOP_MATERIAL_BRAND_ORDER
-    ordered_brands = [
+    aggregate = combination.get("allBrandsConclusion")
+    ordered_brands = ([aggregate] if isinstance(aggregate, dict) else [])
+    ordered_brands.extend([
         brand_conclusions[brand]
         for brand in brand_order
         if brand in brand_conclusions
-    ]
+    ])
     ordered_brands.extend(
         item
         for item in combination["brandConclusions"]
@@ -548,23 +550,31 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
     for index, item in enumerate(ordered_brands):
         if index:
             lines.extend(["---", ""])
-        lines.extend([
-            f"### {item['brand']}",
-            "",
-        ])
-        summary_parts = [item.get("dataSummary", "")]
-        if item.get("comparisonSummary"):
-            summary_parts.append(item["comparisonSummary"])
-        legacy_insight = item.get("hotMaterialInsight")
-        if isinstance(legacy_insight, dict) and legacy_insight.get("summary"):
-            summary_parts.append(legacy_insight["summary"])
-        lines.extend([
-            " ".join(part for part in summary_parts if part),
-            "",
-        ])
+        display_brand = "所有指定品牌" if item.get("brand") == "全品牌" else item["brand"]
+        lines.extend([f"### {display_brand}", ""])
+        data_summary = item.get("dataSummary", "")
+        if data_summary:
+            lines.extend(["#### 素材表现与行业对比", "", data_summary, ""])
+        elif item.get("comparisonSummary"):
+            lines.extend(["#### 素材表现与行业对比", "", item["comparisonSummary"], ""])
+        hot_insight = item.get("hotMaterialInsight")
+        if isinstance(hot_insight, dict) and hot_insight.get("summary"):
+            lines.extend(["#### 爆款素材洞察", "", hot_insight["summary"], ""])
         hot_facts = (fact_pack or {}).get("hotMaterialFacts", {}) if isinstance(fact_pack, dict) else {}
         if isinstance(hot_facts, dict) and hot_facts:
             scope_key = "all" if item.get("brand") == "全品牌" else item.get("brand")
+            comparison_scopes = ((fact_pack or {}).get("comparisonFacts") or {}).get("scopes", {})
+            comparison = comparison_scopes.get(scope_key, {}) if isinstance(comparison_scopes, dict) else {}
+            if isinstance(comparison, dict) and comparison:
+                lines.extend(["#### 环比与全行业对比事实", ""])
+                for baseline_key, baseline_label in (("previousPeriod", "环比周期"), ("industryBenchmark", "同周期全行业")):
+                    fact = comparison.get(baseline_key)
+                    if not isinstance(fact, dict):
+                        continue
+                    lines.append(
+                        f"- {baseline_label}：当前 {fact.get('currentSampleCount', '-')} 条；对比 {fact.get('baselineSampleCount', '-')} 条。"
+                    )
+                lines.append("")
             hot = hot_facts.get(scope_key, {})
             lines.extend(["#### 爆款素材面板", ""])
             if not hot.get("available"):

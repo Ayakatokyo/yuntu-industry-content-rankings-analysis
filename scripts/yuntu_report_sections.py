@@ -29,10 +29,14 @@ def render_top_material_combination(
         value = {"brandConclusions": []}
         for panel in presentation["brandPanels"]:
             summaries = {item.get("dimension"): item.get("text", "") for item in panel.get("insights", [])}
-            value["brandConclusions"].append({
+            ai_analysis = panel.get("aiAnalysis") if isinstance(panel.get("aiAnalysis"), dict) else {}
+            conclusion = {
                 "brand": panel.get("brand", ""),
-                "dataSummary": summaries.get("data", ""),
-            })
+                "dataSummary": ai_analysis.get("dataSummary") or summaries.get("data", ""),
+            }
+            if isinstance(ai_analysis.get("hotMaterialInsight"), dict):
+                conclusion["hotMaterialInsight"] = ai_analysis["hotMaterialInsight"]
+            value["brandConclusions"].append(conclusion)
         brand_order = [panel.get("brand", "") for panel in presentation["brandPanels"]]
     brand_conclusions = {item["brand"]: item for item in value["brandConclusions"]}
     ordered_brands = [
@@ -42,7 +46,7 @@ def render_top_material_combination(
         item for item in value["brandConclusions"] if item not in ordered_brands
     )
     default_brand = next(
-        (item["brand"] for item in ordered_brands if item["brand"] == "全品牌"),
+        (item["brand"] for item in ordered_brands if item["brand"] in {"全品牌", "所有指定品牌"}),
         ordered_brands[0]["brand"],
     )
     tabs = "".join(
@@ -105,6 +109,23 @@ def render_top_material_combination(
 def _render_chapter01_ai_analysis(value, *, esc):
     if not isinstance(value, dict):
         return ""
+    data_summary = value.get("dataSummary")
+    hot_insight = value.get("hotMaterialInsight")
+    if isinstance(data_summary, str) or isinstance(hot_insight, dict):
+        chunks = []
+        if isinstance(data_summary, str) and data_summary.strip():
+            chunks.append(
+                '<section class="chapter01-ai-block chapter01-data-summary"><h4>素材表现与行业对比</h4><p>'
+                + esc(data_summary)
+                + "</p></section>"
+            )
+        if isinstance(hot_insight, dict) and isinstance(hot_insight.get("summary"), str) and hot_insight["summary"].strip():
+            chunks.append(
+                '<section class="chapter01-ai-block chapter01-hot-insight"><h4>爆款素材洞察</h4><p>'
+                + esc(hot_insight["summary"])
+                + "</p></section>"
+            )
+        return "".join(chunks)
     summary = value.get("summary")
     if not isinstance(summary, str) or not summary.strip():
         return ""
@@ -117,13 +138,46 @@ def _render_chapter01_period_panel(panel, *, esc, merge_ai=False, jump_material_
     comparison = panel.get("comparison") if isinstance(panel.get("comparison"), dict) else None
     hot = panel.get("hotMaterialPanel") if isinstance(panel.get("hotMaterialPanel"), dict) else None
     chunks = []
-    if comparison is not None and not merge_ai:
-        summary = comparison.get("summary")
-        if summary:
+    if comparison is not None:
+        comparison_facts = comparison.get("facts") if isinstance(comparison.get("facts"), dict) else {}
+        comparison_items = []
+        metric_labels = {
+            "show_cnt": "曝光",
+            "ctr": "CTR",
+            "cvr": "CVR",
+            "play_3s_rate": "3 秒完播",
+        }
+        for baseline_key, baseline_label in (("previousPeriod", "环比周期"), ("industryBenchmark", "同周期全行业")):
+            fact = comparison_facts.get(baseline_key)
+            if not isinstance(fact, dict):
+                continue
+            metric_parts = []
+            for metric_key, metric_label in metric_labels.items():
+                metric = fact.get("metrics", {}).get(metric_key) if isinstance(fact.get("metrics"), dict) else None
+                if not isinstance(metric, dict):
+                    continue
+                delta = metric.get("delta")
+                rate = metric.get("rate")
+                if isinstance(delta, (int, float)):
+                    suffix = f"，变化率 {rate:.2%}" if isinstance(rate, (int, float)) else ""
+                    metric_parts.append(f"{metric_label}变化 {delta:.4g}{suffix}")
+            samples = f"当前 {fact.get('currentSampleCount', '-')} 条，对比 {fact.get('baselineSampleCount', '-')} 条"
+            comparison_items.append(
+                '<li><strong>' + esc(baseline_label) + '</strong>：' + esc(samples)
+                + ("；" + esc("、".join(metric_parts)) if metric_parts else "；指标不可用")
+                + "。</li>"
+            )
+        if comparison_items or comparison.get("summary"):
+            if comparison_items:
+                body = '<ul class="chapter01-comparison-facts">' + "".join(comparison_items) + "</ul>"
+            else:
+                body = "<p>" + esc(comparison["summary"]) + "</p>"
             chunks.append(
-                '<section class="chapter01-comparison"><h4>环比与大盘比较</h4><p>'
-                + esc(summary)
-                + "</p></section>"
+                '<section class="chapter01-comparison"><div class="collapsible-head"><button class="collapsible-toggle comparison-toggle" type="button" data-collapsible-toggle data-collapsible-expanded-label="收起环比与全行业确定性事实" data-collapsible-collapsed-label="展开环比与全行业确定性事实" aria-expanded="true" aria-controls="'
+                + esc("chapter01-comparison-details-" + str(panel.get("id") or panel.get("brand") or "scope").replace(" ", "-"))
+                + '"><span class="collapsible-toggle-action">收起环比与全行业确定性事实</span></button></div><h4>环比与全行业对比事实</h4><div class="collapsible-body" id="'
+                + esc("chapter01-comparison-details-" + str(panel.get("id") or panel.get("brand") or "scope").replace(" ", "-"))
+                + '">' + body + "</div></section>"
             )
     if hot is not None:
         if hot.get("available"):

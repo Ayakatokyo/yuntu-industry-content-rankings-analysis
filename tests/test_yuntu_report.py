@@ -1362,6 +1362,69 @@ class YuntuReportTests(unittest.TestCase):
 
         self.assertNotIn("品牌间差异总结", rendered)
 
+    def test_render_report_separates_chapter01_ai_blocks_and_comparison_collapse(self):
+        report = load_module()
+        brands = ["小仙炖"]
+        analysis = {
+            "topMaterialCombination": {
+                "brandConclusions": [{
+                    "brand": "小仙炖",
+                    "classificationSource": "runtime_title_rule",
+                    "dataSummary": "表现对比段落，覆盖曝光、CTR、CVR 和 3 秒播放率。",
+                    "hotMaterialInsight": {
+                        "title": "爆款整体洞察",
+                        "summary": "爆款整体段落，说明共同内容机会和验证方向。",
+                        "evidence": {"scope": "brand", "material_ids": ["101"]},
+                    },
+                    "evidence": ["brand"], "material_ids": ["101"],
+                }],
+                "allBrandsConclusion": {
+                    "brand": "全品牌",
+                    "classificationSource": "runtime_title_rule",
+                    "dataSummary": "全范围表现对比段落，覆盖曝光、CTR、CVR 和 3 秒播放率。",
+                    "hotMaterialInsight": {
+                        "title": "全范围爆款整体洞察",
+                        "summary": "全范围爆款段落，说明共同内容机会和验证方向。",
+                        "evidence": {"scope": "all", "material_ids": ["101"]},
+                    },
+                    "evidence": ["all"], "material_ids": ["101"],
+                },
+            }
+        }
+        hot = {
+            "thresholdExposureMin": 200000,
+            "qualifyingCount": 1,
+            "materials": [{
+                "material_id": "101", "title": "真实爆款素材",
+                "exposure": {"min": 200000, "max": 220000, "raw": "20万-22万"},
+                "metrics": {"ctr": 0.1, "cvr": 0.02, "play_3s_rate": 0.4},
+            }],
+            "available": True, "missing_reason": "",
+        }
+        fact_pack = {
+            "schemaVersion": 7,
+            "filters": {"brands": brands},
+            "comparisonFacts": {"scopes": {"all": {"previousPeriod": {}}, "小仙炖": {"previousPeriod": {}}}},
+            "hotMaterialFacts": {"all": copy.deepcopy(hot), "小仙炖": copy.deepcopy(hot)},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=fact_pack)
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+            markdown = (root / "report" / "final-report.md").read_text(encoding="utf-8")
+
+        self.assertIn("所有指定品牌", rendered)
+        self.assertIn("素材表现与行业对比", rendered)
+        self.assertIn("爆款素材洞察", rendered)
+        self.assertIn("aria-expanded=\"true\"", rendered)
+        self.assertIn("aria-controls=\"chapter01-comparison-details-all-brands\"", rendered)
+        self.assertIn("收起环比与全行业确定性事实", rendered)
+        self.assertIn("收起爆款素材汇总数据", rendered)
+        self.assertIn("所有指定品牌", markdown)
+        self.assertIn("爆款整体段落", rendered)
+
     def test_render_report_rejects_audit_content_in_user_readable_summaries(self):
         report = load_module()
         for field, value in (

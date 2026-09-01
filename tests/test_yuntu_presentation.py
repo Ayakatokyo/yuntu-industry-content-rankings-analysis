@@ -271,6 +271,74 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertNotIn("current", panel)
         self.assertNotIn("previousPeriod", panel)
 
+    def test_chapter01_uses_all_brands_label_and_separate_ai_sections(self):
+        facts = self.fact_pack()
+        facts["comparisonFacts"] = {
+            "scopes": {
+                "all": {"previousPeriod": {"currentSampleCount": 2}},
+                "WONDERLAB/万益蓝": {"previousPeriod": {"currentSampleCount": 1}},
+            }
+        }
+        hot = {
+            "thresholdExposureMin": 200000,
+            "qualifyingCount": 1,
+            "materials": [{
+                "material_id": "101", "title": "测试素材 101",
+                "exposure": {"min": 200000, "max": 220000, "raw": "20万-22万"},
+                "metrics": {"ctr": 0.1, "cvr": 0.02, "play_3s_rate": 0.4},
+            }],
+            "available": True,
+            "missing_reason": "",
+        }
+        facts["hotMaterialFacts"] = {
+            "all": copy.deepcopy(hot),
+            "WONDERLAB/万益蓝": copy.deepcopy(hot),
+        }
+        analysis = self.analysis()
+        analysis["topMaterialCombination"] = {
+            "brandConclusions": [{
+                "brand": "WONDERLAB/万益蓝",
+                "classificationSource": "runtime_title_rule",
+                "dataSummary": "品牌表现段。",
+                "hotMaterialInsight": {
+                    "title": "爆款整体洞察",
+                    "summary": "品牌爆款段。",
+                    "evidence": {"scope": "brand", "material_ids": ["101"]},
+                },
+                "evidence": ["brand"], "material_ids": ["101"],
+            }],
+            "allBrandsConclusion": {
+                "brand": "全品牌",
+                "classificationSource": "runtime_title_rule",
+                "dataSummary": "全范围表现段。",
+                "hotMaterialInsight": {
+                    "title": "全范围爆款整体洞察",
+                    "summary": "全范围爆款段。",
+                    "evidence": {"scope": "all", "material_ids": ["101"]},
+                },
+                "evidence": ["all"], "material_ids": ["101"],
+            },
+        }
+
+        payload = build_yuntu_presentation(analysis, facts)
+        chapter = payload["chapters"]["chapter01"]
+
+        self.assertEqual(chapter["brandTabs"][0]["label"], "所有指定品牌")
+        aggregate = chapter["brandPanels"][0]
+        self.assertEqual(aggregate["brand"], "所有指定品牌")
+        self.assertEqual(aggregate["aiAnalysis"]["dataSummary"], "全范围表现段。")
+        self.assertEqual(
+            aggregate["aiAnalysis"]["hotMaterialInsight"]["summary"],
+            "全范围爆款段。",
+        )
+        self.assertIn("comparison", aggregate)
+        self.assertIn("hotMaterialPanel", aggregate)
+        brand_panel = chapter["brandPanels"][1]
+        self.assertEqual(
+            brand_panel["comparison"]["facts"]["previousPeriod"]["currentSampleCount"],
+            1,
+        )
+
     def test_chapter01_uses_industry_facts_for_legacy_aggregate_fallback(self):
         facts = self.fact_pack()
         facts["industryTop1000Facts"] = {
@@ -293,7 +361,7 @@ class YuntuPresentationTests(unittest.TestCase):
             }]}
         payload = build_yuntu_presentation(analysis, facts)
 
-        self.assertEqual(payload["chapters"]["chapter01"]["brandPanels"][0]["brand"], "全品牌")
+        self.assertEqual(payload["chapters"]["chapter01"]["brandPanels"][0]["brand"], "所有指定品牌")
         self.assertIn("2 条素材", payload["chapters"]["chapter01"]["brandPanels"][0]["insights"][0]["text"])
 
     def test_brand_scope_ids_remain_unique_for_chinese_brand_names(self):

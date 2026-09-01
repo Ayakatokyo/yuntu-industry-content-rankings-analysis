@@ -129,7 +129,6 @@ def _ranking_material_fact(record):
         "metrics": {
             name: record.get("metrics", {}).get(name)
             for name in RANKING_FACT_METRICS
-            if name in record.get("metrics", {})
         },
         "exposure": dict(record.get("exposure", {"min": None, "max": None, "raw": ""})),
         "people_tags": list(record.get("people_tags", [])),
@@ -159,6 +158,7 @@ def _ranking_aggregate(records, *, source_scope, actual_date_range=None, availab
         "actualDateRange": actual_date_range,
         "sampleCount": len(records),
         "metrics": metrics,
+        "materials": [_ranking_material_fact(record) for record in records],
         "available": bool(available),
         "missingReason": missing_reason,
     }
@@ -629,6 +629,24 @@ def _model_material_facts(material_facts):
 
 
 def _ranking_output_schema(*, include_period_contract=False):
+    hot_material_insight_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "summary", "evidence"],
+        "properties": {
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "evidence": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["scope", "material_ids"],
+                "properties": {
+                    "scope": {"type": "string", "enum": ["all", "brand"]},
+                    "material_ids": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        },
+    }
     brand_conclusion_schema = {
         "type": "object",
         "additionalProperties": False,
@@ -638,7 +656,7 @@ def _ranking_output_schema(*, include_period_contract=False):
             "dataSummary",
             "evidence",
             "material_ids",
-        ],
+        ] + (["hotMaterialInsight"] if include_period_contract else []),
         "properties": {
             "brand": {"type": "string"},
             "classificationSource": {
@@ -646,13 +664,11 @@ def _ranking_output_schema(*, include_period_contract=False):
                 "enum": ["title_rule", "runtime_title_rule"],
             },
             "dataSummary": {"type": "string"},
+            **({"hotMaterialInsight": hot_material_insight_schema} if include_period_contract else {}),
             "evidence": {"type": "array", "items": {"type": "string"}},
             "material_ids": {"type": "array", "items": {"type": "string"}},
         },
     }
-    # Period and hot-material facts remain in the ranking fact package, but
-    # the model writes one holistic narrative per scope instead of separate
-    # comparison and hot-material AI sections.
     return {
         "type": "object",
         "additionalProperties": False,
@@ -840,28 +856,26 @@ def _analysis_output_schema(fact_pack):
 
 def _write_analysis_units(fact_pack, output):
     unit_dir = Path(output) / "analysis-units"
+    if "hotMaterialFacts" in fact_pack:
+        ranking_evidence = {
+            "current": fact_pack["current"],
+            "previousPeriod": fact_pack["previousPeriod"],
+            "industryBenchmark": fact_pack["industryBenchmark"],
+            "comparisonFacts": fact_pack["comparisonFacts"],
+            "hotMaterialFacts": fact_pack["hotMaterialFacts"],
+        }
+    else:
+        ranking_evidence = {
+            "reportScope": fact_pack["reportScopes"]["ranking"],
+            "industryTop1000Facts": fact_pack["industryTop1000Facts"],
+            "brandRankingFacts": fact_pack["brandRankingFacts"],
+        }
     units = (
         (
             "ranking-brand-input.json",
             "ranking_brand",
             "topMaterialCombination",
-            {
-                "reportScope": fact_pack["reportScopes"]["ranking"],
-                "industryTop1000Facts": fact_pack["industryTop1000Facts"],
-                "brandRankingFacts": fact_pack["brandRankingFacts"],
-                **(
-                    {
-                        "current": fact_pack["current"],
-                        "previousPeriod": fact_pack["previousPeriod"],
-                        "industryBenchmark": fact_pack["industryBenchmark"],
-                        "comparisonFacts": fact_pack["comparisonFacts"],
-                        "hotMaterialRule": fact_pack["hotMaterialRule"],
-                        "hotMaterialFacts": fact_pack["hotMaterialFacts"],
-                    }
-                    if "hotMaterialFacts" in fact_pack
-                    else {}
-                ),
-            },
+            ranking_evidence,
         ),
         (
             "audience-marketing-input.json",
@@ -898,7 +912,7 @@ def _write_analysis_units(fact_pack, output):
         path = unit_dir / filename
         payload = {
             "schemaVersion": (
-                5 if unit_name == "ranking_brand" and "hotMaterialFacts" in fact_pack
+                6 if unit_name == "ranking_brand" and "hotMaterialFacts" in fact_pack
                 else 4 if unit_name == "ranking_brand" else 1
             ),
             "unit": unit_name,
@@ -1059,8 +1073,13 @@ def _scope_period_facts(manifest, records_by_run, *, scope, brands):
     periods = {}
     for run_key, records in records_by_run.items():
         run = runs.get(run_key, {}) if isinstance(runs.get(run_key, {}), dict) else {}
+        scoped_records = (
+            records
+            if run_key == "industry"
+            else _scope_records(records, scope, brands)
+        )
         periods[run_key] = _ranking_aggregate(
-            _scope_records(records, scope, brands),
+            scoped_records,
             source_scope=run_key,
             actual_date_range=run.get("actualDateRange"),
             available=bool(records) and run.get("status") == "success",

@@ -1649,6 +1649,30 @@ body.unified-report {
   line-height: 1.8;
 }
 
+.unified-yuntu .chapter01-ai-block {
+  margin: 14px 0 18px;
+  padding: 0;
+}
+
+.unified-yuntu .chapter01-ai-block h4 {
+  margin: 0 0 8px;
+  color: var(--unified-ink);
+  font-size: 0.95rem;
+}
+
+.unified-yuntu .chapter01-ai-block p {
+  margin: 0;
+  color: #000;
+  line-height: 1.8;
+}
+
+.unified-yuntu .chapter01-comparison-facts {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--unified-muted);
+  line-height: 1.6;
+}
+
 .unified-yuntu #top-material-combination .brand-panel,
 .unified-yuntu #top-material-combination .brand-panel p,
 .unified-yuntu #top-material-combination .brand-panel small,

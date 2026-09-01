@@ -113,10 +113,98 @@ class YuntuAnalysisTests(unittest.TestCase):
             ranking = json.loads((root / "diagnostic-analysis" / "analysis-units" / "ranking-brand-input.json").read_text(encoding="utf-8"))
 
         evidence = ranking["evidence"]
-        self.assertEqual(set(evidence), {"reportScope", "industryTop1000Facts", "brandRankingFacts", "current", "previousPeriod", "industryBenchmark", "comparisonFacts", "hotMaterialRule", "hotMaterialFacts"})
+        self.assertEqual(
+            set(evidence),
+            {"current", "previousPeriod", "industryBenchmark", "comparisonFacts", "hotMaterialFacts"},
+        )
         self.assertEqual(evidence["hotMaterialFacts"]["all"]["qualifyingCount"], 2)
         self.assertEqual([item["material_id"] for item in evidence["hotMaterialFacts"]["all"]["materials"]], ["103", "102"])
         self.assertEqual(evidence["comparisonFacts"]["previousPeriod"]["sampleCountDelta"], 2)
+
+    def test_ranking_unit_is_limited_to_three_period_lists_and_deterministic_facts(self):
+        analysis = load_module()
+        metrics = {
+            "show_cnt": 100,
+            "ctr": 0.1,
+            "cvr": 0.02,
+            "play_3s_rate": 0.4,
+        }
+        query_records = [{
+            "material_id": "101", "title": "小仙炖当前素材", "rank": 1,
+            "metrics": metrics, "exposure": {"min": 200000, "max": 220000, "raw": "20万-22万"},
+            "people_tags": ["新锐白领"], "material_tags": ["功效功能_补充营养"], "data_availability": {},
+        }]
+        previous_records = [{
+            **query_records[0], "material_id": "201", "title": "小仙炖环比素材",
+        }]
+        industry_records = [{
+            **query_records[0], "material_id": "301", "title": "行业素材",
+        }]
+        selected = [{"rank": 1, "material_id": "101", "detailRecordPath": "normalized/detail-records/101.json"}]
+        details = {"101": {"material_id": "101", "high_points": [], "loss_points": [], "data_availability": {}}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, query_records, selected, details)
+            (root / "normalized" / "list-records-previous-period.json").write_text(json.dumps(previous_records), encoding="utf-8")
+            (root / "normalized" / "list-records-industry.json").write_text(json.dumps(industry_records), encoding="utf-8")
+            manifest_path = root / "batch-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["rankingRuns"] = {
+                "query": {"normalizedPath": "normalized/list-records.json", "status": "success"},
+                "previous_period": {"normalizedPath": "normalized/list-records-previous-period.json", "status": "success"},
+                "industry": {"normalizedPath": "normalized/list-records-industry.json", "status": "success"},
+            }
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            with mock.patch.object(analysis, "generate_standard_highlights_for_detail", return_value=[]):
+                analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
+            ranking = json.loads((root / "diagnostic-analysis" / "analysis-units" / "ranking-brand-input.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            set(ranking["evidence"]),
+            {"current", "previousPeriod", "industryBenchmark", "comparisonFacts", "hotMaterialFacts"},
+        )
+        for scope_name in ("current", "previousPeriod", "industryBenchmark"):
+            rows = ranking["evidence"][scope_name]["materials"]
+            self.assertEqual(len(rows), 1)
+            self.assertTrue({"show_cnt", "ctr", "cvr", "play_3s_rate"}.issubset(rows[0]["metrics"]))
+        serialized = json.dumps(ranking, ensure_ascii=False)
+        for forbidden in ("visualAssets", "highlightFrames", "secondLevelBreakdown", "trend_series", "script"):
+            self.assertNotIn(forbidden, serialized)
+
+    def test_brand_comparison_uses_unfiltered_industry_baseline(self):
+        analysis = load_module()
+        def record(material_id, title):
+            return {
+                "material_id": material_id, "title": title, "rank": 1,
+                "metrics": {"show_cnt": 100, "ctr": 0.1, "cvr": 0.02, "play_3s_rate": 0.4},
+                "exposure": {"min": 100000, "max": 110000, "raw": "10万-11万"},
+                "people_tags": [], "material_tags": [], "data_availability": {},
+            }
+        query_records = [record("101", "小仙炖素材")]
+        industry_records = [record("301", "行业素材一"), record("302", "行业素材二")]
+        selected = [{"rank": 1, "material_id": "101", "detailRecordPath": "normalized/detail-records/101.json"}]
+        details = {"101": {"material_id": "101", "high_points": [], "loss_points": [], "data_availability": {}}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, query_records, selected, details)
+            (root / "normalized" / "list-records-industry.json").write_text(json.dumps(industry_records), encoding="utf-8")
+            manifest_path = root / "batch-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["filters"]["brands"] = ["小仙炖"]
+            manifest["rankingRuns"] = {
+                "query": {"normalizedPath": "normalized/list-records.json", "status": "success"},
+                "previous_period": {"normalizedPath": "normalized/list-records.json", "status": "success"},
+                "industry": {"normalizedPath": "normalized/list-records-industry.json", "status": "success"},
+            }
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            with mock.patch.object(analysis, "generate_standard_highlights_for_detail", return_value=[]):
+                analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
+            report = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            report["comparisonFacts"]["scopes"]["小仙炖"]["industryBenchmark"]["baselineSampleCount"],
+            2,
+        )
 
     def test_prepare_analysis_uses_configured_hot_material_threshold(self):
         analysis = load_module()
@@ -174,7 +262,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(report_data["hotMaterialRule"]["threshold"], 500000)
         self.assertEqual(report_data["hotMaterialFacts"]["all"]["thresholdExposureMin"], 500000)
         self.assertEqual(report_data["hotMaterialFacts"]["all"]["qualifyingCount"], 1)
-        self.assertEqual(ranking["evidence"]["hotMaterialRule"]["threshold"], 500000)
+        self.assertNotIn("hotMaterialRule", ranking["evidence"])
         self.assertIn("threshold=500000", prompt)
 
     def test_prompt_template_is_loaded_and_runtime_scope_is_injected(self):
@@ -199,14 +287,29 @@ class YuntuAnalysisTests(unittest.TestCase):
         brand_schema = schema["properties"]["brandConclusions"]["items"]
 
         self.assertNotIn("comparisonSummary", brand_schema["required"])
-        self.assertNotIn("hotMaterialInsight", brand_schema["required"])
+        self.assertIn("hotMaterialInsight", brand_schema["required"])
         self.assertNotIn("comparisonSummary", brand_schema["properties"])
-        self.assertNotIn("hotMaterialInsight", brand_schema["properties"])
+        self.assertIn("hotMaterialInsight", brand_schema["properties"])
 
         prompt = analysis._prompt_text(filters={"brands": ["小仙炖"]})
-        self.assertIn("一段整体分析", prompt)
-        self.assertIn("每个对象只输出 `brand`、`classificationSource`、`dataSummary`、`evidence`、`material_ids`", prompt)
-        self.assertNotIn("必须额外输出 comparisonSummary 和独立的 hotMaterialInsight", prompt)
+        self.assertIn("分别输出两个自然段", prompt)
+        self.assertIn("每个对象只输出 `brand`、`classificationSource`、`dataSummary`、`hotMaterialInsight`、`evidence`、`material_ids`", prompt)
+        self.assertIn("`hotMaterialInsight` 只写当前范围爆款素材的整体特征", prompt)
+
+    def test_period_first_chapter_contract_requires_separate_hot_material_insight(self):
+        analysis = load_module()
+        schema = analysis._ranking_output_schema(include_period_contract=True)
+        item_schema = schema["properties"]["brandConclusions"]["items"]
+
+        self.assertIn("hotMaterialInsight", item_schema["required"])
+        self.assertEqual(
+            set(item_schema["properties"]["hotMaterialInsight"]["properties"]),
+            {"title", "summary", "evidence"},
+        )
+        prompt = analysis._prompt_text(filters={"brands": ["小仙炖"]})
+        self.assertIn("`dataSummary` 只覆盖当前表现、环比周期和同周期全行业对比", prompt)
+        self.assertIn("`hotMaterialInsight` 只写当前范围爆款素材的整体特征", prompt)
+        self.assertIn("分别输出两个自然段", prompt)
 
     def _write_input(self, root, records, selected, details):
         (root / "normalized" / "detail-records").mkdir(parents=True)
@@ -785,12 +888,12 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertNotIn("executiveSummary", prompt)
         self.assertNotIn("peopleSummary", prompt.split("02 章必须读取", 1)[0])
         self.assertIn("每个 `dataSummary` 控制在 6 至 10 句", prompt)
-        self.assertIn("不能将当前数据、环比、大盘或爆款另拆成标题、段落或独立字段", prompt)
+        self.assertIn("分别输出两个自然段，不把两个字段合并或重复成一个段落", prompt)
         self.assertIn("第一章不输出人群维度分析", prompt)
         self.assertIn("只分析该品牌在行业 TOP1000 内匹配到的全部素材聚合结果", prompt)
         self.assertIn("不得引用单条素材的素材 ID、标题、排名或指标", prompt)
         self.assertIn("素材 ID 只保留在 `evidence`、`material_ids` 和爆款事实引用中", prompt)
-        for metric in ("累计曝光", "CTR", "CVR", "3 秒播放率"):
+        for metric in ("曝光", "CTR", "CVR", "3 秒播放率"):
             self.assertIn(metric, prompt)
         self.assertNotIn("读取同目录的 `yuntu-analysis-data.json`", prompt)
 
@@ -927,8 +1030,8 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("title", prompt)
         self.assertIn("dataSummary", prompt)
         self.assertIn("chapter02Insights", prompt)
-        self.assertIn("industryTop1000Facts", prompt)
-        self.assertIn("brandRankingFacts", prompt)
+        self.assertNotIn("industryTop1000Facts", prompt)
+        self.assertNotIn("brandRankingFacts", prompt)
         self.assertIn("同一合并 TOP1000", prompt)
         self.assertNotIn("成功秒级拆解素材集合", prompt)
         self.assertNotIn(
@@ -948,7 +1051,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("每个维度只输出一段", prompt)
         self.assertIn("八大人群、性别和年龄三个维度", prompt)
         self.assertIn("至少 4 句", prompt)
-        self.assertIn("每个范围的 `dataSummary` 是唯一的 AI 正文", prompt)
+        self.assertIn("每个品牌对象及 `allBrandsConclusion` 都必须分别输出 `dataSummary` 与 `hotMaterialInsight`", prompt)
         self.assertIn("为什么形成这种表现", prompt)
         self.assertIn("如何转化为内容策略", prompt)
         self.assertNotIn("渲染层会自动添加“1. ”、“2. ”等编号", prompt)

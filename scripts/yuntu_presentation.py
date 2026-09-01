@@ -284,7 +284,7 @@ def _project_chapter01(analysis, fact_pack):
     if isinstance(aggregate, dict) and _text(aggregate.get("dataSummary")):
         panels.append({
             "id": "all-brands",
-            "brand": "全品牌",
+            "brand": "所有指定品牌",
             "insights": [{"text": _text(aggregate.get("dataSummary")), "dimension": "data"}],
         })
         _attach_chapter01_period_panels(panels[-1], aggregate, "all", fact_pack)
@@ -302,7 +302,7 @@ def _project_chapter01(analysis, fact_pack):
         if facts is not None:
             panels.append({
                 "id": "all-brands",
-                "brand": "全品牌",
+                "brand": "所有指定品牌",
                 "insights": [{"text": _ranking_scope_fallback_summary(facts), "dimension": "data"}],
             })
             _attach_chapter01_period_panels(panels[-1], {}, "all", fact_pack)
@@ -317,7 +317,7 @@ def _project_chapter01(analysis, fact_pack):
                 {"text": _text(item.get("dataSummary")), "dimension": "data"}
             ] if _text(item.get("dataSummary")) else []),
         })
-        _attach_chapter01_period_panels(panels[-1], item, "brand", fact_pack)
+        _attach_chapter01_period_panels(panels[-1], item, brand, fact_pack)
         ai_analysis = _chapter01_ai_analysis(item)
         if ai_analysis is not None:
             panels[-1]["aiAnalysis"] = ai_analysis
@@ -337,23 +337,28 @@ def _project_chapter01(analysis, fact_pack):
 
 
 def _chapter01_ai_analysis(conclusion):
-    """Project one holistic first-chapter narrative per brand scope."""
+    """Project first-chapter AI fields without merging the two user-facing sections."""
     if not isinstance(conclusion, dict):
         return None
-    parts = [conclusion.get("dataSummary")]
-    legacy_insight = conclusion.get("hotMaterialInsight")
-    if conclusion.get("comparisonSummary"):
-        parts.append(conclusion.get("comparisonSummary"))
-    if isinstance(legacy_insight, dict):
-        parts.append(legacy_insight.get("summary"))
-    summary_parts = []
-    for value in parts:
-        text = _text(value)
-        if text:
-            summary_parts.append(text)
-    if not summary_parts:
+    data_summary = _text(conclusion.get("dataSummary"))
+    hot_insight = _copy_chapter01_insight(conclusion.get("hotMaterialInsight"))
+    if hot_insight is not None and not conclusion.get("comparisonSummary"):
+        if not data_summary and not hot_insight.get("summary"):
+            return None
+        return {
+            "dataSummary": data_summary,
+            "hotMaterialInsight": hot_insight,
+        }
+
+    # Historical schema-v7 reports used comparisonSummary and hotMaterialInsight
+    # as additions to one paragraph. Keep that read-only compatibility path.
+    summary_parts = [data_summary, _text(conclusion.get("comparisonSummary"))]
+    if hot_insight is not None:
+        summary_parts.append(hot_insight.get("summary"))
+    summary = " ".join(part for part in summary_parts if part)
+    if not summary:
         return None
-    return {"summary": " ".join(summary_parts)}
+    return {"summary": summary}
 
 
 def _attach_chapter01_period_panels(panel, conclusion, scope_key, fact_pack):
@@ -362,6 +367,10 @@ def _attach_chapter01_period_panels(panel, conclusion, scope_key, fact_pack):
     if not isinstance(comparison_facts, dict) or not isinstance(hot_facts, dict):
         return
     scoped_comparison = comparison_facts.get("scopes", {}).get(scope_key)
+    if not isinstance(scoped_comparison, dict):
+        legacy_brand_comparison = comparison_facts.get("brand")
+        if scope_key != "all" and isinstance(legacy_brand_comparison, dict):
+            scoped_comparison = legacy_brand_comparison
     if not isinstance(scoped_comparison, dict):
         scoped_comparison = {
             key: value

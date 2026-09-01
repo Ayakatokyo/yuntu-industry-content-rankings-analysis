@@ -1095,6 +1095,7 @@ def _copy_highlight_assets(fact_pack, output_dir, source_root=None):
                 # Historical batches may retain extracted frames only in a prior report.
                 candidates = [
                     source_root / source_rel.lstrip("/"),
+                    source_root / target_rel,
                     source_root / "final-report" / target_rel,
                 ]
         source_path = next((path for path in candidates if path.is_file()), None)

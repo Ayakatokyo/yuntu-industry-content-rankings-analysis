@@ -86,7 +86,7 @@ python <skill-root>/scripts/rpa_connector.py render-report \
 
 `render-report` 完成后交付两个文件：可直接打开的 HTML 报告 `final-report/final-report.html`，以及与 `final-report/` 目录同级的 `final-report.zip`；ZIP 只包含 `final-report/` 目录及其内部文件，不包含批次根目录其他产物。
 
-报告验收只执行自动化产物校验：确认 HTML、Markdown、报告数据和 presentation JSON 均已生成；章节 ID 与导航目标完整且唯一；本地高光帧存在、非空且引用可解析；04 章节存在“导出高光帧资产（Excel）”按钮且 `final-report/highlight-frames.xlsx` 存在、非空（导出运行时不可用时必须在 stderr 明确告警并将该批次标记为部分完成）；成品不含未替换占位符，也不把 `undefined` 或 `None` 作为报告数据值输出；ZIP 仅包含 `final-report/`；presentation JSON 通过 schema 校验。不要启动实际浏览器，也不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤。
+报告验收只执行自动化产物校验：确认 HTML、Markdown、报告数据和 presentation JSON 均已生成；章节 ID 与导航目标完整且唯一；本地高光帧存在、非空且引用可解析；04 章节存在“导出高光帧资产（Excel）”按钮且 `final-report/highlight-frames.xlsx` 存在、非空（使用 `openpyxl` 与 Pillow 生成图片列和图片墙；依赖不可用时必须在 stderr 明确告警并将该批次标记为部分完成）；成品不含未替换占位符，也不把 `undefined` 或 `None` 作为报告数据值输出；ZIP 仅包含 `final-report/`；presentation JSON 通过 schema 校验。不要启动实际浏览器，也不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤。
 
 ## 产物与失败处理
 

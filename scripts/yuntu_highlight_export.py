@@ -1,13 +1,8 @@
 """Build report-aligned rows for the Chapter 04 highlight asset workbook."""
 
 from collections import OrderedDict
-import json
-import os
 from pathlib import Path
-import shutil
-import subprocess
 import sys
-import tempfile
 
 from yuntu_top_materials import classify_brand
 
@@ -19,32 +14,10 @@ HIGHLIGHT_CATEGORY_LABELS = {
 }
 OTHER_BRAND = "其他品牌"
 
-
-def _resolve_node_runtime(*, skill_dir=None, which_node=lambda: shutil.which("node"),
-                          legacy_node=Path("/Users/shuzida/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"),
-                          legacy_modules=Path("/Users/shuzida/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules")):
-    """Resolve a usable Node executable and artifact-tool module directory."""
-    env_node = os.environ.get("YUNTU_NODE_PATH")
-    node_candidates = [Path(env_node)] if env_node else []
-    detected = which_node()
-    if detected:
-        node_candidates.append(Path(detected))
-    node_candidates.append(Path(legacy_node))
-    node_path = next((candidate for candidate in node_candidates if candidate.is_file()), None)
-
-    env_modules = os.environ.get("YUNTU_NODE_MODULES")
-    module_candidates = [Path(env_modules)] if env_modules else []
-    roots = [Path.cwd()]
-    if skill_dir is not None:
-        roots.extend([Path(skill_dir), Path(skill_dir).parent])
-    if node_path is not None:
-        roots.extend([node_path.parent, node_path.parent.parent])
-    module_candidates.extend(root / "node_modules" for root in roots)
-    module_candidates.append(Path(legacy_modules))
-    module_root = next((candidate for candidate in module_candidates if candidate.is_dir()), None)
-    if node_path is None or module_root is None:
-        return None, None
-    return str(node_path), module_root
+IMAGE_MAX_WIDTH_PX = 140
+IMAGE_MAX_HEIGHT_PX = 112
+POINTS_PER_PIXEL = 0.75
+GALLERY_COLUMNS = 4
 
 
 def match_brands_from_title(title, brands):
@@ -130,16 +103,20 @@ def _resolve_frame_image_path(frame, asset_root=None):
     candidates = [path] if path.is_absolute() else []
     if asset_root is not None and not path.is_absolute():
         root = Path(asset_root)
-        candidates.extend((root / relative, root / "final-report" / "assets" / "highlight-frames" / path.relative_to("highlights") if relative.startswith("highlights/") else root / "final-report" / relative))
+        candidates.append(root / relative)
+        if relative.startswith("highlights/"):
+            image_tail = Path(relative).relative_to("highlights")
+            candidates.extend((
+                root / "assets" / "highlight-frames" / image_tail,
+                root / "final-report" / "assets" / "highlight-frames" / image_tail,
+            ))
+        else:
+            candidates.append(root / "final-report" / relative)
     return str(next((candidate.resolve() for candidate in candidates if candidate.is_file()), ""))
 
 
 def export_highlight_workbook(fact_pack, presentation, output_path, asset_root=None):
-    """Export report-aligned rows to a static XLSX workbook.
-
-    The workbook is generated with the bundled artifact-tool runtime. If that
-    runtime is unavailable, return ``None`` so HTML rendering remains usable.
-    """
+    """Export report-aligned rows and a categorized image gallery to XLSX."""
     rows = build_highlight_export_rows(fact_pack, presentation)
     for row in rows:
         material_id = row.get("素材 ID")
@@ -148,64 +125,163 @@ def export_highlight_workbook(fact_pack, presentation, output_path, asset_root=N
     if not rows:
         return None
     output_path = Path(output_path).resolve()
-    node_path, module_root = _resolve_node_runtime(skill_dir=Path(__file__).parent)
-    builder = Path(__file__).with_name("build_highlight_workbook.mjs")
-    if not node_path or module_root is None or not builder.is_file():
-        return _export_highlight_workbook_python(rows, output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="yuntu-highlight-xlsx-") as temp_dir:
-        temp = Path(temp_dir)
-        (temp / "node_modules").symlink_to(module_root, target_is_directory=True)
-        temp_builder = temp / "build_highlight_workbook.mjs"
-        temp_builder.write_text(builder.read_text(encoding="utf-8"), encoding="utf-8")
-        input_path = temp / "highlight-rows.json"
-        input_path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
-        result = subprocess.run(
-            [str(node_path), str(temp_builder), str(input_path), str(output_path)],
-            cwd=temp,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0 or not output_path.is_file():
-            detail = (result.stderr or result.stdout or "未知错误").strip().splitlines()[-1]
-            print(f"[yuntu] Node 高光帧资产导出失败，改用 Python 兜底：{detail}", file=sys.stderr)
-            return _export_highlight_workbook_python(rows, output_path)
-        output_path.with_name(output_path.name + ".inspect.ndjson").unlink(missing_ok=True)
-    return output_path
+    return _export_highlight_workbook_python(rows, output_path)
 
 
-def _export_highlight_workbook_python(rows, output_path):
-    """Portable XLSX fallback when the optional Node runtime is unavailable."""
-    try:
-        from openpyxl import Workbook
-        from openpyxl.drawing.image import Image as XLImage
-        from openpyxl.styles import Alignment, Font, PatternFill
-    except Exception as exc:
-        print(f"[yuntu] 高光帧资产导出不可用：Python XLSX 依赖加载失败：{exc}", file=sys.stderr)
-        return None
-    headers = ["品牌", "视觉类型", "素材排名", "素材 ID", "素材标题", "画面类型", "高光帧图片", "秒数", "点击峰值排名", "点击指数"]
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "高光帧资产"
-    sheet.append(headers)
-    for cell in sheet[1]:
-        cell.fill = PatternFill("solid", fgColor="2C1810")
+def _scaled_image_size(image_path, max_width=IMAGE_MAX_WIDTH_PX, max_height=IMAGE_MAX_HEIGHT_PX):
+    from PIL import Image as PILImage
+
+    with PILImage.open(image_path) as source:
+        width, height = source.size
+    scale = min(max_width / width, max_height / height, 1)
+    return max(1, round(width * scale)), max(1, round(height * scale))
+
+
+def _add_scaled_image(sheet, image_path, anchor, *, max_width=IMAGE_MAX_WIDTH_PX, max_height=IMAGE_MAX_HEIGHT_PX):
+    from openpyxl.drawing.image import Image as XLImage
+
+    width, height = _scaled_image_size(image_path, max_width, max_height)
+    image = XLImage(image_path)
+    image.width = width
+    image.height = height
+    sheet.add_image(image, anchor)
+    return width, height
+
+
+def _style_header(cells, *, fill_color="2C1810"):
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    for cell in cells:
+        cell.fill = PatternFill("solid", fgColor=fill_color)
         cell.font = Font(bold=True, color="FFFFFF")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+
+def _build_asset_sheet(workbook, rows):
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.worksheet.table import Table, TableStyleInfo
+
+    headers = ["品牌", "视觉类型", "素材排名", "素材 ID", "素材标题", "画面类型", "高光帧图片", "秒数", "点击峰值排名", "点击指数"]
+    sheet = workbook.active
+    sheet.title = "高光帧资产"
+    sheet.sheet_view.showGridLines = False
+    sheet.append(headers)
+    _style_header(sheet[1])
+    sheet.row_dimensions[1].height = 30
+    thin = Side(style="thin", color="DFCFBD")
     for row in rows:
-        sheet.append([row.get("品牌"), row.get("视觉类型"), row.get("素材排名"), row.get("素材 ID"), row.get("素材标题"), row.get("画面类型"), None, row.get("秒数"), row.get("点击峰值排名"), row.get("点击指数")])
+        sheet.append([
+            row.get("品牌"), row.get("视觉类型"), row.get("素材排名"), row.get("素材 ID"),
+            row.get("素材标题"), row.get("画面类型"), None, row.get("秒数"),
+            row.get("点击峰值排名"), row.get("点击指数"),
+        ])
+        row_number = sheet.max_row
+        for cell in sheet[row_number]:
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+            cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        sheet.cell(row_number, 4).number_format = "@"
+        sheet.row_dimensions[row_number].height = IMAGE_MAX_HEIGHT_PX * POINTS_PER_PIXEL
         image_path = row.get("__image_path")
         if image_path and Path(image_path).is_file():
             try:
-                image = XLImage(image_path)
-                image.width, image.height = 92, 112
-                sheet.add_image(image, f"G{sheet.max_row}")
-            except Exception:
-                pass
-    widths = {"A": 18, "B": 14, "C": 10, "D": 22, "E": 42, "F": 22, "G": 18, "H": 12, "I": 12, "J": 12}
-    for column, width in widths.items(): sheet.column_dimensions[column].width = width
+                _, image_height = _add_scaled_image(sheet, image_path, f"G{row_number}")
+                sheet.row_dimensions[row_number].height = max(
+                    sheet.row_dimensions[row_number].height or 0,
+                    image_height * POINTS_PER_PIXEL,
+                )
+            except Exception as exc:
+                print(f"[yuntu] 跳过无法读取的高光帧图片：{image_path}：{exc}", file=sys.stderr)
+    widths = {"A": 18, "B": 14, "C": 10, "D": 22, "E": 42, "F": 22, "G": 20, "H": 12, "I": 12, "J": 12}
+    for column, width in widths.items():
+        sheet.column_dimensions[column].width = width
     sheet.freeze_panes = "A2"
+    end_row = max(2, len(rows) + 1)
+    sheet.auto_filter.ref = f"A1:J{end_row}"
+    table = Table(displayName="HighlightFramesTable", ref=f"A1:J{end_row}")
+    table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False, showRowStripes=True, showColumnStripes=False)
+    sheet.add_table(table)
+    return sheet
+
+
+def _build_gallery_sheet(workbook, rows):
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.worksheet.hyperlink import Hyperlink
+
+    sheet = workbook.create_sheet("高光帧图片墙")
+    sheet.sheet_view.showGridLines = False
+    labels = ["全量", "人像画面", "产品画面", "其他画面"]
+    category_rows = {
+        label: [row for row in rows if label == "全量" or row.get("视觉类型") == label]
+        for label in labels
+    }
+    for column in range(1, GALLERY_COLUMNS + 1):
+        sheet.column_dimensions[chr(64 + column)].width = 22
+        cell = sheet.cell(1, column, labels[column - 1])
+        cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'高光帧图片墙'!A3")
+        cell.fill = PatternFill("solid", fgColor="2C1810")
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    sheet.row_dimensions[1].height = 28
+
+    section_rows = {}
+    current_row = 3
+    for label in labels:
+        section_rows[label] = current_row
+        sheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=GALLERY_COLUMNS)
+        section = sheet.cell(current_row, 1, label)
+        section.fill = PatternFill("solid", fgColor="E9D8C4")
+        section.font = Font(bold=True, color="2C1810")
+        section.alignment = Alignment(horizontal="left", vertical="center")
+        current_row += 1
+        scoped_rows = category_rows[label]
+        for offset in range(0, len(scoped_rows), GALLERY_COLUMNS):
+            image_row = current_row
+            title_row = current_row + 1
+            type_row = current_row + 2
+            sheet.row_dimensions[image_row].height = IMAGE_MAX_HEIGHT_PX * POINTS_PER_PIXEL
+            sheet.row_dimensions[title_row].height = 30
+            sheet.row_dimensions[type_row].height = 22
+            for column, row in enumerate(scoped_rows[offset:offset + GALLERY_COLUMNS], start=1):
+                image_path = row.get("__image_path")
+                if image_path and Path(image_path).is_file():
+                    try:
+                        _, image_height = _add_scaled_image(
+                            sheet, image_path, sheet.cell(image_row, column).coordinate
+                        )
+                        sheet.row_dimensions[image_row].height = max(
+                            sheet.row_dimensions[image_row].height or 0,
+                            image_height * POINTS_PER_PIXEL,
+                        )
+                    except Exception as exc:
+                        print(f"[yuntu] 跳过无法读取的图片墙图片：{image_path}：{exc}", file=sys.stderr)
+                title = sheet.cell(title_row, column, row.get("素材标题") or "-")
+                title.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                title.font = Font(bold=True, color="2C1810")
+                kind = sheet.cell(type_row, column, row.get("视觉类型") or "其他画面")
+                kind.alignment = Alignment(horizontal="center", vertical="center")
+            current_row += 3
+        if not scoped_rows:
+            sheet.cell(current_row, 1, "暂无可用图片").alignment = Alignment(horizontal="left", vertical="center")
+            current_row += 2
+    for column, label in enumerate(labels, start=1):
+        sheet.cell(1, column).hyperlink = Hyperlink(
+            ref=sheet.cell(1, column).coordinate,
+            location=f"'高光帧图片墙'!A{section_rows[label]}",
+        )
+    return sheet
+
+
+def _export_highlight_workbook_python(rows, output_path):
+    """Generate the workbook with openpyxl and Pillow."""
+    try:
+        from openpyxl import Workbook
+        from PIL import Image as PILImage  # noqa: F401 - validate Pillow before workbook authoring
+    except Exception as exc:
+        print(f"[yuntu] 高光帧资产导出不可用：Python XLSX 依赖加载失败：{exc}", file=sys.stderr)
+        return None
+    workbook = Workbook()
+    _build_asset_sheet(workbook, rows)
+    _build_gallery_sheet(workbook, rows)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         workbook.save(output_path)

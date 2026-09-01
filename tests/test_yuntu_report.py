@@ -1,6 +1,7 @@
 import importlib.util
 import copy
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -1396,6 +1397,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("脚本数据：未接入", rendered)
         self.assertIn("本次云图 RPA 未提供可用于汇总的脚本正文与时间戳段落", markdown)
         self.assertIn("暂无可用高光帧", rendered)
+        self.assertNotIn("data-highlight-collapse-toggle", rendered)
         self.assertNotIn('href="#landscape"', rendered)
         self.assertIn('</div></div></section>', rendered)
         self.assertNotIn('class="brand-difference', rendered)
@@ -1737,6 +1739,20 @@ class YuntuReportTests(unittest.TestCase):
             rendered.index('class="highlight-analysis-pair"'),
             rendered.index('class="highlight-frame-grid"'),
         )
+        self.assertGreaterEqual(rendered.count('data-highlight-collapse-toggle'), 1)
+        self.assertIn('aria-expanded="true"', rendered)
+        self.assertIn('data-collapsible-expanded-label="收起高光画面汇总"', rendered)
+        self.assertIn('data-collapsible-collapsed-label="展开高光画面汇总"', rendered)
+        self.assertIn('data-highlight-cards-panel', rendered)
+        self.assertLess(
+            rendered.index('class="highlight-analysis-pair"'),
+            rendered.index('data-highlight-collapse-toggle'),
+        )
+        self.assertLess(
+            rendered.index('data-highlight-collapse-toggle'),
+            rendered.index('data-highlight-cards-panel'),
+        )
+        self.assertRegex(rendered, r'aria-controls="[^"]*-cards-portrait"')
         self.assertLess(
             rendered.index('class="highlight-frame-grid"'),
             rendered.index('class="highlight-pagination"'),

@@ -1741,11 +1741,16 @@ class YuntuReportTests(unittest.TestCase):
         )
         self.assertGreaterEqual(rendered.count('data-highlight-collapse-toggle'), 1)
         self.assertIn('aria-expanded="true"', rendered)
-        self.assertIn('data-collapsible-expanded-label="收起高光画面汇总"', rendered)
-        self.assertIn('data-collapsible-collapsed-label="展开高光画面汇总"', rendered)
+        self.assertIn('data-collapsible-expanded-label="收起高光画面数据"', rendered)
+        self.assertIn('data-collapsible-collapsed-label="展开高光画面数据"', rendered)
+        self.assertIn('class="highlight-data-card raw-fact-card"', rendered)
         self.assertIn('data-highlight-cards-panel', rendered)
         self.assertLess(
             rendered.index('class="highlight-analysis-pair"'),
+            rendered.index('class="highlight-data-card raw-fact-card"'),
+        )
+        self.assertLess(
+            rendered.index('class="highlight-data-card raw-fact-card"'),
             rendered.index('data-highlight-collapse-toggle'),
         )
         self.assertLess(
@@ -2130,6 +2135,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("grid-template-columns: 188px minmax(0, 1fr);", css)
         self.assertIn("gap: 18px;", css)
         self.assertIn(".unified-yuntu .audience-data-card", css)
+        self.assertIn(".unified-yuntu .highlight-data-card", css)
         self.assertIn("padding: 18px;", css)
         self.assertIn("white-space: nowrap;", css)
         self.assertIn(".unified-yuntu .script-drill-layout", css)

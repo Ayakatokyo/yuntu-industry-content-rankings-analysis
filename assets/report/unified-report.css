@@ -1345,6 +1345,15 @@ body.unified-report {
   align-content: stretch;
 }
 
+.unified-yuntu .highlight-data-card {
+  margin-top: 18px;
+  padding: 18px;
+}
+
+.unified-yuntu .highlight-data-card .highlight-collapse-head {
+  margin: 0 0 12px;
+}
+
 .unified-yuntu .highlight-collapse-head {
   margin: 18px 0 12px;
 }
@@ -1421,6 +1430,10 @@ body.unified-report {
 }
 
 @media (max-width: 560px) {
+  .unified-yuntu .highlight-data-card {
+    padding: 12px;
+  }
+
   .unified-yuntu .highlight-collapse-head {
     margin-top: 14px;
   }

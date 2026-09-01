@@ -608,7 +608,37 @@ def render_highlight_insights(
             directions = "<h4>裂变方向</h4>" + "".join(f'<article class="highlight-direction"><h5>{esc(item["title"])}</h5><p>{esc(item["body"])}</p></article>' for item in directions_data)
             page_count = max(1, math_module.ceil(len(refs) / 12))
             cards_panel_id = f"{id_prefix}-cards-{category}"
-            panels.append('<article class="highlight-category highlight-category-panel" role="tabpanel" id="' + esc(panel_id) + '" aria-labelledby="' + esc(tab_id) + '"' + (" hidden" if not selected else "") + ' data-highlight-page-size="12" data-highlight-frame-count="' + esc(len(refs)) + '"><div class="highlight-analysis-pair"><div class="highlight-summary"><h4>共性洞察</h4><div class="highlight-patterns">' + patterns + '</div></div><div class="highlight-directions">' + directions + '</div></div><div class="collapsible-head highlight-collapse-head"><button class="collapsible-toggle highlight-collapse-toggle" type="button" data-collapsible-toggle data-highlight-collapse-toggle data-collapsible-expanded-label="收起高光画面汇总" data-collapsible-collapsed-label="展开高光画面汇总" aria-expanded="true" aria-controls="' + esc(cards_panel_id) + '"><span class="collapsible-toggle-action">收起高光画面汇总</span></button></div><div class="highlight-cards-panel" id="' + esc(cards_panel_id) + '" data-highlight-cards-panel><div class="highlight-frame-grid">' + "".join(cards) + '</div><div class="highlight-pagination" data-highlight-pagination><button type="button" data-highlight-page="previous">上一页</button><span data-highlight-page-status>1 / ' + esc(page_count) + '</span><button type="button" data-highlight-page="next">下一页</button></div></div></article>')
+            highlight_data_card = (
+                '<div class="highlight-data-card raw-fact-card">'
+                '<div class="collapsible-head highlight-collapse-head">'
+                '<button class="collapsible-toggle highlight-collapse-toggle" type="button" data-collapsible-toggle data-highlight-collapse-toggle data-collapsible-expanded-label="收起高光画面数据" data-collapsible-collapsed-label="展开高光画面数据" aria-expanded="true" aria-controls="'
+                + esc(cards_panel_id)
+                + '"><span class="collapsible-toggle-action">收起高光画面数据</span></button></div>'
+                '<div class="highlight-cards-panel" id="'
+                + esc(cards_panel_id)
+                + '" data-highlight-cards-panel><div class="highlight-frame-grid">'
+                + "".join(cards)
+                + '</div><div class="highlight-pagination" data-highlight-pagination><button type="button" data-highlight-page="previous">上一页</button><span data-highlight-page-status>1 / '
+                + esc(page_count)
+                + '</span><button type="button" data-highlight-page="next">下一页</button></div></div></div>'
+            )
+            panels.append(
+                '<article class="highlight-category highlight-category-panel" role="tabpanel" id="'
+                + esc(panel_id)
+                + '" aria-labelledby="'
+                + esc(tab_id)
+                + '"'
+                + (" hidden" if not selected else "")
+                + ' data-highlight-page-size="12" data-highlight-frame-count="'
+                + esc(len(refs))
+                + '"><div class="highlight-analysis-pair"><div class="highlight-summary"><h4>共性洞察</h4><div class="highlight-patterns">'
+                + patterns
+                + '</div></div><div class="highlight-directions">'
+                + directions
+                + '</div></div>'
+                + highlight_data_card
+                + '</article>'
+            )
         return '<div class="highlight-dashboard-tabs" role="tablist" aria-label="高光画面分类">' + "".join(tabs) + '</div><div class="highlight-dashboard-panels">' + "".join(panels) + '</div>'
 
     def with_export_link(content):

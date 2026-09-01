@@ -1100,7 +1100,8 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('class="chart-grid script-dashboard-overview marketing-column-chart"', html)
         self.assertIn('.chart-grid.script-dashboard-overview.marketing-column-chart{grid-template-columns:repeat(auto-fit,minmax(78px,1fr))', html)
         self.assertIn('class="section-title-row"><h3>营销卖点汇总</h3><p class="script-dashboard-hint chart-interaction-hint">点击一级标签柱状图可查看二级标签分布</p></div>', html)
-        self.assertIn('营销卖点标签分类规则以完整营销卖点中括号里的内容为一级标签。由于 RPA 提取的营销卖点数据以下划线区分层级，而下划线不会透出，因此此处以云图官方界面显示作为解释。', html)
+        self.assertIn('营销卖点标签分类规则以完整营销卖点中括号里的内容为一级标签。', html)
+        self.assertNotIn('由于 RPA 提取的营销卖点数据以下划线区分层级，而下划线不会透出，因此此处以云图官方界面显示作为解释。', html)
         self.assertNotIn('点击类别柱查看该类别的标签比例', html)
         self.assertIn("titleRow.className = 'section-title-row'", html)
         self.assertIn("hint.className = 'chart-interaction-hint audience-crowd-hint'", html)
@@ -2167,6 +2168,15 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("align-content:center;", css)
         self.assertIn(".unified-yuntu .marketing-drill-primary-plot {", css)
         self.assertIn("justify-content: center;", css)
+        self.assertIn("--chapter02-audience-crowd-height: 232px;", css)
+        self.assertIn("--chapter02-audience-crowd-drill-height: 260px;", css)
+        self.assertIn(".unified-yuntu .audience-chart-crowd .script-dashboard-overview", css)
+        self.assertIn("min-height: var(--chapter02-audience-crowd-height);", css)
+        self.assertIn("min-height: var(--chapter02-audience-crowd-drill-height);", css)
+        self.assertIn("background: #fff;", css)
+        self.assertIn("color: #5e3820;", css)
+        self.assertIn("align-self: flex-start;", css)
+        self.assertIn("justify-content: flex-start;", css)
 
     def test_unified_report_mobile_navigation_does_not_force_page_overflow(self):
         css = (ROOT / "assets" / "report" / "unified-report.css").read_text(

@@ -414,8 +414,6 @@ def render_audience_insights(
         interaction_hint = "点击一级标签柱状图可查看二级标签分布"
         taxonomy_note = (
             "营销卖点标签分类规则以完整营销卖点中括号里的内容为一级标签。"
-            "由于 RPA 提取的营销卖点数据以下划线区分层级，而下划线不会透出，"
-            "因此此处以云图官方界面显示作为解释。"
         )
         taxonomy_version = dashboard.get("taxonomyVersion") if isinstance(dashboard, dict) else None
         taxonomy_attr = (

@@ -504,7 +504,6 @@ def render_highlight_insights(
     image_src, frame_label, material_title, format_index_value, failure_reason,
     category_order, category_labels,
     presentation=None,
-    export_href=None,
 ):
     def convert_groups(category_groups):
         converted_frames = []
@@ -641,12 +640,6 @@ def render_highlight_insights(
             )
         return '<div class="highlight-dashboard-tabs" role="tablist" aria-label="高光画面分类">' + "".join(tabs) + '</div><div class="highlight-dashboard-panels">' + "".join(panels) + '</div>'
 
-    def with_export_link(content):
-        if not export_href:
-            return content
-        link = '<a class="highlight-export-button" href="' + html_module.escape(str(export_href), quote=True) + '" download>导出高光帧资产（Excel）</a>'
-        return '<div class="highlight-export-toolbar">' + link + '</div>' + content
-
     if brand_views:
         brand_tabs = []
         brand_panels = []
@@ -658,11 +651,11 @@ def render_highlight_insights(
             brand_tabs.append('<button type="button" role="tab" id="' + esc(tab_id) + '" aria-controls="' + esc(panel_id) + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1") + '" data-highlight-brand-tab data-highlight-brand-target="' + esc(panel_id) + '">' + esc(view["brand"]) + '</button>')
             category_html = render_groups(view["dashboard"]["groups"], view["frames"], id_prefix=f"highlight-{brand_id}")
             brand_panels.append('<section class="highlight-brand-panel" role="tabpanel" id="' + esc(panel_id) + '" aria-labelledby="' + esc(tab_id) + '"' + (" hidden" if not selected else "") + ' data-highlight-brand-panel>' + category_html + '</section>')
-        return with_export_link('<div class="highlight-brand-tabs" role="tablist" aria-label="高光画面品牌分类">' + "".join(brand_tabs) + '</div><div class="highlight-brand-panels">' + "".join(brand_panels) + '</div>')
+        return '<div class="highlight-brand-tabs" role="tablist" aria-label="高光画面品牌分类">' + "".join(brand_tabs) + '</div><div class="highlight-brand-panels">' + "".join(brand_panels) + '</div>'
 
     if dashboard is None:
         dashboard = {"groups": []}
-    return with_export_link(render_groups(dashboard.get("groups", []), successful_frames))
+    return render_groups(dashboard.get("groups", []), successful_frames)
 
 
 def render_material_deep_dive(
@@ -688,7 +681,7 @@ def render_material_deep_dive(
         material_frames = {}
         for panel in presentation.get("panels", []):
             material_id = str(panel.get("materialId", "")); selected_material_ids.append(material_id)
-            facts[material_id] = {"material_id": material_id, "rank": panel.get("rank", "-"), "title": panel.get("title", ""), "metrics": panel.get("metrics", {}), "people_tags": panel.get("peopleTags", []), "material_tags": panel.get("materialTags", []), "listDataAvailability": panel.get("listDataAvailability", {}), "secondLevelBreakdown": {"metrics": [{"trend_name": metric.get("id"), "available": metric.get("available"), "missing_reason": metric.get("reason", ""), "points": metric.get("points", []), "high_points": metric.get("highPoints", []), "loss_points": metric.get("lossPoints", [])} for metric in panel.get("secondLevel", {}).get("metrics", [])]}}
+            facts[material_id] = {"material_id": material_id, "rank": panel.get("rank", "-"), "title": panel.get("title", ""), "exposure": panel.get("exposure", {}), "metrics": panel.get("metrics", {}), "people_tags": panel.get("peopleTags", []), "material_tags": panel.get("materialTags", []), "listDataAvailability": panel.get("listDataAvailability", {}), "secondLevelBreakdown": {"metrics": [{"trend_name": metric.get("id"), "available": metric.get("available"), "missing_reason": metric.get("reason", ""), "points": metric.get("points", []), "high_points": metric.get("highPoints", []), "loss_points": metric.get("lossPoints", [])} for metric in panel.get("secondLevel", {}).get("metrics", [])]}}
             material_frames[material_id] = [{"frame_ref": frame.get("frameRef"), "available": True, "relative_path": frame.get("relativePath"), "second": frame.get("second"), "frame_type": frame.get("frameType"), "peak_rank": frame.get("peakRank"), "click_value": frame.get("clickValue")} for frame in panel.get("frames", [])] + [{"available": False, "failure_reason": reason} for reason in panel.get("frameFailures", [])]
             deep_dives.append({"material_id": material_id, "frame_observations": panel.get("frameObservations", []), "second_level_observations": panel.get("secondLevelObservations", [])})
     if not isinstance(deep_dives, list) or not deep_dives:
@@ -757,6 +750,16 @@ def render_material_deep_dive(
             reason_text = "；".join(failed_reasons)
             frame_state = '<p class="data-note">暂无可用于观察的高光帧。' + (esc(reason_text) if reason_text else "") + "</p>"
         frame_observations = "".join('<li data-deep-frame-observation data-frame-ref="' + esc(frame.get("frame_ref")) + '"><strong>' + esc(str(frame.get("second")) + "s · 点击指数 " + ("-" if frame.get("click_value") is None else format_index_value(frame["click_value"]))) + "：</strong>" + esc(observations.get(frame.get("frame_ref"), "")) + "</li>" for frame in frames) or "<li>暂无可用于观察的高光帧。</li>"
-        metric_summary = "".join('<li><span>' + esc(metric_labels[key]) + '</span><b>' + esc(format_metric(fact.get("metrics", {}).get(key), key)) + "</b></li>" for key in ("show_cnt", "ctr", "cvr", "play_3s_rate", "interact_rate") if key in fact.get("metrics", {}))
+        exposure = fact.get("exposure") if isinstance(fact.get("exposure"), dict) else {}
+        exposure_interval = exposure.get("raw")
+        if not exposure_interval and (exposure.get("min") is not None or exposure.get("max") is not None):
+            exposure_interval = " - ".join(str(value) for value in (exposure.get("min"), exposure.get("max")) if value is not None)
+        metric_items = []
+        for key in ("show_cnt", "ctr", "cvr", "play_3s_rate", "interact_rate"):
+            if key not in fact.get("metrics", {}):
+                continue
+            value = exposure_interval if key == "show_cnt" and exposure_interval else format_metric(fact.get("metrics", {}).get(key), key)
+            metric_items.append('<li><span>' + esc(metric_labels[key]) + '</span><b>' + esc(value) + "</b></li>")
+        metric_summary = "".join(metric_items)
         panels.append('<article class="material-deep-panel material-card" role="tabpanel" id="material-deep-panel-' + str(index) + '" aria-labelledby="material-deep-tab-' + str(index) + '"' + ("" if selected_tab else " hidden") + '><header class="material-deep-header material-head"><span>#' + esc(fact.get("rank", "-")) + '</span><h3>' + esc(title) + '</h3><p class="material-deep-id">素材 ID：' + esc(material_id) + '</p></header><ul class="material-deep-metrics">' + metric_summary + '</ul><dl class="material-fact-tags">' + source_tags(fact, "people_tags", "核心人群标签") + source_tags(fact, "material_tags", "营销卖点标签") + '</dl><div class="material-detail-tabs" role="tablist" aria-label="' + esc(title) + '分析视图">' + '<button type="button" role="tab" id="material-detail-tab-visual-' + str(index) + '" aria-controls="material-detail-visual-' + str(index) + '" aria-selected="true" data-material-detail-tab="visual" data-material-detail-target="material-detail-visual-' + str(index) + '">高光帧观察</button>' + '<button type="button" role="tab" id="material-detail-tab-timeline-' + str(index) + '" aria-controls="material-detail-timeline-' + str(index) + '" aria-selected="false" tabindex="-1" data-material-detail-tab="timeline" data-material-detail-target="material-detail-timeline-' + str(index) + '">秒级拆解</button>' + '<button type="button" role="tab" id="material-detail-tab-script-' + str(index) + '" aria-controls="material-detail-script-' + str(index) + '" aria-selected="false" tabindex="-1" data-material-detail-tab="script" data-material-detail-target="material-detail-script-' + str(index) + '">脚本分析</button></div>' + '<div class="material-detail-panel" id="material-detail-visual-' + str(index) + '" role="tabpanel" aria-labelledby="material-detail-tab-visual-' + str(index) + '"><div class="deep-visual-strip"><div class="deep-frame-selection-controls">' + '<button type="button" data-deep-frame-select-all>全选高光帧</button><button type="button" data-deep-frame-clear>全不选高光帧</button></div><div class="deep-frame-grid fixed-six">' + "".join(frame_cards) + '</div>' + frame_state + '</div><div class="deep-frame-observations"><h4>高光帧观察</h4><p class="deep-frame-observation-empty" data-deep-frame-observation-empty hidden aria-live="polite">尚未选择高光帧，请选择至少一帧查看观察内容。</p><ul data-deep-frame-observations>' + frame_observations + '</ul></div></div><div class="material-detail-panel" id="material-detail-timeline-' + str(index) + '" role="tabpanel" aria-labelledby="material-detail-tab-timeline-' + str(index) + '" hidden><div class="second-level-section">' + second_level_timeline(metrics, index) + '</div></div><div class="material-detail-panel data-state" id="material-detail-script-' + str(index) + '" role="tabpanel" aria-labelledby="material-detail-tab-script-' + str(index) + '" hidden><span>脚本数据：未接入</span><p>当前未提供脚本正文与时间戳段落，暂不输出内容公式、话术结论和帧-话术对应关系。</p></div></article>')
     return '<div class="material-deep-layout side-tabs"><div class="material-deep-tab-list" role="tablist" aria-label="单素材深度分析">' + "".join(tabs) + '</div><div class="material-deep-panels">' + "".join(panels) + "</div></div>"

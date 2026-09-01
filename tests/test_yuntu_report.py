@@ -372,6 +372,8 @@ class YuntuReportTests(unittest.TestCase):
                 "material_id": material_id,
                 "rank": rank,
                 "title": f"测试素材 {material_id}",
+                "exposure": {"min": 200000, "max": 220000, "raw": "20万-22万"},
+                "metrics": {"show_cnt": 2686377, "ctr": 0.0327, "cvr": 0.0709, "play_3s_rate": 0.7441, "interact_rate": 0.0002},
                 "people_tags": ["新锐白领", "都市女性"],
                 "material_tags": ["睡前场景", "胶原蛋白肽"],
                 "listDataAvailability": {
@@ -1421,6 +1423,8 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-collapsible-expanded-label="收起秒级拆解数据"', rendered)
         self.assertIn('data-collapsible-collapsed-label="展开秒级拆解数据"', rendered)
         self.assertIn('class="collapsible-toggle-action">收起秒级拆解数据</span>', rendered)
+        self.assertIn('<span>曝光量</span><b>20万-22万</b>', rendered)
+        self.assertNotIn('<span>曝光量</span><b>20.0 万</b>', rendered)
         self.assertNotIn('class="collapsible-toggle-action">收起数据</span>', rendered)
         self.assertNotIn('class="collapsible-toggle-action">收起/展开秒级拆解数据</span>', rendered)
         self.assertEqual(rendered.count('class="second-level-chart"'), 0)
@@ -1735,6 +1739,14 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn('每条素材保留封面画面', rendered)
         self.assertNotIn('查看素材：#', rendered)
         self.assertIn("1 / 1", rendered)
+        highlight_header = '<header class="section-header highlight-section-header">'
+        self.assertIn(highlight_header, rendered)
+        highlight_header_start = rendered.index(highlight_header)
+        highlight_header_end = rendered.index('</header>', highlight_header_start)
+        export_toolbar_start = rendered.index('class="highlight-export-toolbar"')
+        self.assertLess(highlight_header_start, export_toolbar_start)
+        self.assertLess(export_toolbar_start, highlight_header_end)
+        self.assertNotIn('class="highlight-export-toolbar"', rendered[highlight_header_end:])
         self.assertLess(
             rendered.index('class="highlight-analysis-pair"'),
             rendered.index('class="highlight-frame-grid"'),
@@ -2136,6 +2148,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("gap: 18px;", css)
         self.assertIn(".unified-yuntu .audience-data-card", css)
         self.assertIn(".unified-yuntu .highlight-data-card", css)
+        self.assertIn(".unified-yuntu .highlight-section-header", css)
         self.assertIn("padding: 18px;", css)
         self.assertIn("white-space: nowrap;", css)
         self.assertIn(".unified-yuntu .script-drill-layout", css)

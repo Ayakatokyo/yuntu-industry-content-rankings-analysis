@@ -36,6 +36,7 @@ class YuntuPresentationTests(unittest.TestCase):
                 "material_id": material_id,
                 "rank": rank,
                 "title": f"测试素材 {material_id}",
+                "exposure": {"min": 200000, "max": 220000, "raw": "20万-22万"},
                 "metrics": {"show_cnt": 1000 * rank, "ctr": 0.1 * rank},
                 "people_tags": ["都市女性"],
                 "material_tags": ["营养补给"],
@@ -148,6 +149,7 @@ class YuntuPresentationTests(unittest.TestCase):
             payload["interactions"]["chapter05-material-tabs"]["items"],
         )
         frame = chapter["panels"][0]["frames"][0]
+        self.assertEqual(chapter["panels"][0]["exposure"]["raw"], "20万-22万")
         self.assertNotIn("materialId", frame)
         self.assertNotIn("rank", frame)
         self.assertNotIn("title", frame)

@@ -54,6 +54,7 @@ def _load_html_template():
         "$unified_script",
         "$top_material_scope",
         "$highlight_scope",
+        "$highlight_export",
         "$material_deep_dive_scope",
         *(f"${name}" for name, _section_id, _title in CURRENT_REPORT_SECTIONS),
     ):
@@ -1279,7 +1280,6 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None, highli
         category_order=HIGHLIGHT_RENDER_CATEGORY_ORDER,
         category_labels=HIGHLIGHT_CATEGORY_LABELS,
         presentation=(presentation or {}).get("chapters", {}).get("chapter04") if isinstance(presentation, dict) else None,
-        export_href=highlight_export_href,
     )
     material_deep_dive = render_material_deep_dive(
         deep_dives=analysis.get("materialDeepDives"),
@@ -1367,6 +1367,13 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None, highli
         len([frame for frame in material_frames.get(str(item.get("material_id")), []) if frame.get("available")])
         for item in selected
     )
+    highlight_export = ""
+    if highlight_export_href:
+        highlight_export = (
+            '<div class="highlight-export-toolbar"><a class="highlight-export-button" href="'
+            + html.escape(str(highlight_export_href), quote=True)
+            + '" download>导出高光帧资产（Excel）</a></div>'
+        )
     rendered = template.safe_substitute(
         style=style,
         unified_style=unified_style,
@@ -1378,6 +1385,7 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None, highli
         source_derived=source_label("TOP1000 + 成功秒级拆解素材派生"),
         top_material_scope=section_scope("01", "ranking"),
         highlight_scope=section_scope("04", "detail"),
+        highlight_export=highlight_export,
         material_deep_dive_scope=section_scope("05", "detail"),
         top_material_combination=top_material_combination,
         audience_insights=audience_insights,

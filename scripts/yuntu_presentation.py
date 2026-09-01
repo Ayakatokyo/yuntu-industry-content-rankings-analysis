@@ -671,6 +671,7 @@ def _project_chapter05(analysis, fact_pack):
             "materialId": material_id,
             "rank": fact.get("rank"),
             "title": _text(fact.get("title")),
+            "exposure": deepcopy(fact.get("exposure", {})),
             "metrics": deepcopy(fact.get("metrics", {})),
             "peopleTags": deepcopy(fact.get("people_tags", [])),
             "materialTags": deepcopy(fact.get("material_tags", [])),

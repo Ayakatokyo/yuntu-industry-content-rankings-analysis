@@ -12,17 +12,6 @@ REPORT_TITLE = "云图行业内容榜单分析"
 SECTION_IDS = ("chapter01", "chapter02", "chapter04", "chapter05")
 REPORT_STATUSES = {"complete", "partial", "unavailable"}
 HIGHLIGHT_CATEGORIES = ("portrait", "product", "scene", "text_overlay", "other")
-HIGHLIGHT_CLASSIFICATION_MODE_BRANDS = {
-    "所有指定品牌",
-    "全品牌",
-    "joyoungsoymilk",
-    "九阳豆浆",
-    "燕之屋",
-    "wonderlab",
-    "万益蓝",
-    "wonderlab/万益蓝",
-    "万益蓝/wonderlab",
-}
 SECOND_LEVEL_METRIC_ORDER = ("点赞指数", "流失指数", "点击指数", "互动指数", "评论指数")
 
 
@@ -538,9 +527,15 @@ def _project_scoped_highlight_brands(scoped_brands, available, brand_order):
     return {"scopeId": "all", "brands": projected, "availability": {"status": "complete", "reasons": []}}
 
 
-def _is_designated_highlight_mode_brand(brand):
+def _is_designated_highlight_mode_brand(brand, brand_order):
+    """Enable modes for the current run's selected brands, not a global allowlist."""
     normalized = _text(brand).replace(" ", "").lower()
-    return normalized in HIGHLIGHT_CLASSIFICATION_MODE_BRANDS
+    if normalized in {"所有指定品牌", "全品牌"}:
+        return True
+    return any(
+        normalized == _text(selected).replace(" ", "").lower()
+        for selected in brand_order
+    )
 
 
 def _classification_mode_categories(classification, available, brand, brand_order):
@@ -600,7 +595,7 @@ def _attach_highlight_classification_modes(chapter, dashboard, available, brand_
     ):
         return chapter
     for brand in chapter.get("brands", []):
-        if not isinstance(brand, dict) or not _is_designated_highlight_mode_brand(brand.get("brand")):
+        if not isinstance(brand, dict) or not _is_designated_highlight_mode_brand(brand.get("brand"), brand_order):
             continue
         standard_categories = deepcopy(brand.get("categories", []))
         for category in standard_categories:

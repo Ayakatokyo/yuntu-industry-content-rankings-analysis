@@ -201,16 +201,38 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(chapter04["brands"][0]["classificationModes"][0]["categories"][0]["label"], "portrait")
         self.assertEqual(chapter04["brands"][0]["classificationModes"][1]["categories"][0]["label"], "主体协同")
 
-    def test_omits_classification_modes_for_non_designated_brand(self):
+    def test_projects_modes_for_combined_joyoung_brand_alias(self):
         facts = self.fact_pack()
-        facts["filters"]["brands"] = ["其他品牌"]
-        facts["materialFacts"][0]["title"] = "其他品牌 测试素材 101"
-        facts["materialFacts"][1]["title"] = "其他品牌 测试素材 102"
+        brand = "Joyoung soymilk/九阳豆浆"
+        facts["filters"]["brands"] = [brand]
+        facts["materialFacts"][0]["title"] = f"{brand} 测试素材 101"
+        facts["materialFacts"][1]["title"] = f"{brand} 测试素材 102"
 
         payload = build_yuntu_presentation(self.dual_highlight_analysis(), facts)
 
-        brand = next(item for item in payload["chapters"]["chapter04"]["brands"] if item["brand"] == "其他品牌")
-        self.assertNotIn("classificationModes", brand)
+        projected_brand = next(
+            item for item in payload["chapters"]["chapter04"]["brands"]
+            if item["brand"] == brand
+        )
+        self.assertEqual(
+            [mode["id"] for mode in projected_brand["classificationModes"]],
+            ["standard", "batch"],
+        )
+
+    def test_projects_modes_for_arbitrary_selected_brand(self):
+        facts = self.fact_pack()
+        brand = "本次用户选定品牌"
+        facts["filters"]["brands"] = [brand]
+        facts["materialFacts"][0]["title"] = f"{brand} 测试素材 101"
+        facts["materialFacts"][1]["title"] = f"{brand} 测试素材 102"
+
+        payload = build_yuntu_presentation(self.dual_highlight_analysis(), facts)
+
+        projected_brand = next(item for item in payload["chapters"]["chapter04"]["brands"] if item["brand"] == brand)
+        self.assertEqual(
+            [mode["id"] for mode in projected_brand["classificationModes"]],
+            ["standard", "batch"],
+        )
 
     def test_builds_a_versioned_json_serializable_projection(self):
         analysis = self.analysis()

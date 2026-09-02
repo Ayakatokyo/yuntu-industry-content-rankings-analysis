@@ -4,103 +4,54 @@
 
 ```mermaid
 flowchart TD
-    subgraph S0[数据来源与章节入口]
-        A[pre_input：行业、周期、指定品牌、榜单指标]
-        B[RPA 行业内容榜单列表]
-        C[normalized/list-records.json<br/>当前周期行业 TOP1000]
-        D[运行时标题品牌匹配<br/>仅使用本次输入品牌]
-        E[当前周期品牌/行业列表事实]
-        F[详情、秒级趋势、高光帧<br/>供 04/05 章使用]
-        G[环比列表、同周期全行业列表<br/>供 01 章对比使用]
-        A --> B --> C
-        C --> D --> E
-        C -.不进入第02章.- F
-        G -.不进入第02章.- C
-    end
+    A[pre_input 默认筛选条件]
 
-    subgraph S1[第02章事实层：确定性统计]
-        H[章节范围构造<br/>all = 行业 TOP1000<br/>品牌 = TOP1000 内全部标题匹配素材]
-        I[统一筛选与排序<br/>保留 show_cnt 为正的素材<br/>按曝光降序、榜单排名和素材 ID 排序]
-        J[Scope bundle<br/>all + 每个指定品牌]
-        K[chapter02Facts<br/>图表、范围 Tab、Top N 交互事实]
-        L[chapter02AiFacts<br/>本章 AI 二次分析事实包]
-        M[人群标签聚合<br/>年龄、性别、八大人群<br/>记录数、命中素材数、标签占比]
-        N[营销卖点聚合<br/>按第一个下划线前缀归一级类别<br/>标签数、命中次数、类别内 Top 标签]
-        O[范围内 topMaterials<br/>标题、指标、标签和素材 ID<br/>支撑图表重算与证据引用]
-        E --> H --> I --> J
-        J --> M
-        J --> N
-        J --> O
-        M --> K
-        N --> K
-        O --> K
-        M --> L
-        N --> L
-        O --> L
-        K -.报告投影：保留完整图表事实.- P[report-data.json]
-        L -.模型输入：仅通过分析单元传递.- Q[audience-marketing-input.json]
-    end
+    A --> B1[当前周期行业内容榜单]
+    A --> B2[本次输入品牌列表]
+    B1 --> C[当前周期行业 TOP1000]
+    B2 --> D[运行时标题品牌匹配]
+    C --> E1[all：全部行业素材]
+    C --> D
 
-    subgraph S2[提示词与 AI 分析层]
-        R[analysis-unit-manifest.json<br/>单次模型调用、章节输出映射]
-        T[yuntu-analysis-prompt.md<br/>按 scopeOrder 输出 all + 品牌]
-        U[yuntu-ai-analysis.schema.json<br/>动态约束 chapter02Insights]
-        V[当前对话模型一次调用<br/>读取四个章节事实包]
-        W[chapter02Insights<br/>每个 scope 仅 audienceSummary<br/>与 marketingSummary]
-        X[每项：title、summary、evidence、material_ids<br/>人群段落覆盖八大人群/性别/年龄<br/>营销段落覆盖类别/Top 标签/命中素材]
-        Q --> R
-        R --> T
-        R --> U
-        T --> V
-        U --> V
-        Q --> V
-        V --> W --> X
-        X -.报告输入.- Y[yuntu-ai-analysis.json]
-    end
+    D --> E2[品牌 A：标题匹配素材]
+    D --> E3[品牌 B：标题匹配素材]
+    D --> E4[其他指定品牌：标题匹配素材]
 
-    subgraph S3[前端 Presentation 与报告渲染层]
-        Z[validate_analysis_input<br/>检查 scope 顺序、必需摘要、证据格式]
-        AA[Presentation v3<br/>chapter02.scopeTabs + panels]
-        AB[panel 元数据<br/>aiFactSource=chapter02AiFacts<br/>chartFactSource=chapter02Facts]
-        AC[AI 二次分析投影<br/>人群摘要 + 营销卖点摘要]
-        AD[人群图表<br/>八大人群柱状图、年龄饼图、性别饼图]
-        AE[营销卖点图表<br/>一级类别柱状图 → 二级标签下钻<br/>Top 标签与全部标签明细]
-        AF[范围 Tab<br/>所有指定品牌 + 各品牌]
-        AG[Top N 控件<br/>浏览器按当前 scope 前 N 条素材<br/>同步重算人群与营销卖点]
-        AH[final-report.html<br/>HTML 当前可见 AI 文案、图表和交互]
-        AI[final-report.md<br/>当前保留各 scope 事实明细]
-        Z --> AA
-        Y --> Z
-        P --> Z
-        AA --> AB
-        AB --> AC
-        AB --> AD
-        AB --> AE
-        AB --> AF
-        K --> AD
-        K --> AE
-        O --> AG
-        AG --> AD
-        AG --> AE
-        AC --> AH
-        AD --> AH
-        AE --> AH
-        AF --> AH
-        Z --> AI
-        P --> AI
-    end
+    E1 --> F[第二部分事实包]
+    E2 --> F
+    E3 --> F
+    E4 --> F
 
-    GAP[待确认：Markdown 仍按旧 audienceInsights/marketingInsights 数组渲染<br/>当前新式 audienceSummary/marketingSummary 不会进入 Markdown 正文]
-    AI -.当前真实产物已观察到的缺口.- GAP
+    F --> F1[确定性生成人群标签事实<br/>年龄、性别、八大人群]
+    F --> F2[确定性生成营销卖点事实<br/>一级类别、二级标签]
+    F --> F3[保留范围内素材事实<br/>标题、指标、标签、素材 ID]
 
-    classDef fact fill:#fff3cd,stroke:#b8860b,color:#3d2b00;
-    classDef ai fill:#e8f1ff,stroke:#3973b8,color:#102a43;
-    classDef render fill:#e9f7ef,stroke:#3b8c5a,color:#123b22;
-    classDef gap fill:#fde8e7,stroke:#c0392b,color:#641e16;
-    class K,L,M,N,O,P fact;
-    class Q,R,T,U,V,W,X,Y ai;
-    class Z,AA,AB,AC,AD,AE,AF,AG,AH,AI render;
-    class GAP gap;
+    F1 --> G1[图表事实]
+    F2 --> G1
+    F3 --> G1
+    F1 --> G2[AI 分析事实]
+    F2 --> G2
+    F3 --> G2
+
+    G2 --> H[分析提示词与 AI 分析]
+    H --> I1[所有指定品牌]
+    H --> I2[品牌 A]
+    H --> I3[品牌 B]
+    H --> I4[其他品牌]
+
+    I1 --> J[chapter02Insights<br/>每个范围输出人群摘要与营销卖点摘要]
+    I2 --> J
+    I3 --> J
+    I4 --> J
+
+    G1 --> K[前端报告渲染]
+    J --> K
+    K --> L1[范围 Tab：所有指定品牌]
+    K --> L2[范围 Tab：各品牌]
+    K --> M1[人群图表]
+    K --> M2[营销卖点图表]
+    K --> N1[HTML 报告]
+    K --> N2[Markdown 报告]
 ```
 
 ## 关键范围与事实边界

@@ -1,6 +1,6 @@
 # 第四部分｜高光画面洞察与高光帧资产展示数据链路
 
-> 本图沿用第一部分 Mermaid 梳理方式，描述“事实包 → 提示词/AI 分析 → 前端报告渲染”的实际链路。高光帧抽取和本地资产复制也纳入图中，因为它们决定第四部分能否消费真实画面。
+> 本图沿用第一部分 Mermaid 梳理方式，聚焦“事实包 → 提示词/AI 分析 → 前端报告渲染”的业务链路。实现细节和跨章节旁支不在图中展开。
 
 ## 证据范围
 
@@ -14,87 +14,53 @@
 
 ```mermaid
 flowchart TD
-    A[用户 pre_input<br/>行业、周期、指定品牌、截取方式、秒级拆解数]
+    A[成功秒级拆解素材<br/>已选中且取得详情]
 
-    subgraph S[数据采集与高光资产准备]
-        B1[云图榜单列表<br/>当前筛选条件下的行业 TOP1000]
-        B2[榜单候选与选中素材<br/>按 targetTopN 进入详情]
-        B3[详情 RPA<br/>video_url、trend_series、high_points、loss_points]
-        B4[normalized/detail-records/<br/>规范化详情记录]
-        C1[确定性高光候选<br/>0s 封面 + 点击指数最多 Top5 局部波峰]
-        C2[视频下载与 FFmpeg 批量截帧<br/>失败不阻断后续报告]
-        C3[highlights/material_id/*.jpg<br/>本地 JPEG 高光资产]
-        C4[highlights-manifest.json<br/>frame_ref、秒点、类型、峰值排名、失败原因]
-        A --> B1
-        B1 --> B2
-        B2 --> B3
-        B3 --> B4
-        B4 --> C1
-        C1 --> C2
-        C2 --> C3
-        C2 --> C4
-        C3 --> C4
-    end
+    A --> B1[素材标题、品牌与排序]
+    A --> B2[秒级点击指数序列]
 
-    subgraph F[第四部分事实包与模型输入]
-        D1[materialFacts 中的 highlightFrames<br/>每素材的可用/失败帧与 highlightFrameAvailability]
-        D2[report-data.json<br/>报告验证与渲染使用的精简事实包]
-        D3[analysis-units/highlight-input.json<br/>highlight 章节唯一模型事实入口]
-        D4[visualAssets<br/>素材标题/排序/标题归属品牌、frame_ref、秒点、<br/>cover 或 click_peak、点击指数、本地 image_path、available]
-        D5[仅保留 available=true 的真实 JPEG<br/>失败帧保留原因，但不进入视觉洞察]
-        C4 --> D1
-        B4 --> D1
-        D1 --> D2
-        D1 --> D3
-        D3 --> D4
-        D4 --> D5
-    end
+    B1 --> C[第四部分事实包]
+    B2 --> C
 
-    subgraph M[提示词与 AI 分析]
-        E1[prompts/yuntu-analysis-prompt.md<br/>单次模型调用；章节间事实包隔离]
-        E2[模型实际查看每张成功 JPEG<br/>按视觉主体归类 portrait / product / other]
-        E3["highlightDashboard.brands[]<br/>第一项全品牌，其后按事实包品牌顺序"]
-        E4["brands[].groups[]<br/>category、frame_refs、common_patterns、derivative_directions"]
-        E5[结构化洞察与裂变方向<br/>两组逐项对应，frame_refs 只能引用本组]
-        D5 --> E1
-        E1 --> E2
-        D4 --> E2
-        E2 --> E3
-        E3 --> E4
-        E4 --> E5
-    end
+    C --> C1[每帧保留<br/>frame_ref、秒点、帧类型、点击指数、可用性]
+    C --> C2[仅可用 JPEG 提供给 AI<br/>失败帧保留失败原因]
+    C --> C3[按标题匹配品牌范围<br/>全品牌与品牌 Tab]
 
-    subgraph P[Presentation 投影与校验]
-        G1[scripts/yuntu_report.py<br/>校验 dashboard、可用帧、路径与覆盖关系]
-        G2[scripts/yuntu_presentation.py<br/>可用帧投影、标题品牌匹配、分类与文本投影]
-        G3["chapters.chapter04<br/>scopeId=all、brands[].categories[]、availability"]
-        G4[覆盖约束<br/>全品牌覆盖全部可用 frame_ref 且各出现一次；<br/>品牌范围只覆盖标题匹配该品牌的帧]
-        E5 --> G1
-        D2 --> G1
-        G1 --> G2
-        G2 --> G3
-        G2 --> G4
-    end
+    C --> D1[确定性生成 0s 封面事实]
+    C --> D2[确定性筛选点击指数 Top5 局部波峰]
+    C --> D3[确定性过滤可用高光帧]
 
-    subgraph R[前端报告与资产交付]
-        H1[render_report 总编排<br/>验证分析 → 构建 Presentation → 复制图片 → 导出 Excel → 渲染 HTML/Markdown]
-        H2[04 章节 HTML<br/>品牌 Tab → portrait/product/other 分类 Tab]
-        H3[共性洞察 + 裂变方向<br/>AI 文本按分类展示]
-        H4[高光帧卡片<br/>封面/点击 TopN 波峰、秒数、点击指数、可点击标题]
-        H5[分页与大图预览<br/>每分类 12 帧一页；本地相对图片路径]
-        H6[高光帧资产.xlsx<br/>一行一张可用帧，嵌入图片；<br/>资产 Sheet + 分类图片墙 Sheet]
-        G3 --> H1
-        D2 --> H1
-        H1 --> H2
-        H2 --> H3
-        H2 --> H4
-        H4 --> H5
-        H1 --> H6
-        C3 -.本地源资产.-> H1
-    end
+    D1 --> E[分析提示词]
+    D2 --> E
+    D3 --> E
+    C2 --> E
 
-    X[第五部分 materialDeepDives<br/>同一详情事实中的秒级拆解与逐帧观察，独立消费边界]
-    D1 -.不作为第四部分 AI 证据.-> X
+    E --> F1[全品牌视觉分析]
+    E --> F2[品牌 A]
+    E --> F3[品牌 B]
+    E --> F4[其他品牌]
+
+    F1 --> G1[portrait / product / other 视觉分类]
+    F1 --> G2[共性洞察与裂变方向]
+    F2 --> H[品牌范围内视觉分类与洞察]
+    F3 --> H
+    F4 --> H
+
+    G1 --> K[前端报告渲染]
+    G2 --> K
+    H --> K
+
+    K --> L[Tab：全品牌]
+    K --> M[品牌 Tab]
+    K --> N[高光帧资产 Excel 导出]
+
+    L --> L1[视觉分类 Tab]
+    L --> L2[共性洞察与裂变方向]
+    L --> L3[高光帧卡片与大图预览]
+
+    M --> M1[视觉分类 Tab]
+    M --> M2[共性洞察与裂变方向]
+    M --> M3[高光帧卡片与大图预览]
 ```
 
 ## 关键范围与事实边界约束

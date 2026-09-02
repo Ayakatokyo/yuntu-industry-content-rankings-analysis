@@ -31,6 +31,7 @@ class YuntuAnalysisError(RuntimeError):
 
 SECOND_LEVEL_TRENDS = ALLOWED_HIGHLIGHT_TRENDS
 RANKING_FACT_METRICS = ("show_cnt", "ctr", "cvr", "play_3s_rate")
+RANKING_MATERIAL_METRICS = ("ctr", "cvr", "play_3s_rate")
 REPORT_DATA_FIELDS = (
     "schemaVersion",
     "filters",
@@ -122,15 +123,22 @@ def _report_scopes(pool_records, selected, rejected):
 
 
 def _ranking_material_fact(record):
+    exposure = record.get("exposure") if isinstance(record.get("exposure"), dict) else {}
+    interval = exposure.get("raw")
+    interval_available = isinstance(interval, str) and bool(interval.strip())
     return {
         "material_id": str(record.get("material_id", "")),
         "rank": record.get("rank"),
         "title": record.get("title", ""),
         "metrics": {
             name: record.get("metrics", {}).get(name)
-            for name in RANKING_FACT_METRICS
+            for name in RANKING_MATERIAL_METRICS
         },
-        "exposure": dict(record.get("exposure", {"min": None, "max": None, "raw": ""})),
+        "exposure": {
+            "raw": interval.strip() if interval_available else "",
+            "available": interval_available,
+            **({} if interval_available else {"missingReason": "exposure_interval_unavailable"}),
+        },
         "people_tags": list(record.get("people_tags", [])),
         "material_tags": list(record.get("material_tags", [])),
     }
@@ -171,8 +179,9 @@ def _comparison_fact(current, baseline, *, baseline_name):
     sample_rate = sample_delta / baseline_sample if baseline_sample else None
     metric_changes = {}
     for name in RANKING_FACT_METRICS:
-        current_value = (current.get("metrics", {}).get(name) or {}).get("median")
-        baseline_value = (baseline.get("metrics", {}).get(name) or {}).get("median")
+        summary_key = "total" if name == "show_cnt" else "median"
+        current_value = (current.get("metrics", {}).get(name) or {}).get(summary_key)
+        baseline_value = (baseline.get("metrics", {}).get(name) or {}).get(summary_key)
         if isinstance(current_value, (int, float)) and isinstance(baseline_value, (int, float)):
             delta = current_value - baseline_value
             rate = delta / baseline_value if baseline_value else None
@@ -1086,6 +1095,7 @@ def _scope_period_facts(manifest, records_by_run, *, scope, brands):
             missing_reason=("comparison_data_unavailable" if not records else ""),
         )
     return periods, {
+        "current": periods["query"],
         "previousPeriod": _comparison_fact(
             periods["query"], periods["previous_period"], baseline_name="previousPeriod"
         ),

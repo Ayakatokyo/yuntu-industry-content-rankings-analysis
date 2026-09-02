@@ -166,7 +166,20 @@ class YuntuAnalysisTests(unittest.TestCase):
         for scope_name in ("current", "previousPeriod", "industryBenchmark"):
             rows = ranking["evidence"][scope_name]["materials"]
             self.assertEqual(len(rows), 1)
-            self.assertTrue({"show_cnt", "ctr", "cvr", "play_3s_rate"}.issubset(rows[0]["metrics"]))
+            self.assertEqual(set(rows[0]["metrics"]), {"ctr", "cvr", "play_3s_rate"})
+            self.assertEqual(rows[0]["exposure"], {"raw": "20万-22万", "available": True})
+            self.assertNotIn("min", rows[0]["exposure"])
+            self.assertNotIn("max", rows[0]["exposure"])
+        unavailable = analysis._ranking_material_fact({
+            "material_id": "999",
+            "metrics": {"show_cnt": 999999, "ctr": 0.1, "cvr": 0.02, "play_3s_rate": 0.4},
+            "exposure": {"min": 999999, "max": 1000000},
+        })
+        self.assertEqual(
+            unavailable["exposure"],
+            {"raw": "", "available": False, "missingReason": "exposure_interval_unavailable"},
+        )
+        self.assertNotIn("show_cnt", unavailable["metrics"])
         serialized = json.dumps(ranking, ensure_ascii=False)
         for forbidden in ("visualAssets", "highlightFrames", "secondLevelBreakdown", "trend_series", "script"):
             self.assertNotIn(forbidden, serialized)
@@ -310,6 +323,15 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("`dataSummary` 只覆盖当前表现、环比周期和同周期全行业对比", prompt)
         self.assertIn("`hotMaterialInsight` 只写当前范围爆款素材的整体特征", prompt)
         self.assertIn("分别输出两个自然段", prompt)
+
+    def test_prompt_requires_explicit_current_previous_and_industry_comparison_order(self):
+        analysis = load_module()
+        prompt = analysis._prompt_text(filters={"brands": ["小仙炖"]})
+
+        self.assertIn("先说明默认筛选条件的当前表现", prompt)
+        self.assertIn("环比看", prompt)
+        self.assertIn("与全行业大盘对比看", prompt)
+        self.assertIn("不得只用‘较行业大盘’或‘高于大盘’等模糊短语", prompt)
 
     def _write_input(self, root, records, selected, details):
         (root / "normalized" / "detail-records").mkdir(parents=True)

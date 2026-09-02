@@ -1401,10 +1401,41 @@ class YuntuReportTests(unittest.TestCase):
             }],
             "available": True, "missing_reason": "",
         }
+        comparison_template = {
+            "current": {
+                "sampleCount": 2,
+                "metrics": {
+                    "show_cnt": {"total": 2686377, "median": 1343188.5},
+                    "ctr": {"median": 0.0327},
+                    "cvr": {"median": 0.0709},
+                    "play_3s_rate": {"median": 0.7441},
+                },
+            },
+            "previousPeriod": {
+                "currentSampleCount": 2,
+                "baselineSampleCount": 3,
+                "metrics": {
+                    "show_cnt": {"delta": -1156000, "rate": -0.301},
+                    "ctr": {"delta": -0.004, "rate": -0.109},
+                    "cvr": {"delta": 0.01, "rate": 0.164},
+                    "play_3s_rate": {"delta": -0.02, "rate": -0.026},
+                },
+            },
+            "industryBenchmark": {
+                "currentSampleCount": 2,
+                "baselineSampleCount": 10,
+                "metrics": {
+                    "show_cnt": {"delta": 230000, "rate": 0.093},
+                    "ctr": {"delta": 0.008, "rate": 0.323},
+                    "cvr": {"delta": -0.02, "rate": -0.221},
+                    "play_3s_rate": {"delta": -0.03, "rate": -0.039},
+                },
+            },
+        }
         fact_pack = {
             "schemaVersion": 7,
             "filters": {"brands": brands},
-            "comparisonFacts": {"scopes": {"all": {"previousPeriod": {}}, "小仙炖": {"previousPeriod": {}}}},
+            "comparisonFacts": {"scopes": {"all": copy.deepcopy(comparison_template), "小仙炖": copy.deepcopy(comparison_template)}},
             "hotMaterialFacts": {"all": copy.deepcopy(hot), "小仙炖": copy.deepcopy(hot)},
         }
         with tempfile.TemporaryDirectory() as directory:
@@ -1416,14 +1447,26 @@ class YuntuReportTests(unittest.TestCase):
             markdown = (root / "report" / "final-report.md").read_text(encoding="utf-8")
 
         self.assertIn("所有指定品牌", rendered)
-        self.assertIn("素材表现与行业对比", rendered)
+        self.assertIn("素材表现洞察", rendered)
         self.assertIn("爆款素材洞察", rendered)
         self.assertIn("aria-expanded=\"true\"", rendered)
         self.assertIn("aria-controls=\"chapter01-comparison-details-all-brands\"", rendered)
-        self.assertIn("收起环比与全行业确定性事实", rendered)
+        self.assertIn("环比与全行业对比", rendered)
+        self.assertIn("收起环比与全行业对比数据", rendered)
+        self.assertIn("当前默认筛选条件", rendered)
+        self.assertIn("268.6 万次", rendered)
+        self.assertIn("减少 115.6 万次", rendered)
+        self.assertIn("增加 23.0 万次", rendered)
+        self.assertNotIn("e+", rendered.lower())
         self.assertIn("收起爆款素材汇总数据", rendered)
         self.assertIn("所有指定品牌", markdown)
         self.assertIn("爆款整体段落", rendered)
+        self.assertIn("素材表现洞察", markdown)
+        self.assertIn("环比与全行业对比", markdown)
+        self.assertNotIn("e+", markdown.lower())
+        self.assertLess(rendered.index("素材表现洞察"), rendered.index("环比与全行业对比"))
+        self.assertLess(rendered.index("环比与全行业对比"), rendered.index("爆款素材洞察"))
+        self.assertLess(rendered.index("爆款素材洞察"), rendered.index("爆款素材面板"))
 
     def test_render_report_rejects_audit_content_in_user_readable_summaries(self):
         report = load_module()

@@ -1642,7 +1642,7 @@ body.unified-report {
   border-top: 1px solid var(--unified-line);
 }
 
-/* Chapter 01: keep the AI narrative as one plain brand-level paragraph. */
+/* Chapter 01: keep performance and hot-material narratives as separate blocks. */
 .unified-yuntu .chapter01-ai-summary {
   margin: 14px 0 18px;
   color: #000;
@@ -1671,6 +1671,26 @@ body.unified-report {
   padding-left: 20px;
   color: var(--unified-muted);
   line-height: 1.6;
+}
+
+.unified-yuntu .chapter01-comparison-group {
+  margin: 0 0 14px;
+}
+
+.unified-yuntu .chapter01-comparison-group:last-child {
+  margin-bottom: 0;
+}
+
+.unified-yuntu .chapter01-comparison-group h5 {
+  margin: 0 0 4px;
+  color: var(--unified-ink);
+  font-size: 0.85rem;
+}
+
+.unified-yuntu .chapter01-comparison-group p {
+  margin: 0 0 4px;
+  color: var(--unified-muted);
+  font-size: 0.82rem;
 }
 
 .unified-yuntu #top-material-combination .brand-panel,

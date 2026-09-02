@@ -1,6 +1,94 @@
 """Stable HTML renderers for independently migrated Yuntu report sections."""
 
 
+def _format_chapter01_exposure(value, *, signed=False):
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return "不可用"
+    value = float(value)
+    if signed:
+        if value == 0:
+            return "0 次"
+        prefix = "增加" if value > 0 else "减少"
+        return f"{prefix} {_format_chapter01_exposure(abs(value))}"
+    absolute = abs(value)
+    if absolute >= 100000000:
+        number, unit = absolute / 100000000, "亿"
+    elif absolute >= 10000:
+        number, unit = absolute / 10000, "万"
+    elif absolute >= 1000:
+        number, unit = absolute / 1000, "千"
+    else:
+        return f"{value:,.0f} 次"
+    return f"{number:.1f} {unit}次"
+
+
+def _format_chapter01_percentage(value, *, signed=False):
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return "不可用"
+    if signed and value > 0:
+        return f"+{value:.2%}"
+    return f"{value:.2%}"
+
+
+def _chapter01_current_metric_value(fact, key):
+    metrics = fact.get("metrics", {}) if isinstance(fact, dict) else {}
+    metric = metrics.get(key, {}) if isinstance(metrics, dict) else {}
+    if not isinstance(metric, dict):
+        return None
+    return metric.get("total" if key == "show_cnt" else "median")
+
+
+def _render_chapter01_current_metrics(fact, *, esc):
+    if not isinstance(fact, dict):
+        return ""
+    labels = (
+        ("show_cnt", "曝光总量", _format_chapter01_exposure),
+        ("ctr", "CTR", _format_chapter01_percentage),
+        ("cvr", "CVR", _format_chapter01_percentage),
+        ("play_3s_rate", "3 秒完播率", _format_chapter01_percentage),
+    )
+    items = []
+    for key, label, formatter in labels:
+        items.append(
+            "<li><strong>"
+            + esc(label)
+            + "</strong>："
+            + esc(formatter(_chapter01_current_metric_value(fact, key)))
+            + "</li>"
+        )
+    return "".join(items)
+
+
+def _render_chapter01_metric_changes(fact, *, esc):
+    if not isinstance(fact, dict):
+        return ""
+    metrics = fact.get("metrics", {}) if isinstance(fact.get("metrics"), dict) else {}
+    labels = (
+        ("show_cnt", "曝光变化", _format_chapter01_exposure),
+        ("ctr", "CTR变化", _format_chapter01_percentage),
+        ("cvr", "CVR变化", _format_chapter01_percentage),
+        ("play_3s_rate", "3 秒完播率变化", _format_chapter01_percentage),
+    )
+    items = []
+    for key, label, formatter in labels:
+        metric = metrics.get(key, {})
+        if not isinstance(metric, dict):
+            continue
+        delta = metric.get("delta")
+        if key == "show_cnt":
+            value = formatter(delta, signed=True)
+        else:
+            value = formatter(delta, signed=True)
+        rate = metric.get("rate")
+        rate_text = (
+            f"（变化率 {_format_chapter01_percentage(rate, signed=True)}）"
+            if isinstance(rate, (int, float)) and not isinstance(rate, bool)
+            else ""
+        )
+        items.append("<li><strong>" + esc(label) + "</strong>：" + esc(value + rate_text) + "</li>")
+    return "".join(items)
+
+
 def render_script_insights():
     return (
         '<div class="data-state"><span>脚本数据：未接入</span><p>'
@@ -110,22 +198,12 @@ def _render_chapter01_ai_analysis(value, *, esc):
     if not isinstance(value, dict):
         return ""
     data_summary = value.get("dataSummary")
-    hot_insight = value.get("hotMaterialInsight")
-    if isinstance(data_summary, str) or isinstance(hot_insight, dict):
-        chunks = []
-        if isinstance(data_summary, str) and data_summary.strip():
-            chunks.append(
-                '<section class="chapter01-ai-block chapter01-data-summary"><h4>素材表现与行业对比</h4><p>'
-                + esc(data_summary)
-                + "</p></section>"
-            )
-        if isinstance(hot_insight, dict) and isinstance(hot_insight.get("summary"), str) and hot_insight["summary"].strip():
-            chunks.append(
-                '<section class="chapter01-ai-block chapter01-hot-insight"><h4>爆款素材洞察</h4><p>'
-                + esc(hot_insight["summary"])
-                + "</p></section>"
-            )
-        return "".join(chunks)
+    if isinstance(data_summary, str) and data_summary.strip():
+        return (
+            '<section class="chapter01-ai-block chapter01-data-summary"><h4>素材表现洞察</h4><p>'
+            + esc(data_summary)
+            + "</p></section>"
+        )
     summary = value.get("summary")
     if not isinstance(summary, str) or not summary.strip():
         return ""
@@ -140,45 +218,46 @@ def _render_chapter01_period_panel(panel, *, esc, merge_ai=False, jump_material_
     chunks = []
     if comparison is not None:
         comparison_facts = comparison.get("facts") if isinstance(comparison.get("facts"), dict) else {}
-        comparison_items = []
-        metric_labels = {
-            "show_cnt": "曝光",
-            "ctr": "CTR",
-            "cvr": "CVR",
-            "play_3s_rate": "3 秒完播",
-        }
-        for baseline_key, baseline_label in (("previousPeriod", "环比周期"), ("industryBenchmark", "同周期全行业")):
+        current = comparison_facts.get("current")
+        if isinstance(current, dict):
+            chunks.append(
+                '<section class="chapter01-comparison-group"><h5>当前默认筛选条件指标</h5><ul class="chapter01-comparison-facts">'
+                + _render_chapter01_current_metrics(current, esc=esc)
+                + "</ul></section>"
+            )
+        for baseline_key, baseline_label in (("previousPeriod", "环比周期对应变化"), ("industryBenchmark", "同周期全行业对应变化")):
             fact = comparison_facts.get(baseline_key)
             if not isinstance(fact, dict):
                 continue
-            metric_parts = []
-            for metric_key, metric_label in metric_labels.items():
-                metric = fact.get("metrics", {}).get(metric_key) if isinstance(fact.get("metrics"), dict) else None
-                if not isinstance(metric, dict):
-                    continue
-                delta = metric.get("delta")
-                rate = metric.get("rate")
-                if isinstance(delta, (int, float)):
-                    suffix = f"，变化率 {rate:.2%}" if isinstance(rate, (int, float)) else ""
-                    metric_parts.append(f"{metric_label}变化 {delta:.4g}{suffix}")
             samples = f"当前 {fact.get('currentSampleCount', '-')} 条，对比 {fact.get('baselineSampleCount', '-')} 条"
-            comparison_items.append(
-                '<li><strong>' + esc(baseline_label) + '</strong>：' + esc(samples)
-                + ("；" + esc("、".join(metric_parts)) if metric_parts else "；指标不可用")
-                + "。</li>"
-            )
-        if comparison_items or comparison.get("summary"):
-            if comparison_items:
-                body = '<ul class="chapter01-comparison-facts">' + "".join(comparison_items) + "</ul>"
-            else:
-                body = "<p>" + esc(comparison["summary"]) + "</p>"
             chunks.append(
-                '<section class="chapter01-comparison"><div class="collapsible-head"><button class="collapsible-toggle comparison-toggle" type="button" data-collapsible-toggle data-collapsible-expanded-label="收起环比与全行业确定性事实" data-collapsible-collapsed-label="展开环比与全行业确定性事实" aria-expanded="true" aria-controls="'
-                + esc("chapter01-comparison-details-" + str(panel.get("id") or panel.get("brand") or "scope").replace(" ", "-"))
-                + '"><span class="collapsible-toggle-action">收起环比与全行业确定性事实</span></button></div><h4>环比与全行业对比事实</h4><div class="collapsible-body" id="'
-                + esc("chapter01-comparison-details-" + str(panel.get("id") or panel.get("brand") or "scope").replace(" ", "-"))
-                + '">' + body + "</div></section>"
+                '<section class="chapter01-comparison-group"><h5>'
+                + esc(baseline_label)
+                + "</h5><p>"
+                + esc(samples)
+                + "</p><ul class=\"chapter01-comparison-facts\">"
+                + _render_chapter01_metric_changes(fact, esc=esc)
+                + "</ul></section>"
             )
+        if chunks or comparison.get("summary"):
+            if comparison.get("summary") and not chunks:
+                chunks.append("<p>" + esc(comparison["summary"]) + "</p>")
+            comparison_body = "".join(chunks)
+            comparison_section = (
+                '<section class="chapter01-comparison"><div class="collapsible-head"><button class="collapsible-toggle comparison-toggle" type="button" data-collapsible-toggle data-collapsible-expanded-label="收起环比与全行业对比数据" data-collapsible-collapsed-label="展开环比与全行业对比数据" aria-expanded="true" aria-controls="'
+                + esc("chapter01-comparison-details-" + str(panel.get("id") or panel.get("brand") or "scope").replace(" ", "-"))
+                + '"><span class="collapsible-toggle-action">收起环比与全行业对比数据</span></button></div><h4>环比与全行业对比</h4><div class="collapsible-body" id="'
+                + esc("chapter01-comparison-details-" + str(panel.get("id") or panel.get("brand") or "scope").replace(" ", "-"))
+                + '">' + comparison_body + "</div></section>"
+            )
+            chunks = [comparison_section]
+    hot_insight = panel.get("aiAnalysis", {}).get("hotMaterialInsight") if isinstance(panel.get("aiAnalysis"), dict) else None
+    if isinstance(hot_insight, dict) and isinstance(hot_insight.get("summary"), str) and hot_insight["summary"].strip():
+        chunks.append(
+            '<section class="chapter01-ai-block chapter01-hot-insight"><h4>爆款素材洞察</h4><p>'
+            + esc(hot_insight["summary"])
+            + "</p></section>"
+        )
     if hot is not None:
         if hot.get("available"):
             cards = []

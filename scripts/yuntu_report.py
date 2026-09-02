@@ -14,6 +14,9 @@ from yuntu_presentation import build_yuntu_presentation
 from yuntu_highlight_export import export_highlight_workbook
 from yuntu_highlight_export import match_brands_from_title
 from yuntu_report_sections import (
+    _chapter01_current_metric_value,
+    _format_chapter01_exposure,
+    _format_chapter01_percentage,
     render_audience_insights,
     render_highlight_insights,
     render_material_deep_dive,
@@ -554,27 +557,45 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
         lines.extend([f"### {display_brand}", ""])
         data_summary = item.get("dataSummary", "")
         if data_summary:
-            lines.extend(["#### 素材表现与行业对比", "", data_summary, ""])
+            lines.extend(["#### 素材表现洞察", "", data_summary, ""])
         elif item.get("comparisonSummary"):
-            lines.extend(["#### 素材表现与行业对比", "", item["comparisonSummary"], ""])
-        hot_insight = item.get("hotMaterialInsight")
-        if isinstance(hot_insight, dict) and hot_insight.get("summary"):
-            lines.extend(["#### 爆款素材洞察", "", hot_insight["summary"], ""])
+            lines.extend(["#### 素材表现洞察", "", item["comparisonSummary"], ""])
         hot_facts = (fact_pack or {}).get("hotMaterialFacts", {}) if isinstance(fact_pack, dict) else {}
         if isinstance(hot_facts, dict) and hot_facts:
             scope_key = "all" if item.get("brand") == "全品牌" else item.get("brand")
             comparison_scopes = ((fact_pack or {}).get("comparisonFacts") or {}).get("scopes", {})
             comparison = comparison_scopes.get(scope_key, {}) if isinstance(comparison_scopes, dict) else {}
             if isinstance(comparison, dict) and comparison:
-                lines.extend(["#### 环比与全行业对比事实", ""])
+                lines.extend(["#### 环比与全行业对比", ""])
+                current = comparison.get("current")
+                if isinstance(current, dict):
+                    current_parts = []
+                    for key, label in (("show_cnt", "曝光总量"), ("ctr", "CTR"), ("cvr", "CVR"), ("play_3s_rate", "3 秒完播率")):
+                        value = _chapter01_current_metric_value(current, key)
+                        formatted = _format_chapter01_exposure(value) if key == "show_cnt" else _format_chapter01_percentage(value)
+                        current_parts.append(f"{label}：{formatted}")
+                    lines.extend([f"- 当前默认筛选条件指标：{'；'.join(current_parts)}。", ""])
                 for baseline_key, baseline_label in (("previousPeriod", "环比周期"), ("industryBenchmark", "同周期全行业")):
                     fact = comparison.get(baseline_key)
                     if not isinstance(fact, dict):
                         continue
-                    lines.append(
-                        f"- {baseline_label}：当前 {fact.get('currentSampleCount', '-')} 条；对比 {fact.get('baselineSampleCount', '-')} 条。"
-                    )
+                    metric_parts = []
+                    metrics = fact.get("metrics", {}) if isinstance(fact.get("metrics"), dict) else {}
+                    for key, label in (("show_cnt", "曝光变化"), ("ctr", "CTR变化"), ("cvr", "CVR变化"), ("play_3s_rate", "3 秒完播率变化")):
+                        metric = metrics.get(key, {})
+                        if not isinstance(metric, dict):
+                            continue
+                        delta = metric.get("delta")
+                        if delta is None:
+                            continue
+                        formatted = _format_chapter01_exposure(delta, signed=True) if key == "show_cnt" else _format_chapter01_percentage(delta, signed=True)
+                        metric_parts.append(f"{label}：{formatted}")
+                    sample_text = f"当前 {fact.get('currentSampleCount', '-')} 条，对比 {fact.get('baselineSampleCount', '-')} 条"
+                    lines.append(f"- {baseline_label}：{sample_text}；{'；'.join(metric_parts) or '指标不可用'}。")
                 lines.append("")
+        hot_insight = item.get("hotMaterialInsight")
+        if isinstance(hot_insight, dict) and hot_insight.get("summary"):
+            lines.extend(["#### 爆款素材洞察", "", hot_insight["summary"], ""])
             hot = hot_facts.get(scope_key, {})
             lines.extend(["#### 爆款素材面板", ""])
             if not hot.get("available"):

@@ -1677,6 +1677,52 @@ body.unified-report {
   margin: 0 0 14px;
 }
 
+.unified-yuntu .chapter01-comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.unified-yuntu .chapter01-comparison-card {
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--unified-line);
+  border-radius: 6px;
+  background: #fff;
+  color: #000;
+}
+
+.unified-yuntu .chapter01-comparison-card h5 {
+  margin-bottom: 8px;
+  font-size: 0.86rem;
+}
+
+.unified-yuntu .chapter01-comparison-card-values,
+.unified-yuntu .chapter01-comparison-card-change {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--unified-line);
+}
+
+.unified-yuntu .chapter01-comparison-card h6 {
+  margin: 0 0 4px;
+  color: var(--unified-ink);
+  font-size: 0.78rem;
+}
+
+.unified-yuntu .chapter01-comparison-card .chapter01-comparison-facts {
+  padding-left: 18px;
+  font-size: 0.78rem;
+}
+
+.unified-yuntu .chapter01-comparison-card-samples,
+.unified-yuntu .chapter01-comparison-card-empty {
+  margin: 0 0 4px;
+  color: var(--unified-muted);
+  font-size: 0.76rem;
+}
+
 .unified-yuntu .chapter01-comparison-group:last-child {
   margin-bottom: 0;
 }
@@ -1691,6 +1737,12 @@ body.unified-report {
   margin: 0 0 4px;
   color: var(--unified-muted);
   font-size: 0.82rem;
+}
+
+@media (max-width: 700px) {
+  .unified-yuntu .chapter01-comparison-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .unified-yuntu #top-material-combination .brand-panel,

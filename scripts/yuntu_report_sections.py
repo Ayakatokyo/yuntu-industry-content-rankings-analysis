@@ -38,7 +38,15 @@ def _chapter01_current_metric_value(fact, key):
     return metric.get("total" if key == "show_cnt" else "median")
 
 
-def _render_chapter01_current_metrics(fact, *, esc):
+def _chapter01_baseline_metric_value(fact, key):
+    metrics = fact.get("metrics", {}) if isinstance(fact, dict) else {}
+    metric = metrics.get(key, {}) if isinstance(metrics, dict) else {}
+    if not isinstance(metric, dict):
+        return None
+    return metric.get("baseline")
+
+
+def _render_chapter01_metric_values(fact, *, esc, source="current"):
     if not isinstance(fact, dict):
         return ""
     labels = (
@@ -49,14 +57,23 @@ def _render_chapter01_current_metrics(fact, *, esc):
     )
     items = []
     for key, label, formatter in labels:
+        value = (
+            _chapter01_current_metric_value(fact, key)
+            if source == "current"
+            else _chapter01_baseline_metric_value(fact, key)
+        )
         items.append(
             "<li><strong>"
             + esc(label)
             + "</strong>："
-            + esc(formatter(_chapter01_current_metric_value(fact, key)))
+            + esc(formatter(value))
             + "</li>"
         )
     return "".join(items)
+
+
+def _render_chapter01_current_metrics(fact, *, esc):
+    return _render_chapter01_metric_values(fact, esc=esc, source="current")
 
 
 def _render_chapter01_metric_changes(fact, *, esc):
@@ -87,6 +104,27 @@ def _render_chapter01_metric_changes(fact, *, esc):
         )
         items.append("<li><strong>" + esc(label) + "</strong>：" + esc(value + rate_text) + "</li>")
     return "".join(items)
+
+
+def _render_chapter01_comparison_card(fact, *, title, esc, source, change_fact=None):
+    if not isinstance(fact, dict):
+        return ""
+    if change_fact is None:
+        change = '<p class="chapter01-comparison-card-empty">当前周期为比较基准。</p>'
+    else:
+        samples = f"当前 {change_fact.get('currentSampleCount', '-')} 条，对比 {change_fact.get('baselineSampleCount', '-')} 条"
+        change = '<ul class="chapter01-comparison-facts">' + _render_chapter01_metric_changes(change_fact, esc=esc) + "</ul>"
+        change = '<p class="chapter01-comparison-card-samples">' + esc(samples) + "</p>" + change
+    return (
+        '<section class="chapter01-comparison-group chapter01-comparison-card">'
+        + "<h5>"
+        + esc(title)
+        + '</h5><div class="chapter01-comparison-card-values"><h6>真实值</h6><ul class="chapter01-comparison-facts">'
+        + _render_chapter01_metric_values(fact, esc=esc, source=source)
+        + '</ul></div><div class="chapter01-comparison-card-change"><h6>变化</h6>'
+        + change
+        + "</div></section>"
+    )
 
 
 def render_script_insights():
@@ -218,31 +256,35 @@ def _render_chapter01_period_panel(panel, *, esc, merge_ai=False, jump_material_
     chunks = []
     if comparison is not None:
         comparison_facts = comparison.get("facts") if isinstance(comparison.get("facts"), dict) else {}
+        comparison_cards = []
         current = comparison_facts.get("current")
         if isinstance(current, dict):
-            chunks.append(
-                '<section class="chapter01-comparison-group"><h5>当前默认筛选条件指标</h5><ul class="chapter01-comparison-facts">'
-                + _render_chapter01_current_metrics(current, esc=esc)
-                + "</ul></section>"
+            comparison_cards.append(
+                _render_chapter01_comparison_card(
+                    current,
+                    title="当前默认筛选条件",
+                    esc=esc,
+                    source="current",
+                )
             )
-        for baseline_key, baseline_label in (("previousPeriod", "环比周期对应变化"), ("industryBenchmark", "同周期全行业对应变化")):
+        for baseline_key, baseline_label in (("previousPeriod", "环比周期"), ("industryBenchmark", "同周期全行业")):
             fact = comparison_facts.get(baseline_key)
             if not isinstance(fact, dict):
                 continue
-            samples = f"当前 {fact.get('currentSampleCount', '-')} 条，对比 {fact.get('baselineSampleCount', '-')} 条"
-            chunks.append(
-                '<section class="chapter01-comparison-group"><h5>'
-                + esc(baseline_label)
-                + "</h5><p>"
-                + esc(samples)
-                + "</p><ul class=\"chapter01-comparison-facts\">"
-                + _render_chapter01_metric_changes(fact, esc=esc)
-                + "</ul></section>"
+            comparison_cards.append(
+                _render_chapter01_comparison_card(
+                    fact,
+                    title=baseline_label,
+                    esc=esc,
+                    source="baseline",
+                    change_fact=fact,
+                )
             )
-        if chunks or comparison.get("summary"):
-            if comparison.get("summary") and not chunks:
-                chunks.append("<p>" + esc(comparison["summary"]) + "</p>")
-            comparison_body = "".join(chunks)
+        if comparison_cards or comparison.get("summary"):
+            if comparison_cards:
+                comparison_body = '<div class="chapter01-comparison-grid">' + "".join(comparison_cards) + "</div>"
+            else:
+                comparison_body = "<p>" + esc(comparison["summary"]) + "</p>"
             comparison_section = (
                 '<section class="chapter01-comparison"><div class="collapsible-head"><button class="collapsible-toggle comparison-toggle" type="button" data-collapsible-toggle data-collapsible-expanded-label="收起环比与全行业对比数据" data-collapsible-collapsed-label="展开环比与全行业对比数据" aria-expanded="true" aria-controls="'
                 + esc("chapter01-comparison-details-" + str(panel.get("id") or panel.get("brand") or "scope").replace(" ", "-"))

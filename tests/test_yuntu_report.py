@@ -1415,20 +1415,20 @@ class YuntuReportTests(unittest.TestCase):
                 "currentSampleCount": 2,
                 "baselineSampleCount": 3,
                 "metrics": {
-                    "show_cnt": {"delta": -1156000, "rate": -0.301},
-                    "ctr": {"delta": -0.004, "rate": -0.109},
-                    "cvr": {"delta": 0.01, "rate": 0.164},
-                    "play_3s_rate": {"delta": -0.02, "rate": -0.026},
+                    "show_cnt": {"current": 2686377, "baseline": 3842377, "delta": -1156000, "rate": -0.301},
+                    "ctr": {"current": 0.0327, "baseline": 0.0367, "delta": -0.004, "rate": -0.109},
+                    "cvr": {"current": 0.0709, "baseline": 0.0609, "delta": 0.01, "rate": 0.164},
+                    "play_3s_rate": {"current": 0.7441, "baseline": 0.7641, "delta": -0.02, "rate": -0.026},
                 },
             },
             "industryBenchmark": {
                 "currentSampleCount": 2,
                 "baselineSampleCount": 10,
                 "metrics": {
-                    "show_cnt": {"delta": 230000, "rate": 0.093},
-                    "ctr": {"delta": 0.008, "rate": 0.323},
-                    "cvr": {"delta": -0.02, "rate": -0.221},
-                    "play_3s_rate": {"delta": -0.03, "rate": -0.039},
+                    "show_cnt": {"current": 2686377, "baseline": 2456377, "delta": 230000, "rate": 0.093},
+                    "ctr": {"current": 0.0327, "baseline": 0.0247, "delta": 0.008, "rate": 0.323},
+                    "cvr": {"current": 0.0709, "baseline": 0.0909, "delta": -0.02, "rate": -0.221},
+                    "play_3s_rate": {"current": 0.7441, "baseline": 0.7741, "delta": -0.03, "rate": -0.039},
                 },
             },
         }
@@ -1454,6 +1454,14 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("环比与全行业对比", rendered)
         self.assertIn("收起环比与全行业对比数据", rendered)
         self.assertIn("当前默认筛选条件", rendered)
+        self.assertEqual(rendered.count('class="chapter01-comparison-group chapter01-comparison-card"'), 6)
+        self.assertEqual(rendered.count("真实值"), 6)
+        self.assertEqual(rendered.count('class="chapter01-comparison-card-change"'), 6)
+        self.assertEqual(rendered.count(">变化</h6>"), 6)
+        self.assertIn("环比周期", rendered)
+        self.assertIn("同周期全行业", rendered)
+        self.assertIn("384.2 万次", rendered)
+        self.assertIn("245.6 万次", rendered)
         self.assertIn("268.6 万次", rendered)
         self.assertIn("减少 115.6 万次", rendered)
         self.assertIn("增加 23.0 万次", rendered)
@@ -1465,8 +1473,23 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("环比与全行业对比", markdown)
         self.assertNotIn("e+", markdown.lower())
         self.assertLess(rendered.index("素材表现洞察"), rendered.index("环比与全行业对比"))
+        self.assertLess(rendered.index("当前默认筛选条件", rendered.index("环比与全行业对比")), rendered.index("环比周期", rendered.index("环比与全行业对比")))
+        self.assertLess(rendered.index("环比周期", rendered.index("环比与全行业对比")), rendered.index("同周期全行业", rendered.index("环比与全行业对比")))
         self.assertLess(rendered.index("环比与全行业对比"), rendered.index("爆款素材洞察"))
         self.assertLess(rendered.index("爆款素材洞察"), rendered.index("爆款素材面板"))
+
+    def test_chapter01_comparison_cards_match_hot_material_style_and_responsive_layout(self):
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+        grid_rule = css.split(".unified-yuntu .chapter01-comparison-grid {", 1)[1].split("}", 1)[0]
+        card_rule = css.split(".unified-yuntu .chapter01-comparison-card {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr));", grid_rule)
+        self.assertIn("padding: 10px;", card_rule)
+        self.assertIn("border-radius: 6px;", card_rule)
+        self.assertIn("background: #fff;", card_rule)
+        self.assertIn(
+            "@media (max-width: 700px) {\n  .unified-yuntu .chapter01-comparison-grid {\n    grid-template-columns: 1fr;",
+            css,
+        )
 
     def test_render_report_rejects_audit_content_in_user_readable_summaries(self):
         report = load_module()

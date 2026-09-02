@@ -46,7 +46,21 @@ def _chapter01_baseline_metric_value(fact, key):
     return metric.get("baseline")
 
 
-def _render_chapter01_metric_values(fact, *, esc, source="current"):
+def _chapter01_rate_against_current(current_fact, baseline_fact, key):
+    current = _chapter01_current_metric_value(current_fact, key)
+    baseline = _chapter01_baseline_metric_value(baseline_fact, key)
+    if (
+        not isinstance(current, (int, float))
+        or isinstance(current, bool)
+        or not isinstance(baseline, (int, float))
+        or isinstance(baseline, bool)
+        or current == 0
+    ):
+        return None
+    return (baseline - current) / current
+
+
+def _render_chapter01_metric_values(fact, *, esc, source="current", comparison_reference=None):
     if not isinstance(fact, dict):
         return ""
     labels = (
@@ -62,11 +76,16 @@ def _render_chapter01_metric_values(fact, *, esc, source="current"):
             if source == "current"
             else _chapter01_baseline_metric_value(fact, key)
         )
+        value_text = formatter(value)
+        if source != "current" and isinstance(comparison_reference, dict):
+            rate = _chapter01_rate_against_current(comparison_reference, fact, key)
+            if rate is not None:
+                value_text += f"（变化率 {_format_chapter01_percentage(rate, signed=True)}）"
         items.append(
             "<li><strong>"
             + esc(label)
             + "</strong>："
-            + esc(formatter(value))
+            + esc(value_text)
             + "</li>"
         )
     return "".join(items)
@@ -76,54 +95,21 @@ def _render_chapter01_current_metrics(fact, *, esc):
     return _render_chapter01_metric_values(fact, esc=esc, source="current")
 
 
-def _render_chapter01_metric_changes(fact, *, esc):
+def _render_chapter01_comparison_card(fact, *, title, esc, source, comparison_reference=None):
     if not isinstance(fact, dict):
         return ""
-    metrics = fact.get("metrics", {}) if isinstance(fact.get("metrics"), dict) else {}
-    labels = (
-        ("show_cnt", "曝光变化", _format_chapter01_exposure),
-        ("ctr", "CTR变化", _format_chapter01_percentage),
-        ("cvr", "CVR变化", _format_chapter01_percentage),
-        ("play_3s_rate", "3 秒完播率变化", _format_chapter01_percentage),
-    )
-    items = []
-    for key, label, formatter in labels:
-        metric = metrics.get(key, {})
-        if not isinstance(metric, dict):
-            continue
-        delta = metric.get("delta")
-        if key == "show_cnt":
-            value = formatter(delta, signed=True)
-        else:
-            value = formatter(delta, signed=True)
-        rate = metric.get("rate")
-        rate_text = (
-            f"（变化率 {_format_chapter01_percentage(rate, signed=True)}）"
-            if isinstance(rate, (int, float)) and not isinstance(rate, bool)
-            else ""
-        )
-        items.append("<li><strong>" + esc(label) + "</strong>：" + esc(value + rate_text) + "</li>")
-    return "".join(items)
-
-
-def _render_chapter01_comparison_card(fact, *, title, esc, source, change_fact=None):
-    if not isinstance(fact, dict):
-        return ""
-    if change_fact is None:
-        change = '<p class="chapter01-comparison-card-empty">当前周期为比较基准。</p>'
-    else:
-        samples = f"当前 {change_fact.get('currentSampleCount', '-')} 条，对比 {change_fact.get('baselineSampleCount', '-')} 条"
-        change = '<ul class="chapter01-comparison-facts">' + _render_chapter01_metric_changes(change_fact, esc=esc) + "</ul>"
-        change = '<p class="chapter01-comparison-card-samples">' + esc(samples) + "</p>" + change
     return (
         '<section class="chapter01-comparison-group chapter01-comparison-card">'
         + "<h5>"
         + esc(title)
         + '</h5><div class="chapter01-comparison-card-values"><h6>真实值</h6><ul class="chapter01-comparison-facts">'
-        + _render_chapter01_metric_values(fact, esc=esc, source=source)
-        + '</ul></div><div class="chapter01-comparison-card-change"><h6>变化</h6>'
-        + change
-        + "</div></section>"
+        + _render_chapter01_metric_values(
+            fact,
+            esc=esc,
+            source=source,
+            comparison_reference=comparison_reference,
+        )
+        + "</ul></div></section>"
     )
 
 
@@ -277,7 +263,7 @@ def _render_chapter01_period_panel(panel, *, esc, merge_ai=False, jump_material_
                     title=baseline_label,
                     esc=esc,
                     source="baseline",
-                    change_fact=fact,
+                    comparison_reference=current,
                 )
             )
         if comparison_cards or comparison.get("summary"):

@@ -16,6 +16,7 @@ from yuntu_highlight_export import match_brands_from_title
 from yuntu_report_sections import (
     _chapter01_baseline_metric_value,
     _chapter01_current_metric_value,
+    _chapter01_rate_against_current,
     _format_chapter01_exposure,
     _format_chapter01_percentage,
     render_audience_insights,
@@ -571,12 +572,12 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
                 card_specs = []
                 current = comparison.get("current")
                 if isinstance(current, dict):
-                    card_specs.append(("当前默认筛选条件", current, "current", None))
+                    card_specs.append(("当前默认筛选条件", current, "current"))
                 for baseline_key, baseline_label in (("previousPeriod", "环比周期"), ("industryBenchmark", "同周期全行业")):
                     fact = comparison.get(baseline_key)
                     if isinstance(fact, dict):
-                        card_specs.append((baseline_label, fact, "baseline", fact))
-                for card_label, fact, value_source, change_fact in card_specs:
+                        card_specs.append((baseline_label, fact, "baseline"))
+                for card_label, fact, value_source in card_specs:
                     value_parts = []
                     for key, label in (("show_cnt", "曝光总量"), ("ctr", "CTR"), ("cvr", "CVR"), ("play_3s_rate", "3 秒完播率")):
                         value = (
@@ -585,24 +586,12 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
                             else _chapter01_baseline_metric_value(fact, key)
                         )
                         formatted = _format_chapter01_exposure(value) if key == "show_cnt" else _format_chapter01_percentage(value)
+                        if value_source != "current" and isinstance(current, dict):
+                            rate = _chapter01_rate_against_current(current, fact, key)
+                            if rate is not None:
+                                formatted += f"（变化率 {_format_chapter01_percentage(rate, signed=True)}）"
                         value_parts.append(f"{label}：{formatted}")
                     lines.extend([f"##### {card_label}", "", f"- 真实值：{'；'.join(value_parts)}。", ""])
-                    if change_fact is None:
-                        lines.extend(["- 变化：当前周期为比较基准。", ""])
-                    else:
-                        metric_parts = []
-                        metrics = change_fact.get("metrics", {}) if isinstance(change_fact.get("metrics"), dict) else {}
-                        for key, label in (("show_cnt", "曝光"), ("ctr", "CTR"), ("cvr", "CVR"), ("play_3s_rate", "3 秒完播率")):
-                            metric = metrics.get(key, {})
-                            if not isinstance(metric, dict):
-                                continue
-                            delta = metric.get("delta")
-                            if delta is None:
-                                continue
-                            formatted = _format_chapter01_exposure(delta, signed=True) if key == "show_cnt" else _format_chapter01_percentage(delta, signed=True)
-                            metric_parts.append(f"{label}：{formatted}")
-                        sample_text = f"当前 {change_fact.get('currentSampleCount', '-')} 条，对比 {change_fact.get('baselineSampleCount', '-')} 条"
-                        lines.extend([f"- 变化：{sample_text}；{'；'.join(metric_parts) or '指标不可用'}。", ""])
         hot_insight = item.get("hotMaterialInsight")
         if isinstance(hot_insight, dict) and hot_insight.get("summary"):
             lines.extend(["#### 爆款素材洞察", "", hot_insight["summary"], ""])

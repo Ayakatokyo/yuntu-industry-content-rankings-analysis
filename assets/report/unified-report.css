@@ -1698,8 +1698,7 @@ body.unified-report {
   font-size: 0.86rem;
 }
 
-.unified-yuntu .chapter01-comparison-card-values,
-.unified-yuntu .chapter01-comparison-card-change {
+.unified-yuntu .chapter01-comparison-card-values {
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--unified-line);
@@ -1714,13 +1713,6 @@ body.unified-report {
 .unified-yuntu .chapter01-comparison-card .chapter01-comparison-facts {
   padding-left: 18px;
   font-size: 0.78rem;
-}
-
-.unified-yuntu .chapter01-comparison-card-samples,
-.unified-yuntu .chapter01-comparison-card-empty {
-  margin: 0 0 4px;
-  color: var(--unified-muted);
-  font-size: 0.76rem;
 }
 
 .unified-yuntu .chapter01-comparison-group:last-child {

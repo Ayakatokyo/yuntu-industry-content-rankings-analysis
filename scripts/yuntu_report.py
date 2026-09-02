@@ -801,6 +801,106 @@ def _highlight_failure_reasons(fact_pack):
     return "、".join(sorted(reasons))
 
 
+def _validate_highlight_classification_groups(groups, known_refs, *, mode):
+    if not isinstance(groups, list):
+        raise YuntuReportError(f"{mode} groups must be a list")
+    actual_refs = []
+    categories = []
+    for group in groups:
+        if not isinstance(group, dict):
+            raise YuntuReportError(f"{mode} groups items must be objects")
+        category = group.get("category")
+        if not isinstance(category, str) or not category.strip():
+            raise YuntuReportError(f"{mode} group category is required")
+        if category in categories:
+            raise YuntuReportError(f"{mode} group categories must be unique")
+        categories.append(category)
+        if mode == "batchClassification":
+            for field in ("label", "rule"):
+                if not isinstance(group.get(field), str) or not group[field].strip():
+                    raise YuntuReportError(f"{mode} group {field} is required")
+        elif category not in HIGHLIGHT_RENDER_CATEGORY_ORDER:
+            raise YuntuReportError("standardClassification group category is invalid")
+        refs = group.get("frame_refs")
+        if not isinstance(refs, list) or not refs or not all(isinstance(ref, str) for ref in refs):
+            raise YuntuReportError(f"{mode} groups require frame_refs")
+        if not set(refs).issubset(known_refs):
+            raise YuntuReportError(f"{mode} frame reference is invalid")
+        patterns = group.get("common_patterns")
+        directions = group.get("derivative_directions")
+        if not isinstance(patterns, list) or not all(isinstance(item, dict) for item in patterns):
+            raise YuntuReportError(f"{mode} common_patterns must be structured objects")
+        if not isinstance(directions, list) or len(patterns) != len(directions):
+            raise YuntuReportError(f"{mode} common_patterns and derivative_directions must have matching counts")
+        for pattern, direction in zip(patterns, directions):
+            for item, label in ((pattern, "common pattern"), (direction, "derivative direction")):
+                if not all(isinstance(item.get(key), str) and item[key].strip() for key in ("title", "body")):
+                    raise YuntuReportError(f"{mode} {label} requires title and body")
+                item_refs = item.get("frame_refs")
+                if not isinstance(item_refs, list) or not item_refs or not set(item_refs).issubset(set(refs)):
+                    raise YuntuReportError(f"{mode} {label} frame references are invalid")
+                _validate_deep_dive_text(item["title"], f"{mode} {label} title")
+                _validate_deep_dive_text(item["body"], f"{mode} {label} body")
+        actual_refs.extend(refs)
+    if len(actual_refs) != len(set(actual_refs)) or set(actual_refs) != known_refs:
+        raise YuntuReportError(f"{mode} must classify each successful frame exactly once")
+    if mode == "standardClassification":
+        expected_order = [category for category in HIGHLIGHT_RENDER_CATEGORY_ORDER if category in categories]
+        if categories != expected_order:
+            raise YuntuReportError("standardClassification groups must use portrait, product, other order")
+
+
+def _validate_highlight_dual_classification(dashboard, successful_frames):
+    fields = ("frameUnderstanding", "standardClassification", "batchClassification")
+    present = [field for field in fields if field in dashboard]
+    if not present:
+        return
+    if len(present) != len(fields):
+        raise YuntuReportError("highlightDashboard must include frameUnderstanding, standardClassification, and batchClassification together")
+    known_refs = {frame["frame_ref"] for frame in successful_frames}
+    understanding = dashboard["frameUnderstanding"]
+    if not isinstance(understanding, list):
+        raise YuntuReportError("frameUnderstanding must be a list")
+    understanding_refs = []
+    for item in understanding:
+        if not isinstance(item, dict) or not isinstance(item.get("frame_ref"), str):
+            raise YuntuReportError("frameUnderstanding items must include frame_ref")
+        ref = item["frame_ref"]
+        if ref not in known_refs:
+            raise YuntuReportError("frameUnderstanding frame reference is invalid")
+        if item.get("status") not in {"complete", "unavailable"}:
+            raise YuntuReportError("frameUnderstanding status is invalid")
+        if item["status"] == "unavailable":
+            if not isinstance(item.get("failure_reason"), str) or not item["failure_reason"].strip():
+                raise YuntuReportError("frameUnderstanding unavailable items require failure_reason")
+        else:
+            required_fields = ("subject", "visual_focus", "human_product_relation", "action", "composition", "information_expression")
+            if not all(isinstance(item.get(field), str) and item[field].strip() for field in required_fields):
+                raise YuntuReportError("frameUnderstanding complete items require visual observations")
+        understanding_refs.append(ref)
+    if len(understanding_refs) != len(set(understanding_refs)) or set(understanding_refs) != known_refs:
+        raise YuntuReportError("frameUnderstanding must cover each successful frame exactly once")
+
+    for mode in ("standardClassification", "batchClassification"):
+        classification = dashboard[mode]
+        if not isinstance(classification, dict):
+            raise YuntuReportError(f"{mode} must be an object")
+        status = classification.get("status")
+        if status not in {"complete", "unavailable"}:
+            raise YuntuReportError(f"{mode} status is invalid")
+        reason = classification.get("missing_reason")
+        if status == "unavailable" and (not isinstance(reason, str) or not reason.strip()):
+            raise YuntuReportError(f"{mode} unavailable requires missing_reason")
+        groups = classification.get("groups")
+        if status == "unavailable":
+            if groups not in ([], None):
+                raise YuntuReportError(f"{mode} unavailable must not contain groups")
+            continue
+        _validate_highlight_classification_groups(groups, known_refs, mode=mode)
+        if mode == "batchClassification" and (not isinstance(classification.get("rule"), str) or not classification["rule"].strip()):
+            raise YuntuReportError("batchClassification complete requires rule")
+
+
 def _validate_highlight_dashboard(analysis, fact_pack):
     successful_frames = _overview_highlight_frames(fact_pack)
     dashboard = analysis.get("highlightDashboard")
@@ -813,6 +913,7 @@ def _validate_highlight_dashboard(analysis, fact_pack):
             )
         # Historical reports may be re-rendered before visual analysis exists.
         return
+    _validate_highlight_dual_classification(dashboard, successful_frames)
     scoped_brands = dashboard.get("brands")
     if scoped_brands is not None:
         if not isinstance(scoped_brands, list) or not scoped_brands:

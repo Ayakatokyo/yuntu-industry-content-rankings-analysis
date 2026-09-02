@@ -427,6 +427,153 @@ class YuntuReportTests(unittest.TestCase):
         ]
         return analysis
 
+    def dual_classification_dashboard(self, *, batch_status="complete"):
+        refs = [
+            f"highlight:{material_id}:{frame_kind}"
+            for material_id in ("101", "102")
+            for frame_kind in ("cover:0", "click_peak:2")
+        ]
+        understanding = [
+            {
+                "frame_ref": ref,
+                "status": "complete",
+                "subject": "人物与产品主体",
+                "visual_focus": "画面中央主体",
+                "human_product_relation": "人物与产品同框",
+                "action": "展示并操作产品",
+                "composition": "近景居中构图",
+                "information_expression": "字幕与包装信息可见",
+                "failure_reason": "",
+            }
+            for ref in refs
+        ]
+        common = {
+            "title": "主体与构图",
+            "body": "画面主体和构图信息清晰，可作为同批次分类的可观察依据。",
+            "frame_refs": refs,
+        }
+        direction = {
+            "title": "验证主体呈现",
+            "body": "改写动作是保持主体前置，变体方式是比较人物先出场与产品先出场，验证指标为短时播放率与点击指数。",
+            "frame_refs": refs,
+        }
+        standard_group = {
+            "category": "portrait",
+            "frame_refs": refs,
+            "common_patterns": [common],
+            "derivative_directions": [direction],
+        }
+        batch_group = {
+            "category": "主体协同",
+            "label": "主体协同",
+            "rule": "人物与产品共同构成视觉焦点且关系可辨识。",
+            "frame_refs": refs,
+            "common_patterns": [common],
+            "derivative_directions": [direction],
+        }
+        batch = {
+            "status": batch_status,
+            "missing_reason": "" if batch_status == "complete" else "整批画面理解证据不足",
+            "rule": "按主体协同关系与信息焦点对本批次画面分组。",
+            "groups": [batch_group] if batch_status == "complete" else [],
+        }
+        return {
+            "frameUnderstanding": understanding,
+            "standardClassification": {
+                "status": "complete",
+                "missing_reason": "",
+                "groups": [standard_group],
+            },
+            "batchClassification": batch,
+            "groups": [standard_group],
+        }
+
+    def test_validate_dual_highlight_classification_covers_every_successful_frame_once(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"] = self.dual_classification_dashboard()
+        fact_pack = self.deep_dive_fact_pack()
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+
+            report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+        duplicate = copy.deepcopy(analysis)
+        duplicate["highlightDashboard"]["batchClassification"]["groups"][0]["frame_refs"] = [
+            *duplicate["highlightDashboard"]["batchClassification"]["groups"][0]["frame_refs"],
+            "highlight:101:cover:0",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duplicate.json"
+            path.write_text(json.dumps(duplicate, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "batchClassification.*exactly once"):
+                report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+    def test_validate_dual_highlight_classification_requires_unavailable_reason(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"] = self.dual_classification_dashboard(batch_status="unavailable")
+        analysis["highlightDashboard"]["batchClassification"]["missing_reason"] = ""
+        fact_pack = self.deep_dive_fact_pack()
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "batchClassification.*missing_reason"):
+                report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+    def test_render_report_renders_designated_dual_classification_switch_and_dynamic_labels(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"] = self.dual_classification_dashboard()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["filters"] = {"brands": ["WONDERLAB/万益蓝"]}
+        for fact in fact_pack["materialFacts"]:
+            fact["title"] = f"WONDERLAB/万益蓝 {fact['material_id']}"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack=fact_pack,
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-highlight-classification-tab', rendered)
+        self.assertIn('>标准分类<', rendered)
+        self.assertIn('>本批次标准<', rendered)
+        self.assertIn("主体协同 · 4 帧", rendered)
+        self.assertIn("分类规则：按主体协同关系与信息焦点对本批次画面分组。", rendered)
+
+    def test_render_report_disables_unavailable_batch_classification_with_reason(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"] = self.dual_classification_dashboard(batch_status="unavailable")
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["filters"] = {"brands": ["燕之屋"]}
+        for fact in fact_pack["materialFacts"]:
+            fact["title"] = f"燕之屋 {fact['material_id']}"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack=fact_pack,
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-highlight-classification-tab', rendered)
+        self.assertIn('disabled aria-disabled="true"', rendered)
+        self.assertIn("整批画面理解证据不足", rendered)
+
     def test_render_report_writes_conclusion_only_report_without_evidence(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:

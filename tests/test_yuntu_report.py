@@ -457,6 +457,32 @@ class YuntuReportTests(unittest.TestCase):
             "body": "改写动作是保持主体前置，变体方式是比较人物先出场与产品先出场，验证指标为短时播放率与点击指数。",
             "frame_refs": refs,
         }
+        batch_patterns = [
+            common,
+            {
+                "title": "动作与信息共同推进理解",
+                "body": "人物展示、产品操作和可见字幕在同一组画面中共同完成信息传递，动作节奏与包装识别形成连续的理解路径。",
+                "frame_refs": refs,
+            },
+            {
+                "title": "生活化场景承接主体关系",
+                "body": "画面以近景或居中构图保持人物与产品关系稳定，生活化场景为主体协同提供可识别的使用语境和内容落点。",
+                "frame_refs": refs,
+            },
+        ]
+        batch_directions = [
+            direction,
+            {
+                "title": "把动作顺序改造成分镜变量",
+                "body": "改写动作是拆分展示、操作和结果三个镜头；变体方式是比较人物先出场与产品先出场；验证指标为 3 秒播放率与点击指数。",
+                "frame_refs": refs,
+            },
+            {
+                "title": "把场景关系改造成版本变量",
+                "body": "改写动作是保持人物与产品同框；变体方式是比较居家、办公和餐桌场景；验证指标为点击指数、评论指数与完播率。",
+                "frame_refs": refs,
+            },
+        ]
         standard_group = {
             "category": "portrait",
             "frame_refs": refs,
@@ -468,8 +494,8 @@ class YuntuReportTests(unittest.TestCase):
             "label": "主体协同",
             "rule": "人物与产品共同构成视觉焦点且关系可辨识。",
             "frame_refs": refs,
-            "common_patterns": [common],
-            "derivative_directions": [direction],
+            "common_patterns": batch_patterns,
+            "derivative_directions": batch_directions,
         }
         batch = {
             "status": batch_status,
@@ -509,6 +535,20 @@ class YuntuReportTests(unittest.TestCase):
             path = Path(directory) / "duplicate.json"
             path.write_text(json.dumps(duplicate, ensure_ascii=False), encoding="utf-8")
             with self.assertRaisesRegex(report.YuntuReportError, "batchClassification.*exactly once"):
+                report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+    def test_validate_dual_highlight_classification_requires_exactly_three_pairs(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"] = self.dual_classification_dashboard()
+        analysis["highlightDashboard"]["batchClassification"]["groups"][0]["common_patterns"] = analysis["highlightDashboard"]["batchClassification"]["groups"][0]["common_patterns"][:2]
+        analysis["highlightDashboard"]["batchClassification"]["groups"][0]["derivative_directions"] = analysis["highlightDashboard"]["batchClassification"]["groups"][0]["derivative_directions"][:2]
+        fact_pack = self.deep_dive_fact_pack()
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "batchClassification.*exactly 3"):
                 report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
 
     def test_validate_dual_highlight_classification_requires_unavailable_reason(self):

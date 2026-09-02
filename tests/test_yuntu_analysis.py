@@ -729,6 +729,20 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("standardClassification", prompt)
         self.assertIn("batchClassification", prompt)
 
+    def test_highlight_batch_taxonomy_requires_three_paired_insights(self):
+        analysis = load_module()
+
+        schema = analysis._highlight_output_schema()
+        batch_group = schema["properties"]["batchClassification"]["properties"]["groups"]["items"]
+        self.assertEqual(batch_group["properties"]["common_patterns"]["minItems"], 3)
+        self.assertEqual(batch_group["properties"]["common_patterns"]["maxItems"], 3)
+        self.assertEqual(batch_group["properties"]["derivative_directions"]["minItems"], 3)
+        self.assertEqual(batch_group["properties"]["derivative_directions"]["maxItems"], 3)
+
+        prompt = analysis._prompt_text(filters={"brands": ["燕之屋"]})
+        self.assertIn("3 条共性洞察 + 3 条裂变方向", prompt)
+        self.assertIn("改写动作、变体方式和验证指标", prompt)
+
     def test_prepare_analysis_writes_report_projection_and_single_call_unit_inputs(self):
         analysis = load_module()
         records = [

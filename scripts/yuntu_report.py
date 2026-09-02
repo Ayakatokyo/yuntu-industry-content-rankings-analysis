@@ -832,6 +832,8 @@ def _validate_highlight_classification_groups(groups, known_refs, *, mode):
             raise YuntuReportError(f"{mode} common_patterns must be structured objects")
         if not isinstance(directions, list) or len(patterns) != len(directions):
             raise YuntuReportError(f"{mode} common_patterns and derivative_directions must have matching counts")
+        if mode == "batchClassification" and len(patterns) != 3:
+            raise YuntuReportError(f"{mode} common_patterns and derivative_directions must contain exactly 3 paired items")
         for pattern, direction in zip(patterns, directions):
             for item, label in ((pattern, "common pattern"), (direction, "derivative direction")):
                 if not all(isinstance(item.get(key), str) and item[key].strip() for key in ("title", "body")):

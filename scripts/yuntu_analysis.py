@@ -796,8 +796,8 @@ def _highlight_output_schema():
             "label": {"type": "string"},
             "rule": {"type": "string"},
             "frame_refs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
-            "common_patterns": {"type": "array", "items": direction_schema},
-            "derivative_directions": {"type": "array", "items": direction_schema},
+            "common_patterns": {"type": "array", "minItems": 3, "maxItems": 3, "items": direction_schema},
+            "derivative_directions": {"type": "array", "minItems": 3, "maxItems": 3, "items": direction_schema},
         },
     }
     classification_schema = {

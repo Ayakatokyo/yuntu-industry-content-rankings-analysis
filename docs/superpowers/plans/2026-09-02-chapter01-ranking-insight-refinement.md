@@ -17,6 +17,7 @@
 - `dataSummary` 必须分别使用“环比看”和“与全行业大盘对比看”表达两种比较。
 - 爆款素材事实卡片不新增、不改版、不改变字段与交互。
 - 对比面板位于素材表现洞察和爆款素材洞察之间。
+- 三个筛选条件数据卡片桌面端横向 `1×3`，窄屏才堆叠。
 
 ### Task 1: 移除素材级曝光确定值并保留区间
 
@@ -71,6 +72,7 @@
 - [ ] **Step 3: 运行定向报告测试确认失败。**
 - [ ] **Step 4: 修改渲染层标题和按钮文案，复用现有折叠控件，将比较面板移动到两个洞察区块之间。**
 - [ ] **Step 5: 调整比较事实渲染为当前指标、环比变化、行业变化三段，并对曝光数值使用统一中文单位格式化。**
+- [ ] **Step 5a: 将三个筛选条件卡片设置为桌面端 `1×3` 横向网格，窄屏使用现有断点堆叠。**
 - [ ] **Step 6: 保持爆款卡片渲染函数、数据字段、排序和交互不变。**
 - [ ] **Step 7: 运行 `python -m unittest tests.test_yuntu_presentation tests.test_yuntu_report -v`。**
 - [ ] **Step 8: 提交 `git add scripts/yuntu_presentation.py scripts/yuntu_report_sections.py scripts/yuntu_report.py assets/report/unified-report.css tests/test_yuntu_presentation.py tests/test_yuntu_report.py && git commit -m "feat: refine chapter01 insight comparison panel"`。**

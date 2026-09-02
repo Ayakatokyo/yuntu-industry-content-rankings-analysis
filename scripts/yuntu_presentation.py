@@ -757,15 +757,6 @@ def _project_chapter05(analysis, fact_pack):
         if set(observations_by_ref) != frame_refs or len(observations_by_ref) != len(observations):
             raise YuntuPresentationError("material deep dive frame coverage is invalid")
         second_level = _project_second_level((fact.get("secondLevelBreakdown") or {}).get("metrics", []))
-        seconds_by_metric = {item["id"]: {point["second"] for point in item["points"]} for item in second_level["metrics"]}
-        second_observations = dive.get("second_level_observations", [])
-        for observation in second_observations:
-            if not isinstance(observation, dict):
-                raise YuntuPresentationError("second level observation is invalid")
-            name = observation.get("trend_name")
-            seconds = observation.get("evidence_seconds", [])
-            if name not in seconds_by_metric or not isinstance(seconds, list) or not set(seconds).issubset(seconds_by_metric[name]):
-                raise YuntuPresentationError("second level observation seconds are invalid")
         status = "complete" if frames and all(item["available"] for item in second_level["metrics"]) else "partial"
         panel_id = f"material-{material_id}"
         tabs.append({"materialId": material_id, "label": f"#{fact.get('rank', '-')} {fact.get('title') or material_id}", "panelId": panel_id})
@@ -783,7 +774,6 @@ def _project_chapter05(analysis, fact_pack):
             "frameFailures": frame_failures,
             "frameObservations": [observations_by_ref[frame["frameRef"]] for frame in frames],
             "secondLevel": second_level,
-            "secondLevelObservations": deepcopy(second_observations),
             "availability": {"status": status, "reasons": []},
         })
     return {"materialTabs": tabs, "panels": panels}, {

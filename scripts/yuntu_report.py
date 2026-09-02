@@ -1102,6 +1102,9 @@ def _validate_material_deep_dives(analysis, fact_pack):
         if material_id not in selected_ids or material_id in dives_by_id:
             raise YuntuReportError("materialDeepDives material_id must be selected and unique")
         dives_by_id[material_id] = dive
+        # Historical analysis files may still carry the retired AI index summaries.
+        # Drop them from the normalized analysis before Presentation/report output.
+        dive.pop("second_level_observations", None)
         frames = [
             frame for frame in facts[material_id].get("highlightFrames", [])
             if isinstance(frame, dict) and frame.get("available")
@@ -1123,36 +1126,6 @@ def _validate_material_deep_dives(analysis, fact_pack):
         if len(observation_refs) != len(set(observation_refs)) or set(observation_refs) != known_refs:
             raise YuntuReportError("materialDeepDives must observe each successful frame exactly once")
 
-        breakdown = facts[material_id].get("secondLevelBreakdown", {})
-        metrics = breakdown.get("metrics", []) if isinstance(breakdown, dict) else []
-        points_by_trend = {
-            metric.get("trend_name"): {
-                point.get("second") for point in metric.get("points", [])
-                if isinstance(point, dict) and isinstance(point.get("second"), int)
-            }
-            for metric in metrics if isinstance(metric, dict)
-        }
-        observations = dive.get("second_level_observations")
-        if not isinstance(observations, list):
-            raise YuntuReportError("materialDeepDives second_level_observations must be a list")
-        seen_trends = set()
-        for observation in observations:
-            if not isinstance(observation, dict):
-                raise YuntuReportError("materialDeepDives second_level_observations items must be objects")
-            trend_name = observation.get("trend_name")
-            if trend_name not in SECOND_LEVEL_TRENDS or trend_name in seen_trends:
-                raise YuntuReportError("materialDeepDives second_level_observations trend_name is invalid")
-            seen_trends.add(trend_name)
-            _validate_ai_text(
-                observation.get("summary"),
-                "materialDeepDives second-level summary",
-                "second_level",
-            )
-            seconds = observation.get("evidence_seconds")
-            if not isinstance(seconds, list) or not all(isinstance(second, int) for second in seconds):
-                raise YuntuReportError("materialDeepDives evidence_seconds must be integer seconds")
-            if not set(seconds).issubset(points_by_trend.get(trend_name, set())):
-                raise YuntuReportError("materialDeepDives evidence_seconds must exist in the material trend")
     if set(dives_by_id) != set(selected_ids):
         raise YuntuReportError("materialDeepDives must cover every selected material")
 

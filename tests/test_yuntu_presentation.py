@@ -587,6 +587,7 @@ class YuntuPresentationTests(unittest.TestCase):
 
         self.assertEqual(panel["secondLevel"]["metricOrder"], ["点赞指数", "流失指数", "点击指数", "互动指数", "评论指数"])
         self.assertEqual(panel["secondLevel"]["metrics"][0]["points"][1]["second"], 2)
+        self.assertNotIn("secondLevelObservations", panel)
         self.assertEqual(panel["availability"]["status"], "complete")
 
     def test_rejects_unavailable_trend_without_reason(self):

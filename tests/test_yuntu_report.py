@@ -1916,23 +1916,36 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("tab.addEventListener('keydown'", rendered)
         self.assertIn("tabs.length - 1", rendered)
 
-    def test_render_report_rejects_invalid_material_deep_dive_frame_and_second(self):
+    def test_render_report_rejects_invalid_material_deep_dive_frame(self):
         report = load_module()
-        cases = (
-            ("frame", "highlight:102:cover:0", "exactly once"),
-            ("second", 9, "evidence_seconds"),
-        )
-        for kind, value, error in cases:
-            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
-                analysis = self.deep_dive_analysis()
-                if kind == "frame":
-                    analysis["materialDeepDives"][0]["frame_observations"][1]["frame_ref"] = value
-                else:
-                    analysis["materialDeepDives"][0]["second_level_observations"][0]["evidence_seconds"] = [value]
-                path = Path(directory) / "analysis.json"
-                path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-                with self.assertRaisesRegex(report.YuntuReportError, error):
-                    report.render_report(analysis_json=path, output_dir=Path(directory) / "report", fact_pack=self.deep_dive_fact_pack())
+        with tempfile.TemporaryDirectory() as directory:
+            analysis = self.deep_dive_analysis()
+            analysis["materialDeepDives"][0]["frame_observations"][1]["frame_ref"] = "highlight:102:cover:0"
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "exactly once"):
+                report.render_report(analysis_json=path, output_dir=Path(directory) / "report", fact_pack=self.deep_dive_fact_pack())
+
+    def test_render_report_ignores_legacy_second_level_ai_observations(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis = self.deep_dive_analysis()
+            analysis["materialDeepDives"][0]["second_level_observations"][0]["evidence_seconds"] = [999]
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(
+                analysis_json=path,
+                output_dir=root / "report",
+                fact_pack=self.deep_dive_fact_pack(),
+            )
+            data = json.loads((root / "report" / "final-report-data.json").read_text(encoding="utf-8"))
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertNotIn("second_level_observations", data["analysis"]["materialDeepDives"][0])
+        self.assertNotIn("secondLevelObservations", data["presentation"]["chapters"]["chapter05"]["panels"][0])
+        self.assertIn('class="second-level-timeline raw-fact-card"', rendered)
+        self.assertIn('data-second-level-metric="点赞指数"', rendered)
 
     def test_render_report_omits_ai_secondary_analysis_from_deep_dive(self):
         report = load_module()

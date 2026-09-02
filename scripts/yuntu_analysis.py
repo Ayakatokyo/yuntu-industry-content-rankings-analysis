@@ -861,7 +861,6 @@ def _material_deep_dive_output_schema(fact_pack):
             "required": [
                 "material_id",
                 "frame_observations",
-                "second_level_observations",
             ],
             "properties": {
                 "material_id": {"type": "string", "enum": material_ids},
@@ -874,25 +873,6 @@ def _material_deep_dive_output_schema(fact_pack):
                         "properties": {
                             "frame_ref": {"type": "string"},
                             "observation": {"type": "string"},
-                        },
-                    },
-                },
-                "second_level_observations": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["trend_name", "summary", "evidence_seconds"],
-                        "properties": {
-                            "trend_name": {
-                                "type": "string",
-                                "enum": list(SECOND_LEVEL_TRENDS),
-                            },
-                            "summary": {"type": "string"},
-                            "evidence_seconds": {
-                                "type": "array",
-                                "items": {"type": "integer"},
-                            },
                         },
                     },
                 },

@@ -881,7 +881,7 @@ def render_material_deep_dive(
             material_id = str(panel.get("materialId", "")); selected_material_ids.append(material_id)
             facts[material_id] = {"material_id": material_id, "rank": panel.get("rank", "-"), "title": panel.get("title", ""), "exposure": panel.get("exposure", {}), "metrics": panel.get("metrics", {}), "people_tags": panel.get("peopleTags", []), "material_tags": panel.get("materialTags", []), "listDataAvailability": panel.get("listDataAvailability", {}), "secondLevelBreakdown": {"metrics": [{"trend_name": metric.get("id"), "available": metric.get("available"), "missing_reason": metric.get("reason", ""), "points": metric.get("points", []), "high_points": metric.get("highPoints", []), "loss_points": metric.get("lossPoints", [])} for metric in panel.get("secondLevel", {}).get("metrics", [])]}}
             material_frames[material_id] = [{"frame_ref": frame.get("frameRef"), "available": True, "relative_path": frame.get("relativePath"), "second": frame.get("second"), "frame_type": frame.get("frameType"), "peak_rank": frame.get("peakRank"), "click_value": frame.get("clickValue")} for frame in panel.get("frames", [])] + [{"available": False, "failure_reason": reason} for reason in panel.get("frameFailures", [])]
-            deep_dives.append({"material_id": material_id, "frame_observations": panel.get("frameObservations", []), "second_level_observations": panel.get("secondLevelObservations", [])})
+            deep_dives.append({"material_id": material_id, "frame_observations": panel.get("frameObservations", [])})
     if not isinstance(deep_dives, list) or not deep_dives:
         return '<p class="data-note">暂无单素材深度分析数据。</p>'
     dives_by_id = {str(dive.get("material_id")): dive for dive in deep_dives}

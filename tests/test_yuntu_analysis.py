@@ -889,6 +889,14 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(
             direction_schema["required"], ["title", "body", "frame_refs"]
         )
+        deep_dive_schema = output_schema["properties"]["materialDeepDives"]["items"]
+        self.assertEqual(
+            deep_dive_schema["required"], ["material_id", "frame_observations"]
+        )
+        self.assertEqual(
+            set(deep_dive_schema["properties"]),
+            {"material_id", "frame_observations"},
+        )
         self.assertEqual(
             [item["outputField"] for item in unit_manifest["units"]],
             [
@@ -960,6 +968,8 @@ class YuntuAnalysisTests(unittest.TestCase):
         for metric in ("曝光", "CTR", "CVR", "3 秒播放率"):
             self.assertIn(metric, prompt)
         self.assertNotIn("读取同目录的 `yuntu-analysis-data.json`", prompt)
+        self.assertNotIn("second_level_observations", prompt)
+        self.assertNotIn("evidence_seconds", prompt)
 
     def test_prepare_analysis_records_standard_highlight_failure_states(self):
         analysis = load_module()

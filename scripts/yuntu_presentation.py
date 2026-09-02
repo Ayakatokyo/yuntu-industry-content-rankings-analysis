@@ -12,6 +12,17 @@ REPORT_TITLE = "云图行业内容榜单分析"
 SECTION_IDS = ("chapter01", "chapter02", "chapter04", "chapter05")
 REPORT_STATUSES = {"complete", "partial", "unavailable"}
 HIGHLIGHT_CATEGORIES = ("portrait", "product", "scene", "text_overlay", "other")
+HIGHLIGHT_CLASSIFICATION_MODE_BRANDS = {
+    "所有指定品牌",
+    "全品牌",
+    "joyoungsoymilk",
+    "九阳豆浆",
+    "燕之屋",
+    "wonderlab",
+    "万益蓝",
+    "wonderlab/万益蓝",
+    "万益蓝/wonderlab",
+}
 SECOND_LEVEL_METRIC_ORDER = ("点赞指数", "流失指数", "点击指数", "互动指数", "评论指数")
 
 
@@ -527,6 +538,92 @@ def _project_scoped_highlight_brands(scoped_brands, available, brand_order):
     return {"scopeId": "all", "brands": projected, "availability": {"status": "complete", "reasons": []}}
 
 
+def _is_designated_highlight_mode_brand(brand):
+    normalized = _text(brand).replace(" ", "").lower()
+    return normalized in HIGHLIGHT_CLASSIFICATION_MODE_BRANDS
+
+
+def _classification_mode_categories(classification, available, brand, brand_order):
+    status = classification.get("status") if isinstance(classification, dict) else None
+    reason = _text(classification.get("missing_reason")) if isinstance(classification, dict) else ""
+    mode = {
+        "id": "batch",
+        "label": "本批次标准",
+        "available": status == "complete",
+        "reason": reason,
+        "rule": _text(classification.get("rule")) if isinstance(classification, dict) else "",
+        "categories": [],
+    }
+    if status != "complete":
+        return mode
+    scope_refs = set(available)
+    if brand not in {"全品牌", "所有指定品牌"}:
+        scope_refs = {
+            ref for ref, frame in available.items()
+            if brand in match_brands_from_title(frame.get("title"), brand_order)
+        }
+    merged = {}
+    for group in classification.get("groups", []):
+        if not isinstance(group, dict):
+            continue
+        refs = [ref for ref in group.get("frame_refs", []) if ref in scope_refs]
+        if not refs:
+            continue
+        category_id = _text(group.get("category"))
+        if not category_id:
+            continue
+        target = merged.setdefault(category_id, {
+            "id": category_id,
+            "label": _text(group.get("label")) or category_id,
+            "rule": _text(group.get("rule")) or mode["rule"],
+            "commonConclusion": [],
+            "derivativeDirections": [],
+            "frames": [],
+        })
+        target["commonConclusion"].extend(deepcopy(group.get("common_patterns", [])))
+        target["derivativeDirections"].extend(deepcopy(group.get("derivative_directions", [])))
+        for ref in refs:
+            frame_card = _frame_card(available[ref])
+            frame_card["brand"] = "、".join(match_brands_from_title(frame_card.get("title"), brand_order)) or "其他品牌"
+            target["frames"].append(frame_card)
+        ref_set = set(refs)
+        for item in target["commonConclusion"] + target["derivativeDirections"]:
+            if isinstance(item, dict):
+                item["frame_refs"] = [ref for ref in item.get("frame_refs", refs) if ref in ref_set] or refs
+    mode["categories"] = list(merged.values())
+    return mode
+
+
+def _attach_highlight_classification_modes(chapter, dashboard, available, brand_order):
+    if not isinstance(dashboard, dict) or not all(
+        field in dashboard for field in ("standardClassification", "batchClassification")
+    ):
+        return chapter
+    for brand in chapter.get("brands", []):
+        if not isinstance(brand, dict) or not _is_designated_highlight_mode_brand(brand.get("brand")):
+            continue
+        standard_categories = deepcopy(brand.get("categories", []))
+        for category in standard_categories:
+            category.setdefault("rule", "人物 / 产品 / 其他的固定视觉主体分类")
+        batch_mode = _classification_mode_categories(
+            dashboard["batchClassification"], available, brand.get("brand"), brand_order
+        )
+        brand["classificationModes"] = [
+            {
+                "id": "standard",
+                "label": "标准分类",
+                "available": True,
+                "reason": "",
+                "rule": "人物 / 产品 / 其他的固定视觉主体分类",
+                "categories": standard_categories,
+            },
+            batch_mode,
+        ]
+    if any("classificationModes" in brand for brand in chapter.get("brands", [])):
+        chapter["defaultClassificationMode"] = "standard"
+    return chapter
+
+
 def _project_chapter04(analysis, fact_pack):
     available = _available_frames(fact_pack)
     dashboard = analysis.get("highlightDashboard", {}) if isinstance(analysis, dict) else {}
@@ -537,7 +634,8 @@ def _project_chapter04(analysis, fact_pack):
         scoped_brands = dashboard.get("brands") if isinstance(dashboard, dict) else None
         if scoped_brands is not None:
             brand_order = [str(brand).strip() for brand in (fact_pack.get("filters", {}) or {}).get("brands", []) if str(brand).strip()]
-            return _project_scoped_highlight_brands(scoped_brands, available, brand_order)
+            chapter = _project_scoped_highlight_brands(scoped_brands, available, brand_order)
+            return _attach_highlight_classification_modes(chapter, dashboard, available, brand_order)
         raise YuntuPresentationError("highlight dashboard is required")
     seen, categories, previous_index = [], [], -1
     merged = {}
@@ -595,7 +693,8 @@ def _project_chapter04(analysis, fact_pack):
     # New projections use the all-brand tab as the single chapter-level source.
     # The renderer still accepts historical payloads that contain top-level
     # ``categories`` as a read-only compatibility fallback.
-    return {"scopeId": "all", "brands": ordered_brands, "availability": {"status": "complete", "reasons": []}}
+    chapter = {"scopeId": "all", "brands": ordered_brands, "availability": {"status": "complete", "reasons": []}}
+    return _attach_highlight_classification_modes(chapter, dashboard, available, brand_order)
 
 
 def _project_second_level(metrics):

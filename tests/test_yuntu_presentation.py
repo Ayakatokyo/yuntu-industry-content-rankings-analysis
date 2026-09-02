@@ -126,6 +126,92 @@ class YuntuPresentationTests(unittest.TestCase):
             ],
         }
 
+    def dual_highlight_analysis(self):
+        analysis = self.analysis()
+        refs = [
+            f"highlight:{material_id}:{frame_kind}"
+            for material_id in ("101", "102")
+            for frame_kind in ("cover:0", "click_peak:2")
+        ]
+        common = [{
+            "title": "主体与构图",
+            "body": "同批次画面主体与构图均可观察。",
+            "frame_refs": refs,
+        }]
+        directions = [{
+            "title": "验证主体协同",
+            "body": "改写动作是调整主体顺序，变体方式是比较人物先出场与产品先出场，验证指标为短时播放率。",
+            "frame_refs": refs,
+        }]
+        standard = {
+            "category": "portrait",
+            "frame_refs": refs,
+            "common_patterns": common,
+            "derivative_directions": directions,
+        }
+        batch = {
+            "category": "主体协同",
+            "label": "主体协同",
+            "rule": "人物与产品共同构成视觉焦点。",
+            "frame_refs": refs,
+            "common_patterns": common,
+            "derivative_directions": directions,
+        }
+        analysis["highlightDashboard"] = {
+            "frameUnderstanding": [
+                {
+                    "frame_ref": ref,
+                    "status": "complete",
+                    "subject": "主体",
+                    "visual_focus": "中心",
+                    "human_product_relation": "同框",
+                    "action": "展示",
+                    "composition": "居中",
+                    "information_expression": "字幕可见",
+                    "failure_reason": "",
+                }
+                for ref in refs
+            ],
+            "standardClassification": {"status": "complete", "missing_reason": "", "groups": [standard]},
+            "batchClassification": {
+                "status": "complete",
+                "missing_reason": "",
+                "rule": "按主体协同关系分组。",
+                "groups": [batch],
+            },
+            "groups": [standard],
+        }
+        return analysis
+
+    def test_projects_standard_and_batch_classification_modes_for_supported_brand(self):
+        facts = self.fact_pack()
+        facts["filters"]["brands"] = ["WONDERLAB/万益蓝"]
+        facts["materialFacts"][0]["title"] = "WONDERLAB/万益蓝 测试素材 101"
+        facts["materialFacts"][1]["title"] = "WONDERLAB/万益蓝 测试素材 102"
+
+        payload = build_yuntu_presentation(self.dual_highlight_analysis(), facts)
+
+        chapter04 = payload["chapters"]["chapter04"]
+        for brand in chapter04["brands"]:
+            self.assertEqual(
+                [mode["id"] for mode in brand["classificationModes"]],
+                ["standard", "batch"],
+            )
+        self.assertEqual(chapter04["defaultClassificationMode"], "standard")
+        self.assertEqual(chapter04["brands"][0]["classificationModes"][0]["categories"][0]["label"], "portrait")
+        self.assertEqual(chapter04["brands"][0]["classificationModes"][1]["categories"][0]["label"], "主体协同")
+
+    def test_omits_classification_modes_for_non_designated_brand(self):
+        facts = self.fact_pack()
+        facts["filters"]["brands"] = ["其他品牌"]
+        facts["materialFacts"][0]["title"] = "其他品牌 测试素材 101"
+        facts["materialFacts"][1]["title"] = "其他品牌 测试素材 102"
+
+        payload = build_yuntu_presentation(self.dual_highlight_analysis(), facts)
+
+        brand = next(item for item in payload["chapters"]["chapter04"]["brands"] if item["brand"] == "其他品牌")
+        self.assertNotIn("classificationModes", brand)
+
     def test_builds_a_versioned_json_serializable_projection(self):
         analysis = self.analysis()
         facts = self.fact_pack()

@@ -698,6 +698,7 @@ def render_highlight_insights(
                 patterns.append(normalized)
             converted_groups.append({
                 "category": category.get("id"),
+                "label": category.get("label", category.get("id")),
                 "frame_refs": refs,
                 "common_patterns": patterns,
                 "derivative_directions": category.get("derivativeDirections", []),
@@ -710,7 +711,21 @@ def render_highlight_insights(
             if not isinstance(brand, dict):
                 continue
             brand_frames, brand_dashboard = convert_groups(brand.get("categories", []))
-            brand_views.append({"brand": brand.get("brand", ""), "id": brand.get("id", ""), "frames": brand_frames, "dashboard": brand_dashboard})
+            modes = []
+            for mode in brand.get("classificationModes", []):
+                if not isinstance(mode, dict):
+                    continue
+                mode_frames, mode_dashboard = convert_groups(mode.get("categories", []))
+                modes.append({
+                    "id": mode.get("id", ""),
+                    "label": mode.get("label", ""),
+                    "available": mode.get("available") is True,
+                    "reason": mode.get("reason", ""),
+                    "rule": mode.get("rule", ""),
+                    "frames": mode_frames,
+                    "dashboard": mode_dashboard,
+                })
+            brand_views.append({"brand": brand.get("brand", ""), "id": brand.get("id", ""), "frames": brand_frames, "dashboard": brand_dashboard, "modes": modes})
         successful_frames = [frame for view in brand_views for frame in view["frames"]]
         dashboard = None
     elif isinstance(presentation, dict) and presentation.get("categories"):
@@ -728,20 +743,21 @@ def render_highlight_insights(
             if not isinstance(raw_group, dict):
                 continue
             category = category_aliases.get(raw_group.get("category"), raw_group.get("category"))
-            target = normalized_groups.setdefault(category, {"category": category, "frame_refs": [], "common_patterns": [], "derivative_directions": []})
+            target = normalized_groups.setdefault(category, {"category": category, "label": raw_group.get("label", category), "frame_refs": [], "common_patterns": [], "derivative_directions": []})
             target["frame_refs"].extend(raw_group.get("frame_refs", []))
             target["common_patterns"].extend(raw_group.get("common_patterns", []))
             target["derivative_directions"].extend(raw_group.get("derivative_directions", []))
-        normalized = {"groups": [normalized_groups[key] for key in ("portrait", "product", "other") if key in normalized_groups]}
+        normalized = {"groups": list(normalized_groups.values())}
         frames_by_ref = {frame["frame_ref"]: frame for frame in frames}
-        groups_to_render = [group for category in category_order for group in normalized["groups"] if group["category"] == category]
+        groups_to_render = normalized["groups"]
         tabs, panels = [], []
         for index, group in enumerate(groups_to_render):
             category = group["category"]
             selected = index == 0
             panel_id, tab_id = f"{id_prefix}-panel-{category}", f"{id_prefix}-tab-{category}"
             refs = group["frame_refs"]
-            tabs.append('<button type="button" role="tab" id="' + esc(tab_id) + '" aria-controls="' + esc(panel_id) + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1") + '" data-highlight-category-tab data-highlight-category-target="' + esc(panel_id) + '">' + esc(category_labels[category]) + " · " + esc(len(refs)) + " 帧</button>")
+            category_label = category_labels.get(category) or group.get("label") or category
+            tabs.append('<button type="button" role="tab" id="' + esc(tab_id) + '" aria-controls="' + esc(panel_id) + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1") + '" data-highlight-category-tab data-highlight-category-target="' + esc(panel_id) + '">' + esc(category_label) + " · " + esc(len(refs)) + " 帧</button>")
             cards = []
             for ref in refs:
                 frame = frames_by_ref[ref]
@@ -811,8 +827,28 @@ def render_highlight_insights(
             tab_id = f"highlight-brand-tab-{brand_id}"
             display_brand = "所有指定品牌" if view["brand"] == "全品牌" else view["brand"]
             brand_tabs.append('<button type="button" role="tab" id="' + esc(tab_id) + '" aria-controls="' + esc(panel_id) + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1") + '" data-highlight-brand-tab data-highlight-brand-target="' + esc(panel_id) + '">' + esc(display_brand) + '</button>')
-            category_html = render_groups(view["dashboard"]["groups"], view["frames"], id_prefix=f"highlight-{brand_id}")
-            brand_panels.append('<section class="highlight-brand-panel" role="tabpanel" id="' + esc(panel_id) + '" aria-labelledby="' + esc(tab_id) + '"' + (" hidden" if not selected else "") + ' data-highlight-brand-panel>' + category_html + '</section>')
+            modes = view.get("modes", [])
+            if modes:
+                mode_tabs = []
+                mode_panels = []
+                for mode_index, mode in enumerate(modes):
+                    mode_selected = mode_index == 0
+                    mode_id = f"highlight-{brand_id}-mode-{mode['id']}"
+                    mode_panel_id = f"{mode_id}-panel"
+                    disabled = " disabled aria-disabled=\"true\"" if not mode["available"] else ""
+                    title = f' title="{esc(mode["reason"])}"' if mode["reason"] else ""
+                    mode_tabs.append('<button type="button" role="tab" id="' + esc(mode_id) + '" aria-controls="' + esc(mode_panel_id) + '" aria-selected="' + str(mode_selected).lower() + '" tabindex="' + ("0" if mode_selected else "-1") + '" data-highlight-classification-tab data-highlight-classification-target="' + esc(mode_panel_id) + '"' + disabled + title + '>' + esc(mode["label"]) + '</button>')
+                    if mode["available"]:
+                        mode_content = render_groups(mode["dashboard"]["groups"], mode["frames"], id_prefix=mode_id)
+                        if mode["rule"]:
+                            mode_content = '<p class="highlight-classification-rule">分类规则：' + esc(mode["rule"]) + '</p>' + mode_content
+                    else:
+                        mode_content = '<p class="data-note">本批次标准不可用' + ("：" + esc(mode["reason"]) if mode["reason"] else "") + '。</p>'
+                    mode_panels.append('<div class="highlight-classification-panel" role="tabpanel" id="' + esc(mode_panel_id) + '" aria-labelledby="' + esc(mode_id) + '"' + (" hidden" if not mode_selected else "") + ' data-highlight-classification-panel>' + mode_content + '</div>')
+                classification_html = '<div class="highlight-classification-tabs" role="tablist" aria-label="分类标准">' + "".join(mode_tabs) + '</div><div class="highlight-classification-panels">' + "".join(mode_panels) + '</div>'
+            else:
+                classification_html = render_groups(view["dashboard"]["groups"], view["frames"], id_prefix=f"highlight-{brand_id}")
+            brand_panels.append('<section class="highlight-brand-panel" role="tabpanel" id="' + esc(panel_id) + '" aria-labelledby="' + esc(tab_id) + '"' + (" hidden" if not selected else "") + ' data-highlight-brand-panel>' + classification_html + '</section>')
         return '<div class="highlight-brand-tabs" role="tablist" aria-label="高光画面品牌分类">' + "".join(brand_tabs) + '</div><div class="highlight-brand-panels">' + "".join(brand_panels) + '</div>'
 
     if dashboard is None:

@@ -181,6 +181,7 @@
       });
 
       var highlightBrandTabs = document.querySelectorAll('[data-highlight-brand-tab]');
+      var highlightClassificationTabs = document.querySelectorAll('[data-highlight-classification-tab]');
       var highlightTabs = document.querySelectorAll('[data-highlight-category-tab]');
       function paginateHighlightPanel(panel, nextPage) {
         if (!panel) return;
@@ -239,6 +240,44 @@
           });
         }(highlightTabs[highlightIndex], highlightIndex));
       }
+      function activateHighlightClassification(tab, focus) {
+        var owner = tab.closest('[data-highlight-brand-panel]');
+        var scopedTabs = owner ? owner.querySelectorAll('[data-highlight-classification-tab]') : highlightClassificationTabs;
+        for (var classificationIndex = 0; classificationIndex < scopedTabs.length; classificationIndex += 1) {
+          var candidate = scopedTabs[classificationIndex];
+          var selected = candidate === tab;
+          var panel = document.getElementById(candidate.getAttribute('data-highlight-classification-target'));
+          candidate.setAttribute('aria-selected', selected ? 'true' : 'false');
+          candidate.tabIndex = selected ? 0 : -1;
+          if (panel) {
+            panel.hidden = !selected;
+            if (selected) {
+              var firstCategory = panel.querySelector('[data-highlight-category-tab]');
+              if (firstCategory) activateHighlightCategory(firstCategory, false);
+            }
+          }
+        }
+        if (focus) tab.focus();
+      }
+      for (var classificationIndex = 0; classificationIndex < highlightClassificationTabs.length; classificationIndex += 1) {
+        (function (tab, tabIndex) {
+          tab.addEventListener('click', function () {
+            if (!tab.disabled) activateHighlightClassification(tab, false);
+          });
+          tab.addEventListener('keydown', function (event) {
+            var direction = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+            if (event.key === 'Home' || event.key === 'End' || direction[event.key]) {
+              event.preventDefault();
+              var owner = tab.closest('[data-highlight-brand-panel]');
+              var scopedTabs = owner ? owner.querySelectorAll('[data-highlight-classification-tab]:not([disabled])') : highlightClassificationTabs;
+              if (!scopedTabs.length) return;
+              var localIndex = Array.prototype.indexOf.call(scopedTabs, tab);
+              var next = event.key === 'Home' ? 0 : event.key === 'End' ? scopedTabs.length - 1 : (localIndex + direction[event.key] + scopedTabs.length) % scopedTabs.length;
+              activateHighlightClassification(scopedTabs[next], true);
+            }
+          });
+        }(highlightClassificationTabs[classificationIndex], classificationIndex));
+      }
       function activateHighlightBrand(tab, focus) {
         for (var brandIndex = 0; brandIndex < highlightBrandTabs.length; brandIndex += 1) {
           var candidate = highlightBrandTabs[brandIndex];
@@ -249,8 +288,12 @@
           if (panel) {
             panel.hidden = !selected;
             if (selected) {
-              var firstCategory = panel.querySelector('[data-highlight-category-tab]');
-              if (firstCategory) activateHighlightCategory(firstCategory, false);
+              var firstClassification = panel.querySelector('[data-highlight-classification-tab]:not([disabled])');
+              if (firstClassification) activateHighlightClassification(firstClassification, false);
+              else {
+                var firstCategory = panel.querySelector('[data-highlight-category-tab]');
+                if (firstCategory) activateHighlightCategory(firstCategory, false);
+              }
             }
           }
         }

@@ -613,7 +613,7 @@ def render_audience_insights(
         scope_fact = chapter02_facts.get(scope_key, {})
         selected = index == 0
         tab_id, panel_id = f"chapter02-tab-{index}", f"chapter02-panel-{index}"
-        label = "全品牌" if scope_key == "all" else scope_fact.get("label", scope_key)
+        label = "所有指定品牌" if scope_key == "all" else scope_fact.get("label", scope_key)
         tabs.append(
             '<button type="button" role="tab" id="' + tab_id + '" aria-controls="' + panel_id
             + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1")
@@ -809,7 +809,8 @@ def render_highlight_insights(
             brand_id = str(view["id"] or f"highlight-brand-{index}")
             panel_id = f"highlight-brand-panel-{brand_id}"
             tab_id = f"highlight-brand-tab-{brand_id}"
-            brand_tabs.append('<button type="button" role="tab" id="' + esc(tab_id) + '" aria-controls="' + esc(panel_id) + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1") + '" data-highlight-brand-tab data-highlight-brand-target="' + esc(panel_id) + '">' + esc(view["brand"]) + '</button>')
+            display_brand = "所有指定品牌" if view["brand"] == "全品牌" else view["brand"]
+            brand_tabs.append('<button type="button" role="tab" id="' + esc(tab_id) + '" aria-controls="' + esc(panel_id) + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1") + '" data-highlight-brand-tab data-highlight-brand-target="' + esc(panel_id) + '">' + esc(display_brand) + '</button>')
             category_html = render_groups(view["dashboard"]["groups"], view["frames"], id_prefix=f"highlight-{brand_id}")
             brand_panels.append('<section class="highlight-brand-panel" role="tabpanel" id="' + esc(panel_id) + '" aria-labelledby="' + esc(tab_id) + '"' + (" hidden" if not selected else "") + ' data-highlight-brand-panel>' + category_html + '</section>')
         return '<div class="highlight-brand-tabs" role="tablist" aria-label="高光画面品牌分类">' + "".join(brand_tabs) + '</div><div class="highlight-brand-panels">' + "".join(brand_panels) + '</div>'

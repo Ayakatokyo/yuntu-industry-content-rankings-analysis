@@ -1095,6 +1095,9 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("02｜人群及营销卖点洞察", html)
         self.assertIn('data-chapter02-tab="all"', html)
         self.assertIn('data-chapter02-tab="WONDERLAB/万益蓝"', html)
+        chapter02_tabs = html.split('class="chapter02-tabs"', 1)[1].split('class="chapter02-panels"', 1)[0]
+        self.assertIn(">所有指定品牌</button>", chapter02_tabs)
+        self.assertNotIn(">全品牌</button>", chapter02_tabs)
         self.assertEqual(html.count('role="tabpanel" id="chapter02-panel-'), 2)
         self.assertIn("营销卖点汇总", html)
         self.assertIn('data-audience-records=', html)
@@ -1931,6 +1934,9 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("highlight-brand-tab-brand-u5c0f-u4ed9-u7096", rendered)
         self.assertIn("highlight-brand-tab-brand-u4e94-u4e2a-u5973-u535a-u58eb", rendered)
         self.assertIn('data-highlight-brand-tab', rendered)
+        highlight_tabs = rendered.split('class="highlight-brand-tabs"', 1)[1].split('class="highlight-brand-panels"', 1)[0]
+        self.assertIn(">所有指定品牌</button>", highlight_tabs)
+        self.assertNotIn(">全品牌</button>", highlight_tabs)
         self.assertIn('data-highlight-brand-panel', rendered)
         self.assertIn('aria-label="高光画面分类"', rendered)
 

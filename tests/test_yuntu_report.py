@@ -1052,6 +1052,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-audience-topn-label', html)
         self.assertIn('computeAudienceDimension', html)
         self.assertIn('renderAudienceTopN', html)
+        self.assertIn("if (input.value.trim() === '') return;", html)
         self.assertIn('function computeMarketingCategories(selectedRecords)', html)
         self.assertIn("new CustomEvent('audience-topn-change'", html)
         self.assertIn("addEventListener('audience-topn-change'", html)

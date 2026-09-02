@@ -672,6 +672,7 @@
         if (range) range.addEventListener('input', function () { renderAudienceTopN(range.value); });
         if (input) input.addEventListener('change', function () { renderAudienceTopN(input.value); });
         if (input) input.addEventListener('input', function () {
+          if (input.value.trim() === '') return;
           var value = Number(input.value);
           if (Number.isFinite(value)) renderAudienceTopN(value);
         });

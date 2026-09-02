@@ -23,7 +23,7 @@ flowchart TD
         B4[normalized/detail-records/<br/>规范化详情记录]
         C1[确定性高光候选<br/>0s 封面 + 点击指数最多 Top5 局部波峰]
         C2[视频下载与 FFmpeg 批量截帧<br/>失败不阻断后续报告]
-        C3[highlights/<material_id>/*.jpg<br/>本地 JPEG 高光资产]
+        C3[highlights/material_id/*.jpg<br/>本地 JPEG 高光资产]
         C4[highlights-manifest.json<br/>frame_ref、秒点、类型、峰值排名、失败原因]
         A --> B1
         B1 --> B2
@@ -53,8 +53,8 @@ flowchart TD
     subgraph M[提示词与 AI 分析]
         E1[prompts/yuntu-analysis-prompt.md<br/>单次模型调用；章节间事实包隔离]
         E2[模型实际查看每张成功 JPEG<br/>按视觉主体归类 portrait / product / other]
-        E3[highlightDashboard.brands[]<br/>第一项全品牌，其后按事实包品牌顺序]
-        E4[brands[].groups[]<br/>category、frame_refs、common_patterns、derivative_directions]
+        E3["highlightDashboard.brands[]<br/>第一项全品牌，其后按事实包品牌顺序"]
+        E4["brands[].groups[]<br/>category、frame_refs、common_patterns、derivative_directions"]
         E5[结构化洞察与裂变方向<br/>两组逐项对应，frame_refs 只能引用本组]
         D5 --> E1
         E1 --> E2
@@ -67,7 +67,7 @@ flowchart TD
     subgraph P[Presentation 投影与校验]
         G1[scripts/yuntu_report.py<br/>校验 dashboard、可用帧、路径与覆盖关系]
         G2[scripts/yuntu_presentation.py<br/>可用帧投影、标题品牌匹配、分类与文本投影]
-        G3[chapters.chapter04<br/>scopeId=all、brands[].categories[]、availability]
+        G3["chapters.chapter04<br/>scopeId=all、brands[].categories[]、availability"]
         G4[覆盖约束<br/>全品牌覆盖全部可用 frame_ref 且各出现一次；<br/>品牌范围只覆盖标题匹配该品牌的帧]
         E5 --> G1
         D2 --> G1

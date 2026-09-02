@@ -1677,6 +1677,10 @@ body.unified-report {
   margin: 0 0 14px;
 }
 
+.unified-yuntu .chapter01-comparison {
+  background: #fffdf8;
+}
+
 .unified-yuntu .chapter01-comparison-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -1487,6 +1487,9 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("padding: 10px;", card_rule)
         self.assertIn("border-radius: 6px;", card_rule)
         self.assertIn("background: #fff;", card_rule)
+        self.assertIn(".unified-yuntu .chapter01-comparison {", css)
+        comparison_rule = css.split(".unified-yuntu .chapter01-comparison {", 1)[1].split("}", 1)[0]
+        self.assertIn("background: #fffdf8;", comparison_rule)
         self.assertIn(
             "@media (max-width: 700px) {\n  .unified-yuntu .chapter01-comparison-grid {\n    grid-template-columns: 1fr;",
             css,

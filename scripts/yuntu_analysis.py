@@ -741,6 +741,31 @@ def _chapter02_output_schema(fact_pack):
 
 
 def _highlight_output_schema():
+    understanding_fields = (
+        "frame_ref",
+        "status",
+        "subject",
+        "visual_focus",
+        "human_product_relation",
+        "action",
+        "composition",
+        "information_expression",
+        "failure_reason",
+    )
+    frame_understanding_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(understanding_fields),
+        "properties": {
+            "frame_ref": {"type": "string"},
+            "status": {"type": "string", "enum": ["complete", "unavailable"]},
+            **{
+                field: {"type": "string"}
+                for field in understanding_fields
+                if field not in {"frame_ref", "status"}
+            },
+        },
+    }
     direction_schema = {
         "type": "object",
         "additionalProperties": False,
@@ -762,6 +787,37 @@ def _highlight_output_schema():
             "derivative_directions": {"type": "array", "items": direction_schema},
         },
     }
+    batch_group_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["category", "label", "rule", "frame_refs", "common_patterns", "derivative_directions"],
+        "properties": {
+            "category": {"type": "string"},
+            "label": {"type": "string"},
+            "rule": {"type": "string"},
+            "frame_refs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+            "common_patterns": {"type": "array", "items": direction_schema},
+            "derivative_directions": {"type": "array", "items": direction_schema},
+        },
+    }
+    classification_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["status", "missing_reason", "groups"],
+        "properties": {
+            "status": {"type": "string", "enum": ["complete", "unavailable"]},
+            "missing_reason": {"type": "string"},
+            "rule": {"type": "string"},
+            "groups": {"type": "array", "items": group_schema},
+        },
+    }
+    batch_classification_schema = {
+        **classification_schema,
+        "properties": {
+            **classification_schema["properties"],
+            "groups": {"type": "array", "items": batch_group_schema},
+        },
+    }
     brand_scope_schema = {
         "type": "object",
         "additionalProperties": False,
@@ -779,6 +835,12 @@ def _highlight_output_schema():
             "brands": {"type": "array", "minItems": 1, "items": brand_scope_schema},
             # Compatibility schema for historical analysis units; new prompts must emit brands.
             "groups": {"type": "array", "minItems": 1, "items": group_schema},
+            "frameUnderstanding": {
+                "type": "array",
+                "items": frame_understanding_schema,
+            },
+            "standardClassification": classification_schema,
+            "batchClassification": batch_classification_schema,
         },
     }
 
@@ -899,6 +961,21 @@ def _write_analysis_units(fact_pack, output):
             {
                 "reportScope": fact_pack["reportScopes"]["detail"],
                 "visualAssets": _model_visual_assets(fact_pack["visualAssets"]),
+                "frameUnderstandingContract": {
+                    "stage": "per_frame_visual_understanding_before_batch_classification",
+                    "requiredFields": [
+                        "frame_ref",
+                        "status",
+                        "subject",
+                        "visual_focus",
+                        "human_product_relation",
+                        "action",
+                        "composition",
+                        "information_expression",
+                        "failure_reason",
+                    ],
+                    "successfulFrameRule": "每张 available=true 的 JPEG 必须恰好有一条 understanding；无法可靠理解时 status=unavailable 并填写 failure_reason。",
+                },
                 "dataLimitations": [
                     item
                     for item in fact_pack["dataLimitations"]

@@ -701,6 +701,34 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(items["type"], "object")
         self.assertNotIn("anyOf", items)
 
+    def test_highlight_schema_declares_frame_understanding_and_dual_classification(self):
+        analysis = load_module()
+
+        schema = analysis._highlight_output_schema()
+
+        self.assertIn("frameUnderstanding", schema["properties"])
+        self.assertIn("standardClassification", schema["properties"])
+        self.assertIn("batchClassification", schema["properties"])
+        understanding = schema["properties"]["frameUnderstanding"]
+        self.assertEqual(understanding["items"]["required"], [
+            "frame_ref", "status", "subject", "visual_focus", "human_product_relation",
+            "action", "composition", "information_expression", "failure_reason",
+        ])
+        self.assertEqual(
+            schema["properties"]["batchClassification"]["properties"]["groups"]["items"]["properties"]["category"]["type"],
+            "string",
+        )
+
+    def test_highlight_prompt_requires_understanding_before_batch_taxonomy(self):
+        analysis = load_module()
+
+        prompt = analysis._prompt_text(filters={"brands": ["燕之屋"]})
+
+        self.assertIn("逐帧图片理解", prompt)
+        self.assertIn("先完成同一批次全部成功高光帧的图片理解", prompt)
+        self.assertIn("standardClassification", prompt)
+        self.assertIn("batchClassification", prompt)
+
     def test_prepare_analysis_writes_report_projection_and_single_call_unit_inputs(self):
         analysis = load_module()
         records = [
@@ -891,7 +919,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(highlight["outputField"], "highlightDashboard")
         self.assertEqual(
             set(highlight["evidence"]),
-            {"reportScope", "visualAssets", "dataLimitations"},
+            {"reportScope", "visualAssets", "frameUnderstandingContract", "dataLimitations"},
         )
         self.assertEqual(highlight["evidence"]["visualAssets"][0]["frame_ref"], frame["frame_ref"])
         self.assertEqual(deep_dive["outputField"], "materialDeepDives")
@@ -1083,7 +1111,9 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("固定提示词模板", prompt)
         self.assertNotIn("至少 80 个中文字符", prompt)
         self.assertNotIn("至少 4 条", prompt)
-        self.assertIn("portrait、product、other", prompt)
+        self.assertIn("portrait", prompt)
+        self.assertIn("product", prompt)
+        self.assertIn("other", prompt)
         self.assertIn("共性洞察", prompt)
         self.assertIn("裂变方向", prompt)
 

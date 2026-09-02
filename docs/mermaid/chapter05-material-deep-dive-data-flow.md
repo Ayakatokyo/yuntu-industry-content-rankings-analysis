@@ -4,44 +4,36 @@
 
 ```mermaid
 flowchart TD
-    A[批次选择范围<br/>batch-manifest.selectedMaterials + detailRecordPath]
-    B1[榜单素材主档<br/>normalized/list-records.json<br/>排名、标题、曝光区间、CTR/CVR/3秒播放率、标签]
-    B2[单素材详情<br/>normalized/detail-records/*.json<br/>五类秒级趋势、高点/流失点、脚本可用性]
-    B3[本地高光帧清单与 JPEG<br/>highlights manifest / assets]
+    A[已选素材与单素材详情]
 
-    A --> C[成功秒级拆解素材范围]
-    B1 --> C
+    A --> B1[素材基本信息<br/>标题、排名、曝光区间、CTR/CVR/3秒完播、标签]
+    A --> B2[单素材秒级数据<br/>五类指数、峰值/流失区间]
+    A --> B3[本地高光帧<br/>封面 + 点击指数峰值帧]
+
+    B1 --> C[第五部分事实包]
     B2 --> C
-    C --> D1[单素材事实 materialFacts<br/>标题、排名、展示指标、曝光区间、标签]
-    B2 --> D2[确定性秒级事实<br/>五类固定指数、按秒去重排序、峰值/流失区间]
-    B2 --> D3[确定性高光帧候选<br/>封面 + 点击指数局部峰值最多5帧]
-    B3 --> D3
-    D1 --> E[05事实源 / report-data.json]
-    D2 --> E
-    D3 --> E
-    E --> E1[05专用模型证据投影<br/>只保留 material_id、highlightFrames、secondLevelBreakdown]
-    E1 --> F[analysis-units/material-deep-dive-input.json]
+    B3 --> C
 
-    F --> G[共享提示词 + 输出Schema<br/>同一次模型调用读取四个章节输入分区]
-    G --> H1[AI逐帧观察<br/>每张 available=true 帧恰好一次]
-    G --> H2[AI秒级观察<br/>固定五项趋势 + 合法 evidence_seconds]
-    H1 --> I[materialDeepDives<br/>每项仅 material_id、frame_observations、second_level_observations]
-    H2 --> I
+    C --> C1[保留单素材展示事实]
+    C --> C2[确定性生成秒级拆解事实]
+    C --> C3[确定性生成高光帧可用性]
 
-    I --> J[分析结果校验<br/>素材覆盖、帧引用唯一性、证据秒数、文本禁用表达]
-    E --> K[PresentationReport v1 投影]
-    J --> K
-    K --> K1[chapter05.materialTabs<br/>左侧素材页签，默认首个入选素材]
-    K --> K2[chapter05.panels<br/>一素材一面板，事实与AI观察分层]
-    K2 --> L[render_material_deep_dive]
-    L --> M1[素材事实头部<br/>标题、排名、曝光区间、CTR/CVR/3秒播放率、标签]
-    L --> M2[高光帧观察视图<br/>桌面端3×2真实JPEG、帧选择与观察联动]
-    L --> M3[秒级拆解视图<br/>五项指标切换、原始折线、峰值/流失覆盖、范围滑杆]
-    L --> M4[脚本分析视图<br/>正式显示未接入状态，不补造脚本]
-    M1 --> N[离线报告产物<br/>final-report.html / final-report.md / final-report-data.json / presentation-report.json]
-    M2 --> N
-    M3 --> N
-    M4 --> N
+    C1 --> D[第五部分专用提示词输入]
+    C2 --> D
+    C3 --> D
+
+    D --> E1[AI 逐帧高光画面观察]
+    D --> E2[AI 五类指数秒级观察]
+    E1 --> F[第五部分 AI 分析结果]
+    E2 --> F
+
+    C --> G[前端报告渲染]
+    F --> G
+    G --> G1[单素材页签]
+    G --> G2[素材指标与标签]
+    G --> G3[高光帧观察<br/>3×2 真实帧 + 观察联动]
+    G --> G4[秒级拆解<br/>五项指标切换与原始曲线]
+    G --> G5[脚本分析<br/>未接入状态]
 ```
 
 ## 关键范围与事实边界

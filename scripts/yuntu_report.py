@@ -843,6 +843,13 @@ def _validate_highlight_classification_groups(groups, known_refs, *, mode):
                     raise YuntuReportError(f"{mode} {label} frame references are invalid")
                 _validate_deep_dive_text(item["title"], f"{mode} {label} title")
                 _validate_deep_dive_text(item["body"], f"{mode} {label} body")
+        if mode == "batchClassification":
+            pattern_text = [(item.get("title", "").strip(), item.get("body", "").strip()) for item in patterns]
+            direction_text = [(item.get("title", "").strip(), item.get("body", "").strip()) for item in directions]
+            if len(set(pattern_text)) != len(pattern_text):
+                raise YuntuReportError(f"{mode} common_patterns must contain distinct insights")
+            if len(set(direction_text)) != len(direction_text):
+                raise YuntuReportError(f"{mode} derivative_directions must contain distinct directions")
         actual_refs.extend(refs)
     if len(actual_refs) != len(set(actual_refs)) or set(actual_refs) != known_refs:
         raise YuntuReportError(f"{mode} must classify each successful frame exactly once")

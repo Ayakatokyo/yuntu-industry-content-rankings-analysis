@@ -724,6 +724,7 @@ def render_highlight_insights(
                     "rule": mode.get("rule", ""),
                     "frames": mode_frames,
                     "dashboard": mode_dashboard,
+                    "distribution": mode.get("distribution"),
                 })
             brand_views.append({"brand": brand.get("brand", ""), "id": brand.get("id", ""), "frames": brand_frames, "dashboard": brand_dashboard, "modes": modes})
         successful_frames = [frame for view in brand_views for frame in view["frames"]]
@@ -736,6 +737,55 @@ def render_highlight_insights(
     if not brand_views and not isinstance(dashboard, dict):
         return '<p class="data-note">高光帧已生成，尚未完成视觉分类，因此不输出视觉洞察。</p>'
     category_aliases = {"scene": "other", "text_overlay": "other"}
+
+    def render_batch_distribution(distribution):
+        if not isinstance(distribution, dict):
+            return ""
+        total_frames = distribution.get("totalFrames")
+        buckets = distribution.get("buckets")
+        if not isinstance(total_frames, int) or total_frames <= 0 or not isinstance(buckets, list) or not buckets:
+            return ""
+        valid_buckets = [
+            bucket for bucket in buckets
+            if isinstance(bucket, dict)
+            and isinstance(bucket.get("count"), int)
+            and isinstance(bucket.get("share"), (int, float))
+            and not isinstance(bucket.get("share"), bool)
+        ]
+        if len(valid_buckets) != len(buckets):
+            return ""
+        axis_max = max(10, math_module.ceil(max(bucket["share"] * 100 for bucket in buckets) / 10) * 10)
+        colors = ("#9b6a37", "#d79a4b", "#b77d54", "#c7a36a", "#a14f38", "#958268", "#ab8068", "#6d5d4d")
+        columns = []
+        for index, bucket in enumerate(buckets):
+            label = bucket.get("label") or bucket.get("category")
+            count = bucket["count"]
+            share = bucket["share"] * 100
+            tooltip = (
+                '<div class="chart-tooltip" role="tooltip"><b>' + esc(label) + '</b>'
+                + '<span>帧数：' + esc(count) + ' 帧</span>'
+                + '<span>占比：' + f"{share:.1f}%" + '</span></div>'
+            )
+            columns.append(
+                '<div class="audience-column-item" role="img" tabindex="0" aria-label="'
+                + esc(label) + '，' + esc(count) + ' 帧，占比 ' + f"{share:.1f}%"
+                + '"><div class="audience-column-bar" style="height:'
+                + f"{max(2, share / axis_max * 100):.2f}%" + ';background:'
+                + colors[index % len(colors)] + '"></div><span class="audience-column-label">'
+                + esc(label) + '</span>' + tooltip + '</div>'
+            )
+        return (
+            '<article class="chart-card audience-chart highlight-batch-distribution" data-highlight-batch-distribution>'
+            '<h3>本批次标准分类分布</h3>'
+            '<div class="highlight-batch-distribution-scroll"><div class="audience-column-chart" role="group" aria-label="本批次标准分类分布柱状图，样本总数 '
+            + esc(total_frames) + ' 帧">'
+            + '<div class="audience-column-y-axis">'
+            + ''.join('<span>' + f"{value:.0f}%" + '</span>' for value in (axis_max, axis_max * 0.75, axis_max * 0.5, axis_max * 0.25, 0))
+            + '</div><div class="audience-column-plot" style="grid-template-columns:repeat('
+            + esc(len(columns)) + ',minmax(96px,1fr));min-width:' + esc(max(100, len(columns) * 96)) + 'px">'
+            + ''.join(columns) + '</div></div></div>'
+            '<p class="data-note">样本总数：' + esc(total_frames) + ' 帧</p></article>'
+        )
 
     def render_groups(groups, frames, *, id_prefix="highlight"):
         normalized_groups = {}
@@ -839,7 +889,8 @@ def render_highlight_insights(
                     title = f' title="{esc(mode["reason"])}"' if mode["reason"] else ""
                     mode_tabs.append('<button type="button" role="tab" id="' + esc(mode_id) + '" aria-controls="' + esc(mode_panel_id) + '" aria-selected="' + str(mode_selected).lower() + '" tabindex="' + ("0" if mode_selected else "-1") + '" data-highlight-classification-tab data-highlight-classification-target="' + esc(mode_panel_id) + '"' + disabled + title + '>' + esc(mode["label"]) + '</button>')
                     if mode["available"]:
-                        mode_content = render_groups(mode["dashboard"]["groups"], mode["frames"], id_prefix=mode_id)
+                        mode_content = render_batch_distribution(mode.get("distribution")) if mode.get("id") == "batch" else ""
+                        mode_content += render_groups(mode["dashboard"]["groups"], mode["frames"], id_prefix=mode_id)
                         if mode["rule"]:
                             mode_content = '<p class="highlight-classification-rule">分类规则：' + esc(mode["rule"]) + '</p>' + mode_content
                     else:

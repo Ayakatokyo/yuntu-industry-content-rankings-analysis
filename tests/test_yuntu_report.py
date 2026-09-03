@@ -528,11 +528,26 @@ class YuntuReportTests(unittest.TestCase):
             "common_patterns": batch_patterns,
             "derivative_directions": batch_directions,
         }
+        batch_groups = []
+        for index, refs_slice in enumerate((refs[:2], refs[2:])):
+            group = copy.deepcopy(batch_group)
+            group["category"] = "主体协同" if index == 0 else "信息机制"
+            group["label"] = "主体协同" if index == 0 else "信息机制"
+            group["rule"] = (
+                "人物与产品共同构成视觉焦点且关系可辨识。"
+                if index == 0
+                else "字幕、包装与动作共同承担信息传递。"
+            )
+            group["frame_refs"] = refs_slice
+            for field in ("common_patterns", "derivative_directions"):
+                for item in group[field]:
+                    item["frame_refs"] = refs_slice
+            batch_groups.append(group)
         batch = {
             "status": batch_status,
             "missing_reason": "" if batch_status == "complete" else "整批画面理解证据不足",
             "rule": "按主体协同关系与信息焦点对本批次画面分组。",
-            "groups": [batch_group] if batch_status == "complete" else [],
+            "groups": batch_groups if batch_status == "complete" else [],
         }
         return {
             "frameUnderstanding": understanding,
@@ -582,6 +597,48 @@ class YuntuReportTests(unittest.TestCase):
             with self.assertRaisesRegex(report.YuntuReportError, "batchClassification.*exactly 3"):
                 report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
 
+    def test_validate_batch_highlight_taxonomy_requires_semantic_categories_and_two_groups(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+
+        def add_too_many_categories(dashboard):
+            source = dashboard["batchClassification"]["groups"][0]
+            extras = []
+            for index in range(3):
+                extra = copy.deepcopy(source)
+                extra["category"] = f"额外机制{index}"
+                extra["label"] = f"额外机制{index}"
+                extras.append(extra)
+            dashboard["batchClassification"]["groups"].extend(extras)
+
+        mutations = (
+            (
+                lambda dashboard: dashboard["batchClassification"].update(
+                    {"groups": dashboard["batchClassification"]["groups"][:1]}
+                ),
+                "batchClassification.*at least 2",
+            ),
+            (
+                lambda dashboard: dashboard["batchClassification"]["groups"][0].update(
+                    {"category": "其他1", "label": "其他1"}
+                ),
+                "batchClassification.*semantic",
+            ),
+            (
+                add_too_many_categories,
+                "batchClassification.*more categories than successful frames",
+            ),
+        )
+        for mutation, expected in mutations:
+            analysis = self.deep_dive_analysis()
+            analysis["highlightDashboard"] = self.dual_classification_dashboard()
+            mutation(analysis["highlightDashboard"])
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "analysis.json"
+                path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+                with self.assertRaisesRegex(report.YuntuReportError, expected):
+                    report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
     def test_validate_dual_highlight_classification_requires_unavailable_reason(self):
         report = load_module()
         analysis = self.deep_dive_analysis()
@@ -618,8 +675,43 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-highlight-classification-tab', rendered)
         self.assertIn('>标准分类<', rendered)
         self.assertIn('>本批次标准<', rendered)
-        self.assertIn("主体协同 · 4 帧", rendered)
+        self.assertIn("主体协同 · 2 帧", rendered)
         self.assertIn("分类规则：按主体协同关系与信息焦点对本批次画面分组。", rendered)
+
+    def test_renders_batch_classification_distribution_chart(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"] = self.dual_classification_dashboard()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["filters"] = {"brands": ["WONDERLAB/万益蓝"]}
+        for fact in fact_pack["materialFacts"]:
+            fact["title"] = f"WONDERLAB/万益蓝 {fact['material_id']}"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack=fact_pack,
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-highlight-batch-distribution', rendered)
+        self.assertIn('aria-label="本批次标准分类分布柱状图', rendered)
+        self.assertIn("本批次标准分类分布", rendered)
+        self.assertIn("主体协同", rendered)
+        self.assertIn("信息机制", rendered)
+        self.assertIn("2 帧", rendered)
+        self.assertIn("50.0%", rendered)
+        distribution_start = rendered.index('data-highlight-batch-distribution')
+        standard_panel_start = rendered.index('id="highlight-all-brands-mode-standard-panel"')
+        batch_panel_start = rendered.index('id="highlight-all-brands-mode-batch-panel"')
+        classification_start = rendered.index('class="highlight-dashboard-tabs"', batch_panel_start)
+        self.assertLess(distribution_start, classification_start)
+        self.assertNotIn('data-highlight-batch-distribution', rendered[standard_panel_start:batch_panel_start])
+        self.assertIn('data-highlight-batch-distribution', rendered[batch_panel_start:])
 
     def test_render_report_disables_unavailable_batch_classification_with_reason(self):
         report = load_module()
@@ -644,6 +736,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-highlight-classification-tab', rendered)
         self.assertIn('disabled aria-disabled="true"', rendered)
         self.assertIn("整批画面理解证据不足", rendered)
+        self.assertNotIn('data-highlight-batch-distribution', rendered)
 
     def test_render_report_writes_conclusion_only_report_without_evidence(self):
         report = load_module()

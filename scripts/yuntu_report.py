@@ -800,11 +800,22 @@ def _highlight_failure_reasons(fact_pack):
     return "、".join(sorted(reasons))
 
 
+def _is_placeholder_batch_category(value):
+    compact = re.sub(r"[\s_-]+", "", str(value or "")).lower()
+    return bool(re.fullmatch(r"(?:其他|other)\d+", compact))
+
+
 def _validate_highlight_classification_groups(groups, known_refs, *, mode):
     if not isinstance(groups, list):
         raise YuntuReportError(f"{mode} groups must be a list")
+    if mode == "batchClassification":
+        if len(groups) < 2:
+            raise YuntuReportError(f"{mode} must contain at least 2 semantic categories")
+        if len(groups) > len(known_refs):
+            raise YuntuReportError(f"{mode} cannot contain more categories than successful frames")
     actual_refs = []
     categories = []
+    labels = []
     for group in groups:
         if not isinstance(group, dict):
             raise YuntuReportError(f"{mode} groups items must be objects")
@@ -818,6 +829,11 @@ def _validate_highlight_classification_groups(groups, known_refs, *, mode):
             for field in ("label", "rule"):
                 if not isinstance(group.get(field), str) or not group[field].strip():
                     raise YuntuReportError(f"{mode} group {field} is required")
+            if _is_placeholder_batch_category(category) or _is_placeholder_batch_category(group["label"]):
+                raise YuntuReportError(f"{mode} group category and label must be semantic")
+            if group["label"] in labels:
+                raise YuntuReportError(f"{mode} group labels must be unique")
+            labels.append(group["label"])
         elif category not in HIGHLIGHT_RENDER_CATEGORY_ORDER:
             raise YuntuReportError("standardClassification group category is invalid")
         refs = group.get("frame_refs")

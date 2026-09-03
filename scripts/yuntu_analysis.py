@@ -792,9 +792,9 @@ def _highlight_output_schema():
         "additionalProperties": False,
         "required": ["category", "label", "rule", "frame_refs", "common_patterns", "derivative_directions"],
         "properties": {
-            "category": {"type": "string"},
-            "label": {"type": "string"},
-            "rule": {"type": "string"},
+            "category": {"type": "string", "minLength": 1},
+            "label": {"type": "string", "minLength": 1},
+            "rule": {"type": "string", "minLength": 1},
             "frame_refs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
             "common_patterns": {"type": "array", "minItems": 3, "maxItems": 3, "items": direction_schema},
             "derivative_directions": {"type": "array", "minItems": 3, "maxItems": 3, "items": direction_schema},
@@ -815,7 +815,7 @@ def _highlight_output_schema():
         **classification_schema,
         "properties": {
             **classification_schema["properties"],
-            "groups": {"type": "array", "items": batch_group_schema},
+            "groups": {"type": "array", "minItems": 2, "items": batch_group_schema},
         },
     }
     brand_scope_schema = {

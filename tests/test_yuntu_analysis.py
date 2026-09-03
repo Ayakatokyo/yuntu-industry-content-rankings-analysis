@@ -743,6 +743,27 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("3 条共性洞察 + 3 条裂变方向", prompt)
         self.assertIn("改写动作、变体方式和验证指标", prompt)
 
+    def test_highlight_prompt_requires_fine_grained_batch_taxonomy(self):
+        analysis = load_module()
+
+        prompt = analysis._prompt_text(filters={"brands": ["燕之屋"]})
+
+        self.assertIn("n≤3", prompt)
+        self.assertIn("2–3 类", prompt)
+        self.assertIn("4≤n≤7", prompt)
+        self.assertIn("3–6 类", prompt)
+        self.assertIn("n≥8", prompt)
+        self.assertIn("6–10 类", prompt)
+        self.assertIn("其他1/其他2", prompt)
+        self.assertIn("主体、动作或信息机制", prompt)
+        self.assertIn("至少两个有意义类别", prompt)
+
+        batch_group = analysis._highlight_output_schema()["properties"]["batchClassification"]["properties"]["groups"]["items"]
+        self.assertEqual(
+            batch_group["required"],
+            ["category", "label", "rule", "frame_refs", "common_patterns", "derivative_directions"],
+        )
+
     def test_prepare_analysis_writes_report_projection_and_single_call_unit_inputs(self):
         analysis = load_module()
         records = [

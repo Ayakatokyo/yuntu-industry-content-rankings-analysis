@@ -1277,6 +1277,25 @@ body.unified-report {
   gap: 14px;
 }
 
+.unified-yuntu .highlight-batch-distribution {
+  margin: 0 0 18px;
+}
+
+.unified-yuntu .highlight-batch-distribution-scroll {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.unified-yuntu .highlight-batch-distribution .audience-column-chart {
+  min-width: 420px;
+}
+
+.unified-yuntu .highlight-batch-distribution .audience-column-label,
+.unified-yuntu .highlight-batch-distribution .audience-column-item {
+  min-width: 88px;
+  width: 88px;
+}
+
 /* Compact chapter 02 charts without changing the drill-down contract. */
 .unified-yuntu {
   --chapter02-audience-crowd-height: 232px;

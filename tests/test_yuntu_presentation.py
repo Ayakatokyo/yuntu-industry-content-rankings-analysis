@@ -234,6 +234,53 @@ class YuntuPresentationTests(unittest.TestCase):
             ["standard", "batch"],
         )
 
+    def test_projects_batch_distribution_with_scope_specific_denominators(self):
+        facts = self.fact_pack()
+        facts["filters"]["brands"] = ["小仙炖", "五个女博士"]
+        facts["materialFacts"][0]["title"] = "小仙炖测试素材 101"
+        facts["materialFacts"][1]["title"] = "五个女博士测试素材 102"
+        analysis = self.dual_highlight_analysis()
+        refs = [
+            "highlight:101:cover:0",
+            "highlight:101:click_peak:2",
+            "highlight:102:cover:0",
+            "highlight:102:click_peak:2",
+        ]
+        groups = []
+        for category, group_refs, label in (
+            ("人物动作", refs[:2], "人物动作"),
+            ("产品信息", refs[2:3], "产品信息"),
+            ("结果展示", refs[3:], "结果展示"),
+        ):
+            group = copy.deepcopy(analysis["highlightDashboard"]["batchClassification"]["groups"][0])
+            group.update({"category": category, "label": label, "frame_refs": group_refs})
+            groups.append(group)
+        analysis["highlightDashboard"]["batchClassification"]["groups"] = groups
+
+        payload = build_yuntu_presentation(analysis, facts)
+        brands = payload["chapters"]["chapter04"]["brands"]
+        all_batch = next(mode for mode in brands[0]["classificationModes"] if mode["id"] == "batch")
+        xiaodun_batch = next(mode for mode in brands[1]["classificationModes"] if mode["id"] == "batch")
+
+        self.assertEqual(all_batch["distribution"]["totalFrames"], 4)
+        self.assertEqual(
+            [(item["category"], item["count"], item["share"]) for item in all_batch["distribution"]["buckets"]],
+            [("人物动作", 2, 0.5), ("产品信息", 1, 0.25), ("结果展示", 1, 0.25)],
+        )
+        self.assertEqual(xiaodun_batch["distribution"]["totalFrames"], 2)
+        self.assertEqual(
+            [(item["category"], item["count"], item["share"]) for item in xiaodun_batch["distribution"]["buckets"]],
+            [("人物动作", 2, 1.0)],
+        )
+
+    def test_rejects_inconsistent_batch_distribution(self):
+        payload = build_yuntu_presentation(self.dual_highlight_analysis(), self.fact_pack())
+        batch = payload["chapters"]["chapter04"]["brands"][0]["classificationModes"][1]
+        batch["distribution"]["buckets"][0]["count"] += 1
+
+        with self.assertRaisesRegex(YuntuPresentationError, "distribution.*count"):
+            validate_yuntu_presentation(payload)
+
     def test_builds_a_versioned_json_serializable_projection(self):
         analysis = self.analysis()
         facts = self.fact_pack()

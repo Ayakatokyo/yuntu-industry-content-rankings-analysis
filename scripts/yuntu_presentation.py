@@ -558,12 +558,16 @@ def _classification_mode_categories(classification, available, brand, brand_orde
             if brand in match_brands_from_title(frame.get("title"), brand_order)
         }
     merged = {}
+    covered_refs = []
     for group in classification.get("groups", []):
         if not isinstance(group, dict):
             continue
         refs = [ref for ref in group.get("frame_refs", []) if ref in scope_refs]
         if not refs:
             continue
+        if len(refs) != len(set(refs)) or any(ref in covered_refs for ref in refs):
+            raise YuntuPresentationError("batch highlight frame coverage is invalid")
+        covered_refs.extend(refs)
         category_id = _text(group.get("category"))
         if not category_id:
             continue
@@ -585,7 +589,19 @@ def _classification_mode_categories(classification, available, brand, brand_orde
         for item in target["commonConclusion"] + target["derivativeDirections"]:
             if isinstance(item, dict):
                 item["frame_refs"] = [ref for ref in item.get("frame_refs", refs) if ref in ref_set] or refs
+    if set(covered_refs) != scope_refs or len(covered_refs) != len(scope_refs):
+        raise YuntuPresentationError("batch highlight frame coverage is invalid")
     mode["categories"] = list(merged.values())
+    buckets = [
+        {
+            "category": category["id"],
+            "label": category["label"],
+            "count": len(category["frames"]),
+            "share": len(category["frames"]) / len(scope_refs),
+        }
+        for category in mode["categories"]
+    ]
+    mode["distribution"] = {"totalFrames": len(scope_refs), "buckets": buckets}
     return mode
 
 
@@ -795,6 +811,54 @@ def validate_yuntu_presentation(payload):
         raise YuntuPresentationError("presentation scopes are invalid")
     if not isinstance(payload.get("chapters"), dict) or not isinstance(payload.get("interactions"), dict):
         raise YuntuPresentationError("presentation sections are invalid")
+    chapter04 = payload["chapters"].get("chapter04", {})
+    for brand in chapter04.get("brands", []) if isinstance(chapter04, dict) else []:
+        if not isinstance(brand, dict):
+            continue
+        for mode in brand.get("classificationModes", []):
+            if not isinstance(mode, dict) or mode.get("id") != "batch" or mode.get("available") is not True:
+                continue
+            distribution = mode.get("distribution")
+            if not isinstance(distribution, dict):
+                raise YuntuPresentationError("batch distribution is required")
+            total_frames = distribution.get("totalFrames")
+            buckets = distribution.get("buckets")
+            if isinstance(total_frames, bool) or not isinstance(total_frames, int) or total_frames < 0:
+                raise YuntuPresentationError("batch distribution totalFrames is invalid")
+            if not isinstance(buckets, list):
+                raise YuntuPresentationError("batch distribution buckets are invalid")
+            category_ids = [bucket.get("category") for bucket in buckets if isinstance(bucket, dict)]
+            if len(category_ids) != len(buckets) or any(not _text(category) for category in category_ids):
+                raise YuntuPresentationError("batch distribution category is invalid")
+            if len(category_ids) != len(set(category_ids)):
+                raise YuntuPresentationError("batch distribution category is duplicated")
+            category_map = {
+                category.get("id"): category
+                for category in mode.get("categories", [])
+                if isinstance(category, dict)
+            }
+            if set(category_ids) != set(category_map):
+                raise YuntuPresentationError("batch distribution category coverage is invalid")
+            count_total = 0
+            share_total = 0.0
+            for bucket in buckets:
+                if not isinstance(bucket.get("count"), int) or isinstance(bucket.get("count"), bool) or bucket["count"] < 0:
+                    raise YuntuPresentationError("batch distribution count is invalid")
+                share = _finite_number(bucket.get("share"), "batch distribution share")
+                if share < 0 or share > 1:
+                    raise YuntuPresentationError("batch distribution share is invalid")
+                expected_count = len(category_map[bucket["category"]].get("frames", []))
+                if bucket["count"] != expected_count:
+                    raise YuntuPresentationError("batch distribution count is inconsistent")
+                count_total += bucket["count"]
+                share_total += share
+            if count_total != total_frames:
+                raise YuntuPresentationError("batch distribution count total is inconsistent")
+            if total_frames == 0:
+                if buckets:
+                    raise YuntuPresentationError("batch distribution buckets must be empty")
+            elif not math.isclose(share_total, 1.0, rel_tol=0.0, abs_tol=1e-6):
+                raise YuntuPresentationError("batch distribution share total is inconsistent")
     return payload
 
 

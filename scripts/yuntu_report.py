@@ -11,7 +11,6 @@ from string import Template
 
 from rpa_io import write_json_atomically
 from yuntu_presentation import build_yuntu_presentation
-from yuntu_highlight_export import export_highlight_workbook
 from yuntu_highlight_export import match_brands_from_title
 from yuntu_report_sections import (
     _chapter01_baseline_metric_value,
@@ -1252,6 +1251,14 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None, highli
     def source_label(text):
         return f'<span class="source-label">来源：{esc(text)}</span>'
 
+    highlight_export = ""
+    if highlight_export_href:
+        highlight_export = (
+            '<div class="highlight-export-toolbar"><a class="highlight-export-button" href="'
+            + html.escape(str(highlight_export_href), quote=True)
+            + '" download>导出高光帧资产（Excel）</a></div>'
+        )
+
     def scope_badge(scope_key):
         scope = report_scopes.get(scope_key, {})
         if not isinstance(scope, dict):
@@ -1480,13 +1487,6 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None, highli
         len([frame for frame in material_frames.get(str(item.get("material_id")), []) if frame.get("available")])
         for item in selected
     )
-    highlight_export = ""
-    if highlight_export_href:
-        highlight_export = (
-            '<div class="highlight-export-toolbar"><a class="highlight-export-button" href="'
-            + html.escape(str(highlight_export_href), quote=True)
-            + '" download>导出高光帧资产（Excel）</a></div>'
-        )
     rendered = template.safe_substitute(
         style=style,
         unified_style=unified_style,
@@ -1523,6 +1523,7 @@ def render_report(
     fact_pack=None,
     analysis_provenance=None,
     highlight_asset_root=None,
+    highlight_export_href=None,
 ):
     fact_pack = fact_pack or {}
     analysis = validate_analysis_input(
@@ -1543,18 +1544,12 @@ def render_report(
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     _copy_highlight_assets(fact_pack, output, highlight_asset_root)
-    export_path = export_highlight_workbook(
-        fact_pack,
-        (presentation or {}).get("chapters", {}).get("chapter04", {}) if isinstance(presentation, dict) else {},
-        output / "highlight-frames.xlsx",
-        asset_root=highlight_asset_root or output.parent,
-    )
     rendered_html = _render_html(
         analysis,
         _material_frames(fact_pack),
         fact_pack,
         presentation,
-        highlight_export_href=export_path.name if export_path else None,
+        highlight_export_href=highlight_export_href,
     )
     write_json_atomically(presentation, output / "presentation-report.json")
     write_json_atomically(data, output / "final-report-data.json")

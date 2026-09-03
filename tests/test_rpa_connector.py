@@ -827,6 +827,71 @@ class RpaConnectorTest(unittest.TestCase):
         self.assertEqual(render.call_args.kwargs["fact_pack"], {"source": "report"})
         self.assertEqual(render.call_args.kwargs["highlight_asset_root"], root.parent)
 
+    def test_export_highlight_workbook_cli_passes_versioned_inputs_and_output(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            root = Path(directory)
+            fact_pack_path = root / "report-data.json"
+            presentation_path = root / "presentation-report.json"
+            output_path = root / "exports" / "highlight-frames.xlsx"
+            fact_pack = {"source": "facts"}
+            presentation = {"chapters": {"chapter04": {"source": "chapter04"}}}
+            fact_pack_path.write_text(json.dumps(fact_pack), encoding="utf-8")
+            presentation_path.write_text(json.dumps(presentation), encoding="utf-8")
+
+            def export_fixture(*_args, **_kwargs):
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(b"xlsx")
+                return output_path
+
+            with mock.patch.object(
+                connector, "export_highlight_workbook", side_effect=export_fixture, create=True
+            ) as export:
+                status = connector.main([
+                    "export-highlight-workbook",
+                    "--fact-pack-json", str(fact_pack_path),
+                    "--presentation-json", str(presentation_path),
+                    "--asset-root", str(root / "final-report" / "assets"),
+                    "--output", str(output_path),
+                ])
+
+        self.assertEqual(status, 0)
+        export.assert_called_once_with(
+            fact_pack,
+            presentation["chapters"]["chapter04"],
+            output_path.resolve(),
+            asset_root=(root / "final-report" / "assets").resolve(),
+        )
+        self.assertIn(str(output_path), stdout.getvalue())
+
+    def test_export_highlight_workbook_cli_rejects_missing_inputs_and_empty_export(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fact_pack_path = root / "report-data.json"
+            presentation_path = root / "presentation-report.json"
+            output_path = root / "exports" / "highlight-frames.xlsx"
+            fact_pack_path.write_text("{}", encoding="utf-8")
+            presentation_path.write_text(
+                json.dumps({"chapters": {"chapter04": {}}}), encoding="utf-8"
+            )
+
+            with mock.patch.object(connector, "export_highlight_workbook", return_value=None, create=True):
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    with self.assertRaises(SystemExit) as context:
+                        connector.main([
+                            "export-highlight-workbook",
+                            "--fact-pack-json", str(fact_pack_path),
+                            "--presentation-json", str(presentation_path),
+                            "--asset-root", str(root),
+                            "--output", str(output_path),
+                        ])
+
+        self.assertEqual(context.exception.code, 2)
+        self.assertIn("没有可导出的高光帧", stderr.getvalue())
+
     def test_render_command_uses_report_projection_without_complete_snapshot(self):
         connector = self.connector()
         with tempfile.TemporaryDirectory() as directory:

@@ -58,6 +58,55 @@ class HighlightExportTests(unittest.TestCase):
         }
         return fact_pack, {"categories": categories}
 
+    def _dual_taxonomy_presentation(self, refs, *, batch_available=True):
+        standard_categories = [
+            {
+                "id": category,
+                "label": label,
+                "frames": [{"frameRef": ref}],
+            }
+            for category, label, ref in (
+                ("portrait", "人像画面", refs[0]),
+                ("product", "产品画面", refs[1]),
+                ("other", "其他画面", refs[2]),
+            )
+        ]
+        batch_categories = [
+            {
+                "id": "人物与产品同框",
+                "label": "人物与产品同框",
+                "frames": [{"frameRef": refs[0]}],
+            },
+            {
+                "id": "包装信息",
+                "label": "包装信息",
+                "frames": [{"frameRef": refs[1]}, {"frameRef": refs[2]}],
+            },
+        ]
+        return {
+            "categories": standard_categories,
+            "brands": [{
+                "brand": "全品牌",
+                "classificationModes": [
+                    {"id": "standard", "available": True, "categories": standard_categories},
+                    {
+                        "id": "batch",
+                        "available": batch_available,
+                        "reason": "整批画面理解证据不足" if not batch_available else "",
+                        "categories": batch_categories if batch_available else [],
+                    },
+                ],
+            }],
+        }
+
+    def _dual_gallery_fixture(self, root):
+        fact_pack, _presentation = self._gallery_fixture(root)
+        refs = [
+            frame["frame_ref"]
+            for frame in fact_pack["materialFacts"][0]["highlightFrames"]
+        ]
+        return fact_pack, self._dual_taxonomy_presentation(refs)
+
     def test_export_uses_openpyxl_and_pillow_by_default(self):
         fact_pack = {
             "filters": {"brands": ["小仙炖"]},
@@ -110,6 +159,47 @@ class HighlightExportTests(unittest.TestCase):
         self.assertEqual(rows[1]["点击指数"], 0.8)
         self.assertEqual(rows[1]["素材标题"], "小仙炖测试素材")
 
+    def test_builds_rows_with_standard_and_batch_taxonomy_labels(self):
+        fact_pack = {
+            "filters": {"brands": ["小仙炖"]},
+            "materialFacts": [{
+                "material_id": "101",
+                "rank": 1,
+                "title": "小仙炖测试素材",
+                "highlightFrames": [
+                    {"frame_ref": "f1", "available": True, "second": 0},
+                    {"frame_ref": "f2", "available": True, "second": 2},
+                    {"frame_ref": "f3", "available": True, "second": 4},
+                ],
+            }],
+        }
+        presentation = self._dual_taxonomy_presentation(["f1", "f2", "f3"])
+
+        rows = build_highlight_export_rows(fact_pack, presentation)
+
+        self.assertEqual(
+            [(row["视觉类型"], row["本批次标准分类"]) for row in rows],
+            [("人像画面", "人物与产品同框"), ("产品画面", "包装信息"), ("其他画面", "包装信息")],
+        )
+
+    def test_marks_batch_taxonomy_unavailable_without_standard_fallback(self):
+        fact_pack = {
+            "filters": {"brands": ["小仙炖"]},
+            "materialFacts": [{
+                "material_id": "101",
+                "rank": 1,
+                "title": "小仙炖测试素材",
+                "highlightFrames": [{"frame_ref": "f1", "available": True}],
+            }],
+        }
+        presentation = self._dual_taxonomy_presentation(["f1", "f2", "f3"], batch_available=False)
+
+        rows = build_highlight_export_rows(fact_pack, presentation)
+
+        self.assertEqual(rows[0]["视觉类型"], "人像画面")
+        self.assertEqual(rows[0]["本批次标准分类"], "本批次标准不可用")
+        self.assertEqual(rows[0]["__batch_missing_reason"], "整批画面理解证据不足")
+
     def test_exports_highlight_images_with_source_ratio_and_covering_row_height(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -120,11 +210,11 @@ class HighlightExportTests(unittest.TestCase):
             workbook = load_workbook(output)
             sheet = workbook["高光帧资产"]
             self.assertEqual(len(sheet._images), 3)
-            self.assertEqual(sheet.auto_filter.ref, "A1:J4")
+            self.assertEqual(sheet.auto_filter.ref, "A1:K4")
             self.assertEqual(sheet.freeze_panes, "A2")
             expected_ratios = [100 / 200, 200 / 100, 1]
             for image, source_ratio in zip(sheet._images, expected_ratios):
-                self.assertEqual(image.anchor._from.col, 6)
+                self.assertEqual(image.anchor._from.col, 7)
                 row = image.anchor._from.row + 1
                 width = image.anchor.ext.width / 9525
                 height = image.anchor.ext.height / 9525
@@ -133,32 +223,91 @@ class HighlightExportTests(unittest.TestCase):
             self.assertGreaterEqual(sheet.column_dimensions["G"].width, 18)
             self.assertIsNotNone(sheet.tables["HighlightFramesTable"])
 
-    def test_exports_highlight_gallery_with_all_categories_and_internal_links(self):
+    def test_resolves_images_from_report_assets_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            fact_pack, presentation = self._gallery_fixture(root)
+            fact_pack, presentation = self._dual_gallery_fixture(root)
+            asset_root = root / "assets"
+            for frame in fact_pack["materialFacts"][0]["highlightFrames"]:
+                source = root / frame["relative_path"]
+                target = asset_root / "highlight-frames" / Path(frame["relative_path"]).relative_to("highlights")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(source.read_bytes())
+            output = export_highlight_workbook(
+                fact_pack, presentation, root / "highlight-frames.xlsx", asset_root=asset_root
+            )
+            workbook = load_workbook(output)
+
+        self.assertEqual(len(workbook["标准分类"]._images), 3)
+        self.assertEqual(len(workbook["本批次标准"]._images), 3)
+        workbook.close()
+
+    def test_asset_sheet_contains_both_taxonomy_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fact_pack, presentation = self._dual_gallery_fixture(root)
             output = export_highlight_workbook(
                 fact_pack, presentation, root / "highlight-frames.xlsx", asset_root=root
             )
             workbook = load_workbook(output)
-            self.assertEqual(workbook.sheetnames, ["高光帧资产", "高光帧图片墙"])
-            sheet = workbook["高光帧图片墙"]
-            labels = [sheet.cell(1, col).value for col in range(1, 5)]
-            self.assertEqual(labels, ["全量", "人像画面", "产品画面", "其他画面"])
-            self.assertEqual(
-                [sheet.cell(1, col).hyperlink.location for col in range(1, 5)],
-                ["'高光帧图片墙'!A3", "'高光帧图片墙'!A7", "'高光帧图片墙'!A11", "'高光帧图片墙'!A15"],
+
+        sheet = workbook["高光帧资产"]
+        self.assertEqual(
+            [cell.value for cell in sheet[1]],
+            ["品牌", "视觉类型", "本批次标准分类", "素材排名", "素材 ID", "素材标题", "画面类型", "高光帧图片", "秒数", "点击峰值排名", "点击指数"],
+        )
+        self.assertEqual(sheet.auto_filter.ref, "A1:K4")
+        self.assertEqual(sheet._images[0].anchor._from.col, 7)
+        workbook.close()
+
+    def test_exports_highlight_gallery_with_all_categories_and_internal_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fact_pack, presentation = self._dual_gallery_fixture(root)
+            output = export_highlight_workbook(
+                fact_pack, presentation, root / "highlight-frames.xlsx", asset_root=root
             )
-            self.assertEqual(len(sheet._images), 6)
-            text = "\n".join(
-                str(cell.value or "")
-                for row in sheet.iter_rows()
-                for cell in row
+            workbook = load_workbook(output)
+            self.assertEqual(workbook.sheetnames, ["高光帧资产", "标准分类", "本批次标准"])
+            for sheet_name, expected_categories in (
+                ("标准分类", ("人像画面", "产品画面", "其他画面")),
+                ("本批次标准", ("人物与产品同框", "包装信息")),
+            ):
+                sheet = workbook[sheet_name]
+                text = "\n".join(
+                    str(cell.value or "")
+                    for row in sheet.iter_rows()
+                    for cell in row
+                )
+                self.assertIn("小仙炖", text)
+                for category in expected_categories:
+                    self.assertIn(category, text)
+                self.assertIn("素材 ID：101", text)
+                self.assertNotIn("小仙炖测试素材", text)
+                self.assertEqual(len(sheet._images), 3)
+                self.assertGreaterEqual(sheet.column_dimensions[get_column_letter(1)].width, 18)
+            self.assertTrue(all(cell.hyperlink.location for cell in workbook["标准分类"][1] if cell.value))
+            self.assertTrue(all(cell.hyperlink.location for cell in workbook["本批次标准"][1] if cell.value))
+            workbook.close()
+
+    def test_unavailable_batch_gallery_does_not_fallback_to_standard_images(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fact_pack, _presentation = self._gallery_fixture(root)
+            refs = [frame["frame_ref"] for frame in fact_pack["materialFacts"][0]["highlightFrames"]]
+            presentation = self._dual_taxonomy_presentation(refs, batch_available=False)
+            output = export_highlight_workbook(
+                fact_pack, presentation, root / "highlight-frames.xlsx", asset_root=root
             )
-            self.assertNotIn("素材排名", text)
-            self.assertNotIn("点击指数", text)
-            self.assertTrue(all(cell.hyperlink.location for cell in sheet[1]))
-            self.assertGreaterEqual(sheet.column_dimensions[get_column_letter(1)].width, 18)
+            workbook = load_workbook(output)
+
+        sheet = workbook["本批次标准"]
+        text = "\n".join(str(cell.value or "") for row in sheet.iter_rows() for cell in row)
+        self.assertIn("本批次标准不可用", text)
+        self.assertIn("整批画面理解证据不足", text)
+        self.assertEqual(len(sheet._images), 0)
+        self.assertNotIn("素材 ID：101", text)
+        workbook.close()
 
 
 if __name__ == "__main__":

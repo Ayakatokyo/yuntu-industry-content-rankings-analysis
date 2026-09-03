@@ -36,34 +36,106 @@ def match_brand_from_title(title, brands):
     return matches[0] if matches else OTHER_BRAND
 
 
-def _category_by_ref(presentation):
+def _chapter04_presentation(presentation):
+    if not isinstance(presentation, dict):
+        return {}
+    chapters = presentation.get("chapters")
+    if isinstance(chapters, dict) and isinstance(chapters.get("chapter04"), dict):
+        return chapters["chapter04"]
+    return presentation
+
+
+def _mode_from_all_brand_scope(chapter, mode_id):
+    brands = chapter.get("brands", []) if isinstance(chapter, dict) else []
+    candidates = []
+    for brand in brands:
+        if not isinstance(brand, dict):
+            continue
+        modes = brand.get("classificationModes")
+        if not isinstance(modes, list):
+            continue
+        mode = next((item for item in modes if isinstance(item, dict) and item.get("id") == mode_id), None)
+        if mode is None:
+            continue
+        candidates.append((brand, mode))
+    for brand, mode in candidates:
+        if brand.get("id") == "all-brands" or brand.get("brand") == "全品牌":
+            return mode
+    return candidates[0][1] if candidates else None
+
+
+def _category_map(categories, *, standard=False):
     mapping = {}
-    chapter = presentation if isinstance(presentation, dict) else {}
-    for category in chapter.get("categories", []):
+    order = []
+    for category in categories if isinstance(categories, list) else []:
         if not isinstance(category, dict):
             continue
-        label = HIGHLIGHT_CATEGORY_LABELS.get(category.get("id"), category.get("id", ""))
+        category_id = str(category.get("id") or "")
+        label = str(category.get("label") or "").strip()
+        if standard:
+            label = HIGHLIGHT_CATEGORY_LABELS.get(category_id, label or category_id)
+        if not label:
+            continue
+        if label not in order:
+            order.append(label)
         for frame in category.get("frames", []):
             if isinstance(frame, dict) and frame.get("frameRef"):
                 mapping[str(frame["frameRef"])] = label
-    for brand in chapter.get("brands", []):
-        if not isinstance(brand, dict):
-            continue
-        for category in brand.get("categories", []):
-            if not isinstance(category, dict):
-                continue
-            label = HIGHLIGHT_CATEGORY_LABELS.get(category.get("id"), category.get("id", ""))
-            for frame in category.get("frames", []):
-                if isinstance(frame, dict) and frame.get("frameRef"):
-                    mapping[str(frame["frameRef"])] = label
-    return mapping
+    return mapping, order
+
+
+def _classification_maps(presentation, available_refs):
+    chapter = _chapter04_presentation(presentation)
+    standard_mode = _mode_from_all_brand_scope(chapter, "standard")
+    batch_mode = _mode_from_all_brand_scope(chapter, "batch")
+    standard_categories = standard_mode.get("categories") if isinstance(standard_mode, dict) else None
+    if not isinstance(standard_categories, list):
+        standard_categories = chapter.get("categories", []) if isinstance(chapter, dict) else []
+    standard_map, standard_order = _category_map(standard_categories, standard=True)
+
+    batch_reason = "未提供本批次标准分类"
+    batch_map = {}
+    batch_order = []
+    mode_available = isinstance(batch_mode, dict) and batch_mode.get("available") is True
+    if mode_available:
+        batch_map, batch_order = _category_map(batch_mode.get("categories"), standard=False)
+        if not batch_map:
+            batch_reason = str(
+                batch_mode.get("reason")
+                or batch_mode.get("missingReason")
+                or batch_mode.get("missing_reason")
+                or "本批次标准分类没有有效分组"
+            )
+        elif not set(available_refs).issubset(batch_map):
+            batch_map = {}
+            batch_order = []
+            batch_reason = "本批次标准分类未覆盖全部可用高光帧"
+        else:
+            batch_reason = ""
+    elif isinstance(batch_mode, dict):
+        batch_reason = str(
+            batch_mode.get("reason")
+            or batch_mode.get("missingReason")
+            or batch_mode.get("missing_reason")
+            or "本批次标准分类不可用"
+        )
+    return standard_map, standard_order, batch_map, batch_order, batch_reason
 
 
 def build_highlight_export_rows(fact_pack, presentation=None):
     """Return one Chinese-keyed row per available frame, matching report cards."""
     facts = fact_pack.get("materialFacts", []) if isinstance(fact_pack, dict) else []
     brands = (fact_pack.get("filters", {}) or {}).get("brands", []) if isinstance(fact_pack, dict) else []
-    category_by_ref = _category_by_ref(presentation)
+    available_refs = {
+        str(frame.get("frame_ref"))
+        for fact in facts
+        if isinstance(fact, dict)
+        for frame in fact.get("highlightFrames", [])
+        if isinstance(frame, dict) and frame.get("available") is True and frame.get("frame_ref")
+    }
+    standard_map, standard_order, batch_map, batch_order, batch_reason = _classification_maps(
+        presentation, available_refs
+    )
     rows = []
     for fact in facts:
         if not isinstance(fact, dict):
@@ -81,7 +153,8 @@ def build_highlight_export_rows(fact_pack, presentation=None):
             frame_label = "封面画面" if frame_type == "cover" else f"点击 Top{peak_rank} 波峰画面"
             rows.append(OrderedDict([
                 ("品牌", brand),
-                ("视觉类型", category_by_ref.get(frame_ref, "其他画面")),
+                ("视觉类型", standard_map.get(frame_ref, "其他画面")),
+                ("本批次标准分类", batch_map.get(frame_ref, "本批次标准不可用")),
                 ("素材排名", fact.get("rank")),
                 ("素材 ID", material_id),
                 ("素材标题", title),
@@ -91,8 +164,21 @@ def build_highlight_export_rows(fact_pack, presentation=None):
                 ("点击指数", frame.get("click_value") if frame.get("click_value") is not None else "-"),
                 ("frame_ref", frame_ref),
                 ("本地图片路径", frame.get("relative_path") or frame.get("image_path") or ""),
+                ("__standard_category_order", standard_order.index(standard_map.get(frame_ref, "其他画面")) if standard_map.get(frame_ref, "其他画面") in standard_order else len(standard_order)),
+                ("__batch_category_order", batch_order.index(batch_map[frame_ref]) if frame_ref in batch_map else len(batch_order)),
+                ("__batch_classification_available", bool(batch_map)),
+                ("__batch_missing_reason", batch_reason),
             ]))
-    return rows
+    return sorted(
+        rows,
+        key=lambda row: (
+            row.get("品牌", ""),
+            row.get("__standard_category_order", 0),
+            row.get("素材排名") if isinstance(row.get("素材排名"), (int, float)) else float("inf"),
+            row.get("秒数") if isinstance(row.get("秒数"), (int, float)) else float("inf"),
+            row.get("点击峰值排名") if isinstance(row.get("点击峰值排名"), (int, float)) else float("inf"),
+        )
+    )
 
 
 def _resolve_frame_image_path(frame, asset_root=None):
@@ -106,6 +192,8 @@ def _resolve_frame_image_path(frame, asset_root=None):
         candidates.append(root / relative)
         if relative.startswith("highlights/"):
             image_tail = Path(relative).relative_to("highlights")
+            if root.name == "assets":
+                candidates.append(root / "highlight-frames" / image_tail)
             candidates.extend((
                 root / "assets" / "highlight-frames" / image_tail,
                 root / "final-report" / "assets" / "highlight-frames" / image_tail,
@@ -161,7 +249,10 @@ def _build_asset_sheet(workbook, rows):
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.worksheet.table import Table, TableStyleInfo
 
-    headers = ["品牌", "视觉类型", "素材排名", "素材 ID", "素材标题", "画面类型", "高光帧图片", "秒数", "点击峰值排名", "点击指数"]
+    headers = [
+        "品牌", "视觉类型", "本批次标准分类", "素材排名", "素材 ID", "素材标题",
+        "画面类型", "高光帧图片", "秒数", "点击峰值排名", "点击指数",
+    ]
     sheet = workbook.active
     sheet.title = "高光帧资产"
     sheet.sheet_view.showGridLines = False
@@ -171,79 +262,104 @@ def _build_asset_sheet(workbook, rows):
     thin = Side(style="thin", color="DFCFBD")
     for row in rows:
         sheet.append([
-            row.get("品牌"), row.get("视觉类型"), row.get("素材排名"), row.get("素材 ID"),
-            row.get("素材标题"), row.get("画面类型"), None, row.get("秒数"),
-            row.get("点击峰值排名"), row.get("点击指数"),
+            row.get("品牌"), row.get("视觉类型"), row.get("本批次标准分类"), row.get("素材排名"),
+            row.get("素材 ID"), row.get("素材标题"), row.get("画面类型"), None,
+            row.get("秒数"), row.get("点击峰值排名"), row.get("点击指数"),
         ])
         row_number = sheet.max_row
         for cell in sheet[row_number]:
             cell.alignment = Alignment(vertical="center", wrap_text=True)
             cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
-        sheet.cell(row_number, 4).number_format = "@"
+        sheet.cell(row_number, 5).number_format = "@"
         sheet.row_dimensions[row_number].height = IMAGE_MAX_HEIGHT_PX * POINTS_PER_PIXEL
         image_path = row.get("__image_path")
         if image_path and Path(image_path).is_file():
             try:
-                _, image_height = _add_scaled_image(sheet, image_path, f"G{row_number}")
+                _, image_height = _add_scaled_image(sheet, image_path, f"H{row_number}")
                 sheet.row_dimensions[row_number].height = max(
                     sheet.row_dimensions[row_number].height or 0,
                     image_height * POINTS_PER_PIXEL,
                 )
             except Exception as exc:
                 print(f"[yuntu] 跳过无法读取的高光帧图片：{image_path}：{exc}", file=sys.stderr)
-    widths = {"A": 18, "B": 14, "C": 10, "D": 22, "E": 42, "F": 22, "G": 20, "H": 12, "I": 12, "J": 12}
+    widths = {
+        "A": 18, "B": 14, "C": 20, "D": 10, "E": 22, "F": 42, "G": 22,
+        "H": 20, "I": 12, "J": 12, "K": 12,
+    }
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width
     sheet.freeze_panes = "A2"
     end_row = max(2, len(rows) + 1)
-    sheet.auto_filter.ref = f"A1:J{end_row}"
-    table = Table(displayName="HighlightFramesTable", ref=f"A1:J{end_row}")
+    sheet.auto_filter.ref = f"A1:K{end_row}"
+    table = Table(displayName="HighlightFramesTable", ref=f"A1:K{end_row}")
     table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False, showRowStripes=True, showColumnStripes=False)
     sheet.add_table(table)
     return sheet
 
 
-def _build_gallery_sheet(workbook, rows):
+def _build_gallery_sheet(workbook, title, rows, category_key, category_order, unavailable_reason=""):
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.worksheet.hyperlink import Hyperlink
 
-    sheet = workbook.create_sheet("高光帧图片墙")
+    sheet = workbook.create_sheet(title)
     sheet.sheet_view.showGridLines = False
-    labels = ["全量", "人像画面", "产品画面", "其他画面"]
-    category_rows = {
-        label: [row for row in rows if label == "全量" or row.get("视觉类型") == label]
-        for label in labels
-    }
     for column in range(1, GALLERY_COLUMNS + 1):
         sheet.column_dimensions[chr(64 + column)].width = 22
-        cell = sheet.cell(1, column, labels[column - 1])
-        cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'高光帧图片墙'!A3")
+    sheet.freeze_panes = "A2"
+
+    usable_rows = [row for row in rows if row.get("__image_path") and Path(row["__image_path"]).is_file()]
+    brands = []
+    for row in usable_rows:
+        brand = row.get("品牌") or OTHER_BRAND
+        if brand not in brands:
+            brands.append(brand)
+    category_order = list(category_order)
+    for row in usable_rows:
+        category = row.get(category_key)
+        if category and category not in category_order:
+            category_order.append(category)
+
+    for column, brand in enumerate(brands, start=1):
+        cell = sheet.cell(1, column, brand)
         cell.fill = PatternFill("solid", fgColor="2C1810")
         cell.font = Font(bold=True, color="FFFFFF")
-        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     sheet.row_dimensions[1].height = 28
 
-    section_rows = {}
+    if not usable_rows:
+        sheet.merge_cells(start_row=3, start_column=1, end_row=3, end_column=GALLERY_COLUMNS)
+        state = sheet.cell(3, 1, unavailable_reason or "暂无可用图片")
+        state.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        state.font = Font(bold=True, color="2C1810")
+        return sheet
+
+    brand_rows = {}
     current_row = 3
-    for label in labels:
-        section_rows[label] = current_row
+    for brand in brands:
+        brand_rows[brand] = current_row
         sheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=GALLERY_COLUMNS)
-        section = sheet.cell(current_row, 1, label)
+        section = sheet.cell(current_row, 1, f"品牌：{brand}")
         section.fill = PatternFill("solid", fgColor="E9D8C4")
         section.font = Font(bold=True, color="2C1810")
         section.alignment = Alignment(horizontal="left", vertical="center")
         current_row += 1
-        scoped_rows = category_rows[label]
-        for offset in range(0, len(scoped_rows), GALLERY_COLUMNS):
-            image_row = current_row
-            title_row = current_row + 1
-            type_row = current_row + 2
-            sheet.row_dimensions[image_row].height = IMAGE_MAX_HEIGHT_PX * POINTS_PER_PIXEL
-            sheet.row_dimensions[title_row].height = 30
-            sheet.row_dimensions[type_row].height = 22
-            for column, row in enumerate(scoped_rows[offset:offset + GALLERY_COLUMNS], start=1):
-                image_path = row.get("__image_path")
-                if image_path and Path(image_path).is_file():
+        for category in category_order:
+            scoped_rows = [row for row in usable_rows if row.get("品牌") == brand and row.get(category_key) == category]
+            if not scoped_rows:
+                continue
+            sheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=GALLERY_COLUMNS)
+            category_cell = sheet.cell(current_row, 1, category)
+            category_cell.fill = PatternFill("solid", fgColor="F4E8D8")
+            category_cell.font = Font(bold=True, color="2C1810")
+            category_cell.alignment = Alignment(horizontal="left", vertical="center")
+            current_row += 1
+            for offset in range(0, len(scoped_rows), GALLERY_COLUMNS):
+                image_row = current_row
+                id_row = current_row + 1
+                sheet.row_dimensions[image_row].height = IMAGE_MAX_HEIGHT_PX * POINTS_PER_PIXEL
+                sheet.row_dimensions[id_row].height = 24
+                for column, row in enumerate(scoped_rows[offset:offset + GALLERY_COLUMNS], start=1):
+                    image_path = row.get("__image_path")
                     try:
                         _, image_height = _add_scaled_image(
                             sheet, image_path, sheet.cell(image_row, column).coordinate
@@ -254,19 +370,15 @@ def _build_gallery_sheet(workbook, rows):
                         )
                     except Exception as exc:
                         print(f"[yuntu] 跳过无法读取的图片墙图片：{image_path}：{exc}", file=sys.stderr)
-                title = sheet.cell(title_row, column, row.get("素材标题") or "-")
-                title.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-                title.font = Font(bold=True, color="2C1810")
-                kind = sheet.cell(type_row, column, row.get("视觉类型") or "其他画面")
-                kind.alignment = Alignment(horizontal="center", vertical="center")
-            current_row += 3
-        if not scoped_rows:
-            sheet.cell(current_row, 1, "暂无可用图片").alignment = Alignment(horizontal="left", vertical="center")
-            current_row += 2
-    for column, label in enumerate(labels, start=1):
-        sheet.cell(1, column).hyperlink = Hyperlink(
-            ref=sheet.cell(1, column).coordinate,
-            location=f"'高光帧图片墙'!A{section_rows[label]}",
+                    identifier = sheet.cell(id_row, column, f"素材 ID：{row.get('素材 ID') or '-'}")
+                    identifier.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                    identifier.font = Font(bold=True, color="2C1810")
+                current_row += 3
+    for column, brand in enumerate(brands, start=1):
+        cell = sheet.cell(1, column)
+        cell.hyperlink = Hyperlink(
+            ref=cell.coordinate,
+            location=f"'{title}'!A{brand_rows[brand]}",
         )
     return sheet
 
@@ -281,7 +393,27 @@ def _export_highlight_workbook_python(rows, output_path):
         return None
     workbook = Workbook()
     _build_asset_sheet(workbook, rows)
-    _build_gallery_sheet(workbook, rows)
+    standard_order = ["人像画面", "产品画面", "其他画面"]
+    batch_categories = {}
+    batch_reason = ""
+    for row in rows:
+        label = row.get("本批次标准分类")
+        if row.get("__batch_classification_available") and label and label != "本批次标准不可用":
+            batch_categories.setdefault(label, row.get("__batch_category_order", len(batch_categories)))
+        elif row.get("__batch_missing_reason") and not batch_reason:
+            batch_reason = row["__batch_missing_reason"]
+    batch_order = [label for label, _index in sorted(batch_categories.items(), key=lambda item: item[1])]
+    standard_rows = [row for row in rows if row.get("__image_path")]
+    batch_rows = [row for row in standard_rows if row.get("__batch_classification_available")]
+    _build_gallery_sheet(workbook, "标准分类", standard_rows, "视觉类型", standard_order)
+    _build_gallery_sheet(
+        workbook,
+        "本批次标准",
+        batch_rows,
+        "本批次标准分类",
+        batch_order,
+        unavailable_reason=f"本批次标准不可用：{batch_reason or '没有有效分类分组'}",
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         workbook.save(output_path)

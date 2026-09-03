@@ -78,19 +78,15 @@ python <skill-root>/scripts/rpa_connector.py attest-analysis \
 
 `--source` 只能为 `model_generated` 或 `manual_model_generated`，禁止程序化兜底。报告必须使用 `render-report`，它只渲染已验证洞察，不新增判断，不下载视频、不调用外部模型，也不得手工修改成品 HTML 绕过渲染器；成品使用 `assets/report/` 离线资源并内联 CSS/JavaScript。
 
-```bash
-python <skill-root>/scripts/rpa_connector.py render-report \
-  --analysis-json "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis/yuntu-ai-analysis.json" \
-  --output-dir "RPA数据汇总/yuntu-rankings-analysis/final-report"
-```
+高光帧 Excel 使用独立导出命令生成到批次根目录的 `exports/`，不写入 `final-report/`；先渲染一次生成 `presentation-report.json`，再运行 `python <skill-root>/scripts/rpa_connector.py export-highlight-workbook` 输出 `exports/highlight-frames.xlsx`，最后用 `python <skill-root>/scripts/rpa_connector.py render-report --highlight-export-href "../exports/highlight-frames.xlsx"` 重新渲染，使报告保留下载按钮。
 
 `render-report` 完成后交付两个文件：可直接打开的 HTML 报告 `final-report/final-report.html`，以及与 `final-report/` 目录同级的 `final-report.zip`；ZIP 只包含 `final-report/` 目录及其内部文件，不包含批次根目录其他产物。
 
-报告验收只执行自动化产物校验：确认 HTML、Markdown、报告数据和 presentation JSON 均已生成；章节 ID 与导航目标完整且唯一；本地高光帧存在、非空且引用可解析；04 章节存在“导出高光帧资产（Excel）”按钮且 `final-report/highlight-frames.xlsx` 存在、非空（使用 `openpyxl` 与 Pillow 生成图片列和图片墙；依赖不可用时必须在 stderr 明确告警并将该批次标记为部分完成）；成品不含未替换占位符，也不把 `undefined` 或 `None` 作为报告数据值输出；ZIP 仅包含 `final-report/`；presentation JSON 通过 schema 校验。不要启动实际浏览器，也不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤。
+报告验收只执行自动化产物校验：确认 HTML、Markdown、报告数据和 presentation JSON 均已生成；章节 ID 与导航目标完整且唯一；本地高光帧存在、非空且引用可解析；04 章节存在“导出高光帧资产（Excel）”按钮，按钮 href 指向批次根目录 `exports/` 下真实存在且非空的独立工作簿（使用 `openpyxl` 与 Pillow 生成图片列和图片墙；依赖不可用时必须在 stderr 明确告警并将该批次标记为部分完成）；`final-report/` 与其 ZIP 不包含 Excel；成品不含未替换占位符，也不把 `undefined` 或 `None` 作为报告数据值输出；ZIP 仅包含 `final-report/`；presentation JSON 通过 schema 校验。不要启动实际浏览器，也不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤。
 
 ## 产物与失败处理
 
-主要产物：`raw-csv/list.csv`、`raw-csv/list-previous-period.csv`、`raw-csv/list-industry.csv`、`raw-csv/details/<material_id>.csv`、`normalized/list-records.json`、`normalized/list-previous-period-records.json`、`normalized/list-industry-records.json`、`normalized/detail-records/<material_id>.json`、`batch-manifest.json`、`run-summary.json`、`diagnostic-analysis/report-data.json`（含比较与 `hotMaterialFacts`）、`diagnostic-analysis/analysis-units/analysis-unit-manifest.json`、四个 `analysis-units/*-input.json`、`diagnostic-analysis/yuntu-ai-analysis.schema.json`、`diagnostic-analysis/yuntu-analysis-prompt.md`、`diagnostic-analysis/yuntu-ai-analysis.json`、`final-report/final-report-data.json`、`final-report/final-report.md`、`final-report/final-report.html`、`final-report/highlight-frames.xlsx`、同级 `final-report.zip`。兼容路径可保留历史批次的 `diagnostic-analysis/yuntu-analysis-data.json`，以及旧版 `list-response.json`、`details/<material_id>.json`、`manifest.json`；CSV 为主路径，兼容 JSON 与安全的 Python 字面量。
+主要产物：`raw-csv/list.csv`、`raw-csv/list-previous-period.csv`、`raw-csv/list-industry.csv`、`raw-csv/details/<material_id>.csv`、`normalized/list-records.json`、`normalized/list-previous-period-records.json`、`normalized/list-industry-records.json`、`normalized/detail-records/<material_id>.json`、`batch-manifest.json`、`run-summary.json`、`diagnostic-analysis/report-data.json`（含比较与 `hotMaterialFacts`）、`diagnostic-analysis/analysis-units/analysis-unit-manifest.json`、四个 `analysis-units/*-input.json`、`diagnostic-analysis/yuntu-ai-analysis.schema.json`、`diagnostic-analysis/yuntu-analysis-prompt.md`、`diagnostic-analysis/yuntu-ai-analysis.json`、`final-report/final-report-data.json`、`final-report/final-report.md`、`final-report/final-report.html`、`exports/highlight-frames.xlsx`、同级 `final-report.zip`。兼容路径可保留历史批次的 `diagnostic-analysis/yuntu-analysis-data.json`，以及旧版 `list-response.json`、`details/<material_id>.json`、`manifest.json`；CSV 为主路径，兼容 JSON 与安全的 Python 字面量。
 
 分析阶段只读 `normalized/` 和 `diagnostic-analysis/`，不读原始 CSV、RPA response 或临时 `fileUrl`。`files-envelope` 校验成功后才下载 CSV；解析失败的嵌套字段保留原文并标记缺失。列表请求失败或无有效素材时写清单、非零退出且不发详情；详情请求失败记录后继续，最终非零但保留成功文件。报告前确认 `status == success`、`selectedCount == targetTopN`、`rejectedCount == 0`，否则按部分完成交付。
 

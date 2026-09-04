@@ -769,6 +769,9 @@ def render_highlight_insights(
             columns.append(
                 '<div class="audience-column-item" role="img" tabindex="0" aria-label="'
                 + esc(label) + '，' + esc(count) + ' 帧，占比 ' + f"{share:.1f}%"
+                + '" data-highlight-batch-tooltip="true" data-tooltip-label="'
+                + esc(label) + '" data-tooltip-count="' + esc(count)
+                + '" data-tooltip-share="' + f"{share:.1f}%"
                 + '"><div class="audience-column-bar" style="height:'
                 + f"{max(2, share / axis_max * 100):.2f}%" + ';background:'
                 + colors[index % len(colors)] + '"></div><span class="audience-column-label">'

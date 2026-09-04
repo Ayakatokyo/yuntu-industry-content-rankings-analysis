@@ -713,6 +713,18 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn('data-highlight-batch-distribution', rendered[standard_panel_start:batch_panel_start])
         self.assertIn('data-highlight-batch-distribution', rendered[batch_panel_start:])
 
+        script = (ROOT / "assets" / "report" / "unified-report.js").read_text(encoding="utf-8")
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+        self.assertIn("data-highlight-batch-tooltip", rendered)
+        self.assertIn("function bindBatchDistributionTooltips()", script)
+        self.assertIn("position = 'fixed'", script)
+        self.assertIn(".highlight-batch-distribution .audience-column-plot", css)
+        self.assertIn("overflow: visible", css)
+        self.assertIn("--batch-column-chart-height: 236px", css)
+        self.assertIn("--batch-column-plot-height: 140px", css)
+        self.assertIn("padding: 8px 0 0", css)
+        self.assertIn("padding: 8px 14px 44px", css)
+
     def test_render_report_disables_unavailable_batch_classification_with_reason(self):
         report = load_module()
         analysis = self.deep_dive_analysis()

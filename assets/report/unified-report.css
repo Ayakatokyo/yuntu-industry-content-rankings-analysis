@@ -1296,6 +1296,92 @@ body.unified-report {
   width: 88px;
 }
 
+/* Batch taxonomy bars use the full grid track; their tooltips are portaled by JS. */
+.unified-yuntu .highlight-batch-distribution {
+  --batch-column-chart-height: 236px;
+  --batch-column-plot-height: 140px;
+}
+
+.unified-yuntu .highlight-batch-distribution-scroll {
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 2px 0 4px;
+  scrollbar-width: thin;
+}
+
+.unified-yuntu .highlight-batch-distribution .audience-column-chart {
+  width: 100%;
+  min-width: 420px;
+  height: var(--batch-column-chart-height);
+  min-height: var(--batch-column-chart-height);
+  padding: 8px 0 0;
+  align-items: stretch;
+}
+
+.unified-yuntu .highlight-batch-distribution .audience-column-y-axis {
+  padding-bottom: 44px;
+}
+
+.unified-yuntu .highlight-batch-distribution .audience-column-plot {
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  gap: 12px;
+  padding: 8px 14px 44px;
+  overflow: visible;
+}
+
+.unified-yuntu .highlight-batch-distribution .audience-column-item {
+  width: auto;
+  min-width: 0;
+  height: var(--batch-column-plot-height);
+}
+
+.unified-yuntu .highlight-batch-distribution .audience-column-bar {
+  width: min(56px, 68%);
+}
+
+.unified-yuntu .highlight-batch-distribution .audience-column-label {
+  width: min(112px, 100%);
+  bottom: -36px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.unified-yuntu .highlight-batch-distribution .chart-tooltip.is-portal {
+  z-index: 1000;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 16px));
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 700px) {
+  .unified-yuntu .highlight-batch-distribution {
+    --batch-column-chart-height: 216px;
+    --batch-column-plot-height: 124px;
+  }
+
+  .unified-yuntu .highlight-batch-distribution .audience-column-y-axis {
+    padding-bottom: 40px;
+  }
+
+  .unified-yuntu .highlight-batch-distribution .audience-column-plot {
+    gap: 10px;
+    padding: 8px 10px 40px;
+  }
+}
+
+@media (max-width: 560px) {
+  .unified-yuntu .highlight-batch-distribution .audience-column-chart {
+    min-width: 360px;
+  }
+
+  .unified-yuntu .highlight-batch-distribution .audience-column-label {
+    width: min(92px, 100%);
+  }
+}
+
 /* Compact chapter 02 charts without changing the drill-down contract. */
 .unified-yuntu {
   --chapter02-audience-crowd-height: 232px;

@@ -332,6 +332,69 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(chapter["scriptDashboard"]["materials"][1]["availability"], "source_empty")
         self.assertEqual(payload["report"]["sections"], ["chapter01", "chapter02", "chapter03", "chapter04", "chapter05"])
 
+    def test_projects_script_dashboard_dimensions_and_formula_hierarchy(self):
+        facts = self.fact_pack()
+        facts["scriptFacts"] = {
+            "scope": "selected_detail_materials",
+            "coverage": {"total": 2, "script": 2, "rate": 1.0},
+            "frequencies": {
+                "formula_labels": {"level_1_label:10": {"count": 2, "material_ids": ["101", "102"]}},
+                "selling_points": {"优质活菌": {"count": 2, "material_ids": ["101", "102"]}},
+                "scenes": {"早餐": {"count": 1, "material_ids": ["101"]}},
+                "promotions": {},
+                "marketing_formats": {},
+            },
+            "materials": [
+                {
+                    "material_id": "101", "script_text": "先提出场景，再展示商品。", "script_segments": [],
+                    "content_formula": {"labels": [{"level_1_label": 10, "level_2_labels": [40, 55]}]},
+                    "creative_breakdown": {"tags": ["口播"]}, "metrics": {},
+                    "data_availability": {"script_text": {"available": True, "missing_reason": ""}},
+                },
+                {
+                    "material_id": "102", "script_text": "先讲卖点，再给出行动。", "script_segments": [],
+                    "content_formula": {"labels": [{"level_1_label": 10, "level_2_labels": [40]}]},
+                    "creative_breakdown": {"tags": ["口播"]}, "metrics": {},
+                    "data_availability": {"script_text": {"available": True, "missing_reason": ""}},
+                },
+            ],
+        }
+        analysis = self.analysis()
+        analysis["scriptInsights"] = [{
+            "title": "先场景后卖点",
+            "summary": "已获取详情素材中的可见脚本呈现先建立场景、再承接卖点的结构。",
+            "evidence": ["script_text"],
+            "material_ids": ["101", "102"],
+        }]
+
+        dashboard = build_yuntu_presentation(analysis, facts)["chapters"]["chapter03"]["scriptDashboard"]
+
+        self.assertEqual(dashboard["conclusion"]["text"], "已获取详情素材中的可见脚本呈现先建立场景、再承接卖点的结构。")
+        self.assertEqual(dashboard["conclusion"]["materialIds"], ["101", "102"])
+        self.assertEqual(dashboard["dimensions"]["contentFormula"]["primary"][0]["id"], "10")
+        self.assertEqual(dashboard["dimensions"]["contentFormula"]["primary"][0]["count"], 2)
+        self.assertEqual(dashboard["dimensions"]["contentFormula"]["secondary"]["10"][0]["id"], "40")
+        self.assertEqual(dashboard["dimensions"]["contentFormula"]["secondary"]["10"][0]["count"], 2)
+        self.assertEqual(dashboard["dimensions"]["scriptCopy"]["coverage"], {"total": 2, "script": 2, "rate": 1.0})
+        self.assertEqual(dashboard["sellingPoints"][0]["label"], "优质活菌")
+        self.assertEqual(dashboard["keywords"][0]["label"], "优质活菌")
+        self.assertFalse(any(item["label"].startswith("level_") for item in dashboard["keywords"]))
+
+    def test_script_dashboard_keeps_legacy_missing_fields_compatible(self):
+        facts = self.fact_pack()
+        facts["scriptFacts"] = {
+            "scope": "selected_detail_materials",
+            "coverage": {"total": 1, "script": 0, "rate": 0},
+            "frequencies": {},
+            "materials": [{"material_id": "101", "script_text": "", "script_segments": []}],
+        }
+
+        dashboard = build_yuntu_presentation(self.analysis(), facts)["chapters"]["chapter03"]["scriptDashboard"]
+
+        self.assertEqual(dashboard["dimensions"]["contentFormula"]["primary"], [])
+        self.assertEqual(dashboard["dimensions"]["scriptCopy"]["coverage"]["script"], 0)
+        self.assertEqual(dashboard["conclusion"]["source"], "coverage")
+
     def test_chapter05_uses_single_panel_source_without_frame_copy_fields(self):
         payload = build_yuntu_presentation(self.analysis(), self.fact_pack())
         chapter = payload["chapters"]["chapter05"]

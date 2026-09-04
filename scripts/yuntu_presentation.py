@@ -297,6 +297,92 @@ def _script_insights(analysis, material_ids):
     return projected
 
 
+def _script_frequency_items(frequencies, dimension):
+    values = frequencies.get(dimension, {}) if isinstance(frequencies, dict) else {}
+    if not isinstance(values, dict):
+        return []
+    items = []
+    for label, value in values.items():
+        if not isinstance(value, dict) or not _text(label):
+            continue
+        material_ids = [str(item) for item in value.get("material_ids", []) if _text(item)]
+        count = value.get("count", len(material_ids))
+        if isinstance(count, bool) or not isinstance(count, (int, float)):
+            count = len(material_ids)
+        items.append({
+            "label": _text(label),
+            "count": count,
+            "materialIds": material_ids,
+            "dimension": dimension,
+        })
+    return sorted(items, key=lambda item: (-item["count"], item["label"]))
+
+
+def _script_keywords(frequencies):
+    merged = {}
+    for dimension in ("selling_points", "scenes", "promotions", "marketing_formats"):
+        for item in _script_frequency_items(frequencies, dimension):
+            entry = merged.setdefault(item["label"], {"label": item["label"], "materialIds": [], "dimensions": []})
+            for material_id in item["materialIds"]:
+                if material_id not in entry["materialIds"]:
+                    entry["materialIds"].append(material_id)
+            if dimension not in entry["dimensions"]:
+                entry["dimensions"].append(dimension)
+    for item in merged.values():
+        item["count"] = len(item["materialIds"])
+    return sorted(merged.values(), key=lambda item: (-item["count"], item["label"]))
+
+
+def _formula_hierarchy(materials):
+    primary = {}
+    secondary = {}
+    for material in materials:
+        if not isinstance(material, dict):
+            continue
+        formula = material.get("content_formula")
+        labels = formula.get("labels") if isinstance(formula, dict) else None
+        if not isinstance(labels, list):
+            continue
+        material_id = _text(material.get("material_id"))
+        seen_primary = set()
+        seen_secondary = set()
+        for item in labels:
+            if not isinstance(item, dict):
+                continue
+            primary_id = _text(item.get("level_1_label") or item.get("level1_label"))
+            if not primary_id:
+                continue
+            primary_entry = primary.setdefault(primary_id, {"id": primary_id, "label": primary_id, "count": 0, "materialIds": []})
+            if primary_id not in seen_primary:
+                primary_entry["count"] += 1
+                if material_id and material_id not in primary_entry["materialIds"]:
+                    primary_entry["materialIds"].append(material_id)
+                seen_primary.add(primary_id)
+            values = item.get("level_2_labels") or item.get("level2_labels") or []
+            if not isinstance(values, list):
+                values = [values]
+            children = secondary.setdefault(primary_id, {})
+            for value in values:
+                secondary_id = _text(value)
+                if not secondary_id:
+                    continue
+                pair = (primary_id, secondary_id)
+                child = children.setdefault(secondary_id, {"id": secondary_id, "label": secondary_id, "count": 0, "materialIds": []})
+                if pair in seen_secondary:
+                    continue
+                child["count"] += 1
+                if material_id and material_id not in child["materialIds"]:
+                    child["materialIds"].append(material_id)
+                seen_secondary.add(pair)
+    return {
+        "primary": sorted(primary.values(), key=lambda item: (-item["count"], item["label"])),
+        "secondary": {
+            primary_id: sorted(children.values(), key=lambda item: (-item["count"], item["label"]))
+            for primary_id, children in secondary.items()
+        },
+    }
+
+
 def _project_chapter03(analysis, fact_pack):
     facts = fact_pack.get("scriptFacts") if isinstance(fact_pack, dict) else None
     if not isinstance(facts, dict):
@@ -330,13 +416,43 @@ def _project_chapter03(analysis, fact_pack):
             "metrics": deepcopy(item.get("metrics", {})),
             "availability": _text(script_state.get("missing_reason")) if not script_state.get("available") else "available",
         })
+    insights = _script_insights(analysis, material_ids)
+    frequencies = facts.get("frequencies", {}) if isinstance(facts.get("frequencies"), dict) else {}
+    coverage = deepcopy(facts.get("coverage", {"total": len(materials), "script": 0, "rate": 0}))
+    if insights:
+        conclusion = {
+            "text": insights[0]["text"],
+            "materialIds": deepcopy(insights[0]["materialIds"]),
+            "source": "scriptInsights",
+        }
+    else:
+        conclusion = {
+            "text": f"已获取详情素材中脚本文本覆盖 {coverage.get('script', 0)}/{coverage.get('total', len(materials))} 个素材；当前数据不足以判断脚本文案结构。",
+            "materialIds": [],
+            "source": "coverage",
+        }
+    content_formula = _formula_hierarchy(facts.get("materials", []))
     dashboard = {
         "scope": _text(facts.get("scope")) or "selected_detail_materials",
         "scopeLabel": "已获取详情素材",
-        "coverage": deepcopy(facts.get("coverage", {"total": len(materials), "script": 0, "rate": 0})),
-        "frequencies": deepcopy(facts.get("frequencies", {})),
+        "coverage": coverage,
+        "conclusion": conclusion,
+        "keywords": _script_keywords(frequencies),
+        "sellingPoints": _script_frequency_items(frequencies, "selling_points"),
+        "frequencies": deepcopy(frequencies),
+        "dimensions": {
+            "contentFormula": {
+                "label": "一二级内容公式",
+                **content_formula,
+            },
+            "scriptCopy": {
+                "label": "脚本文案",
+                "coverage": deepcopy(coverage),
+                "materials": deepcopy(materials),
+            },
+        },
         "materials": materials,
-        "insights": _script_insights(analysis, material_ids),
+        "insights": insights,
         "limitations": deepcopy(facts.get("limitations", [])),
     }
     return {"scriptDashboard": dashboard}

@@ -1,5 +1,7 @@
 """Stable HTML renderers for independently migrated Yuntu report sections."""
 
+import json
+
 
 def _format_chapter01_exposure(value, *, signed=False):
     if not isinstance(value, (int, float)) or isinstance(value, bool):
@@ -113,9 +115,34 @@ def _render_chapter01_comparison_card(fact, *, title, esc, source, comparison_re
     )
 
 
-def render_script_insights(*, script_facts=None, script_insights=None, esc=str):
+def _script_formula_labels(formula):
+    labels = formula.get("labels") if isinstance(formula, dict) else None
+    if not isinstance(labels, list):
+        return []
+    result = []
+    for item in labels:
+        if not isinstance(item, dict):
+            continue
+        primary = str(item.get("level_1_label") or item.get("level1_label") or "").strip()
+        secondary = item.get("level_2_labels") or item.get("level2_labels") or []
+        if not isinstance(secondary, list):
+            secondary = [secondary]
+        if primary:
+            result.append({"primary": primary, "secondary": [str(value).strip() for value in secondary if str(value).strip()]})
+    return result
+
+
+def _script_formula_evidence(formula):
+    labels = _script_formula_labels(formula)
+    if labels:
+        return "；".join(item["primary"] + ("（" + "、".join(item["secondary"]) + "）" if item["secondary"] else "") for item in labels)
+    return "未返回"
+
+
+def render_script_insights(*, script_facts=None, script_insights=None, script_dashboard=None, esc=str):
     if not isinstance(script_facts, dict) or not script_facts.get("materials"):
         return '<div class="data-state"><span>脚本数据：不可用</span><p>当前未提供脚本事实，数据不足以判断。</p></div>'
+    dashboard = script_dashboard if isinstance(script_dashboard, dict) else {}
     coverage = script_facts.get("coverage", {})
     total = coverage.get("total", len(script_facts.get("materials", [])))
     script_count = coverage.get("script", 0)
@@ -124,38 +151,50 @@ def render_script_insights(*, script_facts=None, script_insights=None, esc=str):
         rate_text = f"{float(rate):.0%}"
     except (TypeError, ValueError):
         rate_text = "不可用"
-    frequency_sections = []
-    labels = (("formula_labels", "公式标签"), ("selling_points", "卖点"), ("scenes", "使用场景"), ("promotions", "营销活动"), ("marketing_formats", "呈现形式"))
-    frequencies = script_facts.get("frequencies", {})
-    for key, label in labels:
-        values = frequencies.get(key, {}) if isinstance(frequencies, dict) else {}
-        if not isinstance(values, dict) or not values:
-            continue
-        items = "".join("<li>" + esc(name) + "：" + esc(item.get("count", 0)) + " 个素材</li>" for name, item in list(values.items())[:8] if isinstance(item, dict))
-        if items:
-            frequency_sections.append("<section><h4>" + esc(label) + "</h4><ul>" + items + "</ul></section>")
-    insight_markup = ""
-    if isinstance(script_insights, list) and script_insights:
-        insight_markup = '<div class="insight-stack">' + "".join(
-            '<article class="insight-row"><h4>' + esc(item.get("title")) + '</h4><p>' + esc(item.get("summary")) + '</p><div class="material-references">素材 ID：' + esc("、".join(item.get("material_ids", []))) + "</div></article>"
-            for item in script_insights if isinstance(item, dict)
-        ) + "</div>"
-    material_markup = []
-    for item in script_facts.get("materials", []):
-        if not isinstance(item, dict):
-            continue
-        state = item.get("data_availability", {}).get("script_text", {}) if isinstance(item.get("data_availability"), dict) else {}
-        script_text = str(item.get("script_text") or "").strip()
-        formula = item.get("content_formula")
-        creative = item.get("creative_breakdown")
-        if not script_text and formula is None and creative is None:
-            material_markup.append('<article class="data-state"><span>素材 ' + esc(item.get("material_id")) + "：脚本数据不足</span><p>脚本文本、内容公式和创意拆解均未提供。</p></article>")
-            continue
-        formula_text = esc(formula if isinstance(formula, str) else str(formula or "未返回"))
-        creative_text = esc(str(creative or "未返回"))
-        material_markup.append('<article class="script-material"><h4>素材 ' + esc(item.get("material_id")) + '</h4><p><strong>脚本文本：</strong>' + esc(script_text or "数据不足以判断") + '</p><p><strong>内容公式：</strong>' + formula_text + '</p><p><strong>创意拆解：</strong>' + creative_text + '</p>' + ('' if state.get("available") else '<p class="data-note">脚本文本字段：' + esc(state.get("missing_reason") or "source_empty") + "。</p>") + '</article>')
+    dimensions = dashboard.get("dimensions", {}) if isinstance(dashboard.get("dimensions"), dict) else {}
+    formula_dimension = dimensions.get("contentFormula", {}) if isinstance(dimensions.get("contentFormula"), dict) else {}
+    primary = formula_dimension.get("primary", []) if isinstance(formula_dimension.get("primary"), list) else []
+    secondary = formula_dimension.get("secondary", {}) if isinstance(formula_dimension.get("secondary"), dict) else {}
+    formula_data = {"primary": primary, "secondary": secondary}
+    maximum = max([item.get("count", 0) for item in primary if isinstance(item, dict)] or [1])
+    formula_columns = "".join(
+        '<button class="script-formula-primary-column" type="button" data-script-formula-primary data-primary-id="' + esc(item.get("id")) + '" aria-controls="script-formula-view" aria-label="查看一级标签 ' + esc(item.get("label")) + ' 的二级标签分布"><span class="script-formula-column-plot"><i style="height:' + str(round(float(item.get("count", 0)) / maximum * 100, 2)) + '%"></i></span><strong>' + esc(item.get("label")) + '</strong><small>' + esc(item.get("count", 0)) + ' 个素材</small></button>'
+        for item in primary if isinstance(item, dict)
+    )
+    if not formula_columns:
+        formula_columns = '<div class="data-state"><span>内容公式：不可用</span><p>未提供可用的一二级内容公式标签，数据不足以判断。</p></div>'
+    formula_markup = '<section class="script-formula-dimension"><div class="section-title-row"><h3>一二级内容公式</h3><p class="script-dashboard-hint">点击一级标签柱状图可查看二级标签分布</p></div><div class="script-formula-dashboard" data-script-formula="' + esc(json.dumps(formula_data, ensure_ascii=False)) + '"><div id="script-formula-view" data-script-formula-view aria-live="polite"><div class="script-formula-overview" role="region" aria-label="一级内容公式柱状图">' + formula_columns + '</div></div></div></section>'
+
+    projected_insights = dashboard.get("insights") if isinstance(dashboard.get("insights"), list) else script_insights
+    ai_cards = []
+    dimension_labels = ("一二级内容公式", "脚本文案")
+    for index, label in enumerate(dimension_labels):
+        item = projected_insights[index] if isinstance(projected_insights, list) and index < len(projected_insights) and isinstance(projected_insights[index], dict) else {}
+        title = item.get("title") or item.get("text") or "暂无脚本洞察"
+        summary = item.get("summary") or item.get("text") or "数据不足以判断。"
+        evidence = item.get("evidence", [])
+        material_ids = item.get("material_ids", item.get("materialIds", []))
+        evidence_text = "；".join(str(value) for value in evidence if value) if isinstance(evidence, list) else str(evidence or "")
+        if material_ids:
+            evidence_text = (evidence_text + "；" if evidence_text else "") + "关联素材 " + "、".join(str(value) for value in material_ids)
+        ai_cards.append('<article class="script-ai-insight-card"><span class="script-ai-dimension">' + esc(label) + '</span><h4>' + esc(title) + '</h4><p>' + esc(summary) + '</p>' + ('<small class="script-ai-evidence">证据：' + esc(evidence_text) + '</small>' if evidence_text else '<small class="script-ai-evidence">暂无可用 AI 证据，数据不足以判断。</small>') + '</article>')
+    ai_markup = '<section class="script-ai-insights"><div class="section-title-row"><h3>AI 二次分析</h3><p class="script-dashboard-hint">分别分析一二级内容公式与脚本文案</p></div><div class="script-ai-insights-grid">' + "".join(ai_cards) + '</div></section>'
+
+    conclusion = dashboard.get("conclusion", {}) if isinstance(dashboard.get("conclusion"), dict) else {}
+    conclusion_text = conclusion.get("text") or ("脚本文本覆盖 " + str(script_count) + "/" + str(total) + " 个素材；数据不足以判断脚本文案结构。")
+    keywords = dashboard.get("keywords", []) if isinstance(dashboard.get("keywords"), list) else []
+    keywords = [item for item in keywords[:24] if isinstance(item, dict)]
+    keyword_maximum = max([item.get("count", 0) for item in keywords] or [1])
+    keyword_markup = "".join(
+        '<span class="script-keyword" style="--keyword-weight:' + str(round(1 + float(item.get("count", 0)) / keyword_maximum * 0.8, 2)) + '" title="' + esc(str(item.get("count", 0)) + ' 个素材') + '">' + esc(item.get("label")) + '</span>'
+        for item in keywords
+    ) or '<span class="data-note">暂无可用关键词，数据不足以判断。</span>'
+    selling_points = dashboard.get("sellingPoints", []) if isinstance(dashboard.get("sellingPoints"), list) else []
+    selling_points = [item for item in selling_points[:4] if isinstance(item, dict)]
+    selling_markup = "".join('<li><strong>' + esc(item.get("label")) + '</strong><span>' + esc(item.get("count", 0)) + ' 个素材</span></li>' for item in selling_points) or '<li class="data-note">暂无可用卖点，数据不足以判断。</li>'
+    triad_markup = '<section class="script-keyword-triad"><div class="section-title-row"><h3>关键词洞察</h3><p class="script-dashboard-hint">关键词频次与排序来自确定性事实统计</p></div><div class="script-keyword-triad-grid"><article class="script-keyword-conclusion"><span class="script-keyword-kicker">一句话结论</span><p>' + esc(conclusion_text) + '</p></article><article class="script-keyword-cloud-panel"><span class="script-keyword-kicker">高频关键词云</span><div class="script-keyword-cloud">' + keyword_markup + '</div></article><article class="script-keyword-selling-panel"><span class="script-keyword-kicker">从关键词云提炼的卖点</span><ul class="script-selling-points">' + selling_markup + '</ul></article></div></section>'
     timestamp_note = "" if any(item.get("script_segments") for item in script_facts.get("materials", []) if isinstance(item, dict)) else '<p class="data-note">未提供脚本时间段，暂不输出帧-话术对应关系。</p>'
-    return '<div class="script-dashboard"><div class="data-state"><span>范围：已获取详情素材</span><p>脚本文本覆盖 ' + esc(script_count) + '/' + esc(total) + ' 个素材（' + esc(rate_text) + '）。该范围不代表行业 TOP1000 普遍规律。</p></div><div class="script-frequency-grid">' + "".join(frequency_sections) + '</div>' + insight_markup + timestamp_note + '<div class="script-materials">' + "".join(material_markup) + '</div></div>'
+    return '<div class="script-dashboard">' + ai_markup + triad_markup + formula_markup + timestamp_note + '</div>'
 
 
 def render_top_material_combination(

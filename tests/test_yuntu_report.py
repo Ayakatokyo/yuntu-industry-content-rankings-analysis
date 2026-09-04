@@ -67,9 +67,15 @@ class YuntuReportTests(unittest.TestCase):
             with self.assertRaisesRegex(report.YuntuReportError, "script insight.*claim"):
                 report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
 
-    def test_render_report_shows_script_facts_and_reuses_them_in_material_tab(self):
+    def test_render_report_keeps_script_facts_in_material_tab_only(self):
         report = load_module()
         fact_pack = self.deep_dive_fact_pack()
+        fact_pack["materialFacts"][0].update({
+            "script_text": "先提出早餐场景，再展示商品。",
+            "script_segments": [],
+            "content_formula": {"labels": ["场景引入"]},
+            "creative_breakdown": {"tags": ["口播"]},
+        })
         fact_pack["scriptFacts"] = {
             "scope": "selected_detail_materials",
             "coverage": {"total": 2, "script": 1, "rate": 0.5},
@@ -90,10 +96,14 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=path, output_dir=root / "final-report", fact_pack=fact_pack)
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
 
-        self.assertIn("已获取详情素材", rendered)
-        self.assertIn("场景先行再承接商品", rendered)
-        self.assertIn("先提出早餐场景，再展示商品。", rendered)
-        self.assertIn("未提供脚本时间段，暂不输出帧-话术对应关系", rendered)
+        chapter03 = rendered.split('id="script-insights"', 1)[1].split(
+            'id="highlight-insights"', 1
+        )[0]
+        chapter05 = rendered.split('id="material-deep-dive"', 1)[1]
+        self.assertIn("场景先行再承接商品", chapter03)
+        self.assertNotIn("先提出早餐场景，再展示商品。", chapter03)
+        self.assertIn("先提出早餐场景，再展示商品。", chapter05)
+        self.assertIn("未提供脚本时间段，暂不输出帧-话术对应关系", chapter05)
 
     def test_render_report_shows_script_formula_drilldown_keywords_and_copy_dimension(self):
         report = load_module()
@@ -140,11 +150,12 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("renderScriptFormulaDrill", rendered)
         self.assertIn("一句话结论", rendered)
         self.assertIn("高频关键词云", rendered)
-        self.assertIn("卖点提炼", rendered)
+        self.assertIn("从关键词云提炼的卖点", rendered)
         self.assertIn("脚本文案", rendered)
         self.assertNotIn("标题原文不应进入脚本洞察", rendered)
         self.assertIn("数据不足以判断", rendered)
-        self.assertIn("@media(max-width:700px){.script-insights-grid", rendered)
+        self.assertIn(".script-keyword-triad", rendered)
+        self.assertIn("@media (max-width: 759px)", rendered)
 
     def test_chapter03_uses_qianchuan_order_and_three_column_mounts(self):
         script_facts = {
@@ -178,6 +189,25 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("一二级内容公式", rendered)
         self.assertIn("脚本文案", rendered)
         self.assertNotIn('class="script-material"', rendered)
+
+    def test_formula_dashboard_has_keyboard_and_drilldown_contract(self):
+        template = (ROOT / "scripts" / "templates" / "final-report-template.html").read_text(encoding="utf-8")
+
+        self.assertIn("data-script-formula-primary", template)
+        self.assertIn("aria-controls", template)
+        self.assertIn("aria-live", template)
+        self.assertIn("返回一级标签总览", template)
+        self.assertIn("matchMedia", template)
+        self.assertIn("prefers-reduced-motion", template)
+        self.assertIn("__scriptFormulaActiveButton", template)
+
+    def test_chapter03_css_defines_qianchuan_layout_breakpoints(self):
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+
+        self.assertIn(".script-keyword-triad", css)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", css)
+        self.assertIn("@media (max-width: 759px)", css)
+        self.assertIn("@media (max-width: 960px)", css)
 
     def test_render_report_creates_sibling_zip_with_final_report_directory(self):
         report = load_module()

@@ -214,6 +214,22 @@ class RpaIoTests(unittest.TestCase):
             self.assertEqual(records[0]["object_index"], {"ctr": 0.5})
             self.assertEqual(records[0]["tags"], ["轻食", "便携"])
 
+    def test_parse_csv_records_preserves_flat_detail_dotted_headers(self):
+        io = load_module()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "detail.csv"
+            source.write_text(
+                "coreData.materialId,secondTrend.点击指数.tendList,contentFormula.视频脚本.text\n"
+                '101,"[{""x"": 0, ""y"": 0.5}]",前3秒提出痛点\n',
+                encoding="utf-8",
+            )
+
+            records = io.parse_csv_records(source)
+
+        self.assertEqual(records[0]["coreData.materialId"], "101")
+        self.assertEqual(records[0]["secondTrend.点击指数.tendList"], [{"x": 0, "y": 0.5}])
+        self.assertEqual(records[0]["contentFormula.视频脚本.text"], "前3秒提出痛点")
+
     def test_parse_csv_records_ignores_delimiter_only_trailing_row(self):
         io = load_module()
         with tempfile.TemporaryDirectory() as temporary_directory:

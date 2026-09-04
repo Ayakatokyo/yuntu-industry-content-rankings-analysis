@@ -290,6 +290,49 @@ class YuntuNormalizerTests(unittest.TestCase):
         )
         self.assertTrue(record["data_availability"]["script_segments"]["available"])
 
+    def test_normalize_detail_records_accepts_flat_csv_detail_schema(self):
+        normalizer = load_module()
+        raw = {
+            "coreData.materialId": "7659409261740343346",
+            "coreData.dateType": "LAST_7_DAYS",
+            "coreData.customStartDate": "",
+            "coreData.customEndDate": "",
+            "coreData.videoUrl": "https://video.example/flat-a.mp4",
+            "coreData.convertCnt": "17",
+            "coreData.orderCnt": "3",
+            "secondTrend.点赞指数.tendList": [{"x": 0, "y": 0.1}],
+            "secondTrend.点赞指数.highPoint": {"start_point": 1, "end_point": 2},
+            "secondTrend.流失指数.tendList": [{"x": 0, "y": 0.2}],
+            "secondTrend.点击指数.tendList": [{"x": 0, "y": 0.3}],
+            "secondTrend.互动指数.tendList": [{"x": 0, "y": 0.4}],
+            "secondTrend.评论指数.tendList": [{"x": 0, "y": 0.5}],
+            "contentFormula.视频脚本.text": "前3秒提出使用场景，再展示商品卖点。",
+            "contentFormula.内容公式.labels": ["痛点引入", "场景演示"],
+            "contentFormula.内容公式.detail.商品卖点": "低糖、便携",
+            "creativeBreakdown.素材形式": "口播、产品展示",
+            "creativeBreakdown.使用场景": "早餐、通勤",
+        }
+
+        record = normalizer.normalize_detail_records(
+            raw,
+            material_id="7659409261740343346",
+            source_path="raw-csv/details/7659409261740343346.csv",
+        )
+
+        self.assertEqual(record["source_schema"], "flat_detail_csv")
+        self.assertEqual(record["date_range"]["type"], "LAST_7_DAYS")
+        self.assertEqual(record["video_url"], "https://video.example/flat-a.mp4")
+        self.assertEqual(len(record["trend_series"]), 5)
+        self.assertEqual(record["high_points"][0]["trend_name"], "点赞指数")
+        self.assertEqual(record["script_text"], "前3秒提出使用场景，再展示商品卖点。")
+        self.assertEqual(record["content_formula"]["labels"], ["痛点引入", "场景演示"])
+        self.assertEqual(record["content_formula"]["detail.商品卖点"], "低糖、便携")
+        self.assertEqual(record["creative_breakdown"]["raw"]["素材形式"], "口播、产品展示")
+        self.assertEqual(record["creative_breakdown"]["tags"], ["口播", "产品展示", "早餐", "通勤"])
+        self.assertEqual(record["metrics"]["convertCnt"], 17)
+        self.assertEqual(record["metrics"]["orderCnt"], 3)
+        self.assertFalse(record["data_availability"]["script_segments"]["available"])
+
 
 if __name__ == "__main__":
     unittest.main()

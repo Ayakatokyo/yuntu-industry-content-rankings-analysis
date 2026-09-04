@@ -316,6 +316,112 @@ def _normalize_trend(raw_trend):
     }
 
 
+def _flat_detail_value(raw, name):
+    """Read a scalar from either the flat coreData prefix or legacy aliases."""
+    for key in (name, f"coreData.{name}", f"core_data.{name}"):
+        if key in raw and raw[key] not in (None, ""):
+            return raw[key]
+    return None
+
+
+def _flat_point(raw, prefix):
+    value = raw.get(prefix)
+    if isinstance(value, dict):
+        return value
+    point = {}
+    for source_name, output_name in (
+        ("start_point", "start_point"),
+        ("end_point", "end_point"),
+        ("startPoint", "start_point"),
+        ("endPoint", "end_point"),
+        ("loss_percent", "loss_percent"),
+        ("lossPercent", "loss_percent"),
+    ):
+        if f"{prefix}.{source_name}" in raw:
+            point[output_name] = raw[f"{prefix}.{source_name}"]
+    return point or None
+
+
+def _flat_detail_trends(raw):
+    """Convert secondTrend.<name>.* CSV columns to the legacy trend shape."""
+    prefix = "secondTrend."
+    names = []
+    for key in raw:
+        if not key.startswith(prefix):
+            continue
+        remainder = key[len(prefix):]
+        name = remainder.split(".", 1)[0]
+        if name and name not in names:
+            names.append(name)
+    trends = []
+    for name in names:
+        base = f"{prefix}{name}."
+        trend = {
+            "trendName": raw.get(f"{base}trendName") or raw.get(f"{base}trend_name") or name,
+            "trendType": raw.get(f"{base}trendType") or raw.get(f"{base}trend_type"),
+            "tendList": raw.get(f"{base}tendList") or raw.get(f"{base}tend_list") or [],
+            "highPoint": _flat_point(raw, f"{base}highPoint"),
+            "lossPoint": _flat_point(raw, f"{base}lossPoint"),
+        }
+        if any(value not in (None, "", [], {}) for value in trend.values()):
+            trends.append(trend)
+    return trends
+
+
+def _flat_content_formula(raw):
+    """Keep flat formula paths while exposing stable labels/detail keys."""
+    prefix = "contentFormula."
+    values = {}
+    for key, value in raw.items():
+        if not key.startswith(prefix):
+            continue
+        path = key[len(prefix):]
+        if path == "视频脚本.text":
+            continue
+        if path.endswith(".labels") or path == "labels":
+            values["labels"] = value
+        elif ".detail." in path:
+            values["detail." + path.split(".detail.", 1)[1]] = value
+        else:
+            values[path] = value
+    return values or None
+
+
+def _flat_creative_breakdown(raw):
+    """Preserve raw creative columns and provide deterministic analyzable tags."""
+    prefix = "creativeBreakdown."
+    raw_values = {
+        key[len(prefix):]: value
+        for key, value in raw.items()
+        if key.startswith(prefix) and value not in (None, "")
+    }
+    if not raw_values:
+        return None
+    tags = []
+    for value in raw_values.values():
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            for tag in re.split(r"[、，,；;\\n]+", _text(item)):
+                tag = tag.strip()
+                if tag and tag not in tags:
+                    tags.append(tag)
+    return {"raw": raw_values, "tags": tags}
+
+
+def _flat_core_metrics(raw):
+    metrics = {}
+    for key, value in raw.items():
+        if not key.startswith("coreData."):
+            continue
+        name = key[len("coreData."):]
+        if name in {"materialId", "dateType", "customStartDate", "customEndDate", "videoUrl"}:
+            continue
+        parsed = _number(value)
+        if parsed is not None:
+            metrics[name] = parsed
+    return metrics
+
+
 def normalize_detail_records(
     raw_records, *, material_id, source_path, expected_selection_group=None
 ):
@@ -330,7 +436,11 @@ def normalize_detail_records(
 
     expected_material_id = _require_material_id(material_id)
     actual_material_id = _require_material_id(
-        raw.get("materialId") or raw.get("material_id") or material_id
+        raw.get("materialId")
+        or raw.get("material_id")
+        or raw.get("coreData.materialId")
+        or raw.get("core_data.material_id")
+        or material_id
     )
     if actual_material_id != expected_material_id:
         raise YuntuNormalizeError("detail material_id does not match selected material")
@@ -351,7 +461,12 @@ def normalize_detail_records(
     trend_series = []
     high_points = []
     loss_points = []
-    trends_value = raw.get("trends")
+    flat_schema = any(
+        key.startswith(("coreData.", "core_data.", "secondTrend.", "contentFormula.", "creativeBreakdown."))
+        for key in raw
+    )
+    flat_trends = _flat_detail_trends(raw) if flat_schema else []
+    trends_value = raw.get("trends") if "trends" in raw else (flat_trends if flat_schema else None)
     trends = trends_value
     if not isinstance(trends_value, list):
         trends = []
@@ -379,24 +494,38 @@ def normalize_detail_records(
                     "loss_percent": _number(loss.get("loss_percent")),
                 }
             )
-    script_text_value = raw.get("scriptText") or raw.get("script_text")
+    flat_script_text = raw.get("contentFormula.视频脚本.text")
+    script_text_value = raw.get("scriptText") or raw.get("script_text") or flat_script_text
     content_formula = raw.get("contentFormula") or raw.get("content_formula")
+    if content_formula is None and flat_schema:
+        content_formula = _flat_content_formula(raw)
     if not isinstance(content_formula, (str, dict, list)):
         content_formula = None
+    creative_breakdown = raw.get("creativeBreakdown") or raw.get("creative_breakdown")
+    if creative_breakdown is None and flat_schema:
+        creative_breakdown = _flat_creative_breakdown(raw)
     script_segments, script_segments_availability = _script_segments(
         raw.get("scriptSegments") or raw.get("script_segments")
     )
+    date_type = _flat_detail_value(raw, "dateType") or raw.get("dateRangeType") or raw.get("date_range_type")
+    start_date = _flat_detail_value(raw, "customStartDate") or raw.get("startDate") or raw.get("start_date")
+    end_date = _flat_detail_value(raw, "customEndDate") or raw.get("endDate") or raw.get("end_date")
+    core_metrics = _flat_core_metrics(raw) if flat_schema else {}
+    video_url = _flat_detail_value(raw, "videoUrl") or raw.get("videoUrl") or raw.get("video_url")
     return {
         "material_id": expected_material_id,
+        "source_schema": "flat_detail_csv" if flat_schema else "legacy_detail",
         "date_range": {
-            "type": _text(raw.get("dateRangeType") or raw.get("date_range_type")),
-            "start_date": _text(raw.get("startDate") or raw.get("start_date")),
-            "end_date": _text(raw.get("endDate") or raw.get("end_date")),
+            "type": _text(date_type),
+            "start_date": _text(start_date),
+            "end_date": _text(end_date),
         },
-        "video_url": _text(raw.get("videoUrl") or raw.get("video_url")),
+        "video_url": _text(video_url),
         "selection_group": selection_group,
         "script_text": _text(script_text_value),
         "content_formula": content_formula,
+        "creative_breakdown": creative_breakdown,
+        "metrics": core_metrics,
         "script_segments": script_segments,
         "trend_series": trend_series,
         "high_points": high_points,
@@ -414,6 +543,7 @@ def normalize_detail_records(
             },
             "script_text": _availability(script_text_value, has_values=bool(_text(script_text_value))),
             "content_formula": _availability(content_formula, has_values=content_formula is not None),
+            "creative_breakdown": _availability(creative_breakdown, has_values=creative_breakdown is not None),
             "script_segments": script_segments_availability,
         },
         "source_paths": {"detail": source_path},

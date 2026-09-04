@@ -35,6 +35,61 @@ class YuntuReportTests(unittest.TestCase):
         "experimentMatrix",
     )
 
+    def test_validate_script_insights_requires_scoped_material_evidence(self):
+        report = load_module()
+        fact_pack = {
+            "scriptFacts": {
+                "scope": "selected_detail_materials",
+                "materials": [{"material_id": "101"}],
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            analysis = self.analysis_json()
+            analysis["scriptInsights"] = [{
+                "title": "脚本结构",
+                "summary": "该结构可作为下一轮脚本变量的观察方向。",
+                "evidence": ["script_text"],
+                "material_ids": [],
+            }]
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "script insight.*material"):
+                report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+            analysis["scriptInsights"][0]["material_ids"] = ["101"]
+            analysis["scriptInsights"][0]["summary"] = "该句导致点击提升，并与第 2 秒建立帧-话术对应关系。"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "script insight.*claim"):
+                report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+    def test_render_report_shows_script_facts_and_reuses_them_in_material_tab(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["scriptFacts"] = {
+            "scope": "selected_detail_materials",
+            "coverage": {"total": 2, "script": 1, "rate": 0.5},
+            "frequencies": {"formula_labels": {"场景引入": {"count": 1, "material_ids": ["101"]}}},
+            "materials": [
+                {"material_id": "101", "rank": 1, "script_text": "先提出早餐场景，再展示商品。", "script_segments": [], "content_formula": {"labels": ["场景引入"]}, "creative_breakdown": {"tags": ["口播"]}, "metrics": {"convertCnt": 17, "orderCnt": 3}, "data_availability": {"script_text": {"available": True, "missing_reason": ""}, "script_segments": {"available": False, "missing_reason": "source_empty"}}},
+                {"material_id": "102", "rank": 2, "script_text": "", "script_segments": [], "content_formula": None, "creative_breakdown": None, "metrics": {}, "data_availability": {"script_text": {"available": False, "missing_reason": "source_empty"}, "script_segments": {"available": False, "missing_reason": "source_empty"}}},
+            ],
+            "limitations": ["脚本时间戳段落未提供，不能建立秒点或高光帧与话术的对应关系。"],
+        }
+        analysis = self.deep_dive_analysis()
+        analysis["scriptInsights"] = [{"title": "场景先行再承接商品", "summary": "已获取详情素材中的可见脚本呈现场景先行、商品信息后置的结构，可作为下一轮版本变量。", "evidence": ["script_text"], "material_ids": ["101"]}]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "final-report", fact_pack=fact_pack)
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn("已获取详情素材", rendered)
+        self.assertIn("场景先行再承接商品", rendered)
+        self.assertIn("先提出早餐场景，再展示商品。", rendered)
+        self.assertIn("未提供脚本时间段，暂不输出帧-话术对应关系", rendered)
+
     def test_render_report_creates_sibling_zip_with_final_report_directory(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:
@@ -179,7 +234,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("from yuntu_report_sections import", source)
         self.assertNotIn("def render_script_insights():", source)
         component = component_path.read_text(encoding="utf-8")
-        self.assertIn("def render_script_insights():", component)
+        self.assertIn("def render_script_insights(", component)
 
     def test_all_progressive_section_entrypoints_have_component_owner(self):
         component = (ROOT / "scripts" / "yuntu_report_sections.py").read_text(encoding="utf-8")
@@ -1856,7 +1911,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('href="#script-insights"', rendered)
         self.assertIn('href="#highlight-insights"', rendered)
         self.assertIn('href="#material-deep-dive"', rendered)
-        self.assertIn("脚本数据：未接入", rendered)
+        self.assertIn("脚本数据：不可用", rendered)
         self.assertIn("本次云图 RPA 未提供可用于汇总的脚本正文与时间戳段落", markdown)
         self.assertIn("暂无可用高光帧", rendered)
         self.assertNotIn("data-highlight-collapse-toggle", rendered)
@@ -2026,7 +2081,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-deep-frame-observation-empty', rendered)
         self.assertIn('全选高光帧', rendered)
         self.assertIn('全不选高光帧', rendered)
-        self.assertIn('脚本数据：未接入', rendered)
+        self.assertIn('脚本数据：不足', rendered)
         self.assertIn('核心人群标签</dt><dd>未返回</dd>', rendered)
 
     def test_render_report_supports_keyboard_tabs_and_filtered_highlight_observations(self):

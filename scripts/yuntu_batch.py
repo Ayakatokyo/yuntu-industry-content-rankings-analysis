@@ -8,6 +8,7 @@ import time
 
 from rpa_io import (
     download_file,
+    file_sha256,
     parse_csv_records,
     unpack_gateway_result,
     write_json_atomically,
@@ -773,6 +774,7 @@ def _persist_detail(*, root, summary, item, gateway_result, downloader, detail_f
         raw_detail,
         material_id=material_id,
         source_path=_relative(root, detail_source),
+        source_hash=file_sha256(detail_source),
         expected_selection_group=_expected_selection_group(item),
     )
     detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"

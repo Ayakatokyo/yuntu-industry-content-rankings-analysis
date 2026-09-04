@@ -1,6 +1,8 @@
 import importlib.util
+import hashlib
 import unittest
 from pathlib import Path
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -332,6 +334,22 @@ class YuntuNormalizerTests(unittest.TestCase):
         self.assertEqual(record["metrics"]["convertCnt"], 17)
         self.assertEqual(record["metrics"]["orderCnt"], 3)
         self.assertFalse(record["data_availability"]["script_segments"]["available"])
+
+    def test_normalize_detail_records_preserves_source_hash_when_provided(self):
+        normalizer = load_module()
+        with tempfile.NamedTemporaryFile() as source:
+            source.write(b"materialId,videoUrl\n101,https://example.test/101.mp4\n")
+            source.flush()
+            expected_hash = hashlib.sha256(Path(source.name).read_bytes()).hexdigest()
+            record = normalizer.normalize_detail_records(
+                {"materialId": "101"},
+                material_id="101",
+                source_path="raw-csv/details/101.csv",
+                source_hash=expected_hash,
+            )
+
+        self.assertEqual(record["source_paths"]["detail"], "raw-csv/details/101.csv")
+        self.assertEqual(record["source_hashes"]["detail"], expected_hash)
 
 
 if __name__ == "__main__":

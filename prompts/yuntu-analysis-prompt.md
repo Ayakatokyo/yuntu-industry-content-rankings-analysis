@@ -1,6 +1,6 @@
 # 云图行业内容榜单分析任务
 
-读取同目录的 `analysis-units/analysis-unit-manifest.json`、manifest 指向的 `yuntu-ai-analysis.schema.json` 及其列出的四个章节事实包，在同一次模型调用中生成 `yuntu-ai-analysis.json`。最终 JSON 必须严格符合统一输出 Schema；不要读取 `yuntu-analysis-data.json` 或 `report-data.json` 作为模型证据。
+读取同目录的 `analysis-units/analysis-unit-manifest.json`、manifest 指向的 `yuntu-ai-analysis.schema.json` 及其列出的五个章节事实包，在同一次模型调用中生成 `yuntu-ai-analysis.json`。最终 JSON 必须严格符合统一输出 Schema；不要读取 `yuntu-analysis-data.json` 或 `report-data.json` 作为模型证据。
 
 本提示词采用固定提示词模板；本次品牌榜单分析范围为行业 TOP1000 内按品牌匹配的全部素材，品牌范围为：__BRANDS__。
 
@@ -16,9 +16,11 @@
 
 `hotMaterialRule` 是本批次从配置文件读取并写入事实包的确定性规则：__HOT_MATERIAL_RULE__。只能使用 `hotMaterialRule` 指定的指标、比较关系和阈值判断，不能在 Prompt 或模型输出中自行写死另一套数值；只使用 `exposure.min` 判断，低于阈值不入选，等于阈值入选。云图列表的顶层 `show_cnt` 在返回 `200-300w`、`20-30w` 等带范围或单位的展示字符串时代表曝光区间，可由事实构建层解析；嵌套指标中的精确 `object_index.show_cnt` 仍只是辅助指标，不能替代缺失区间。不得用 CTR、互动率或排名替代缺失曝光区间，也不得自行计算命中数量。命中素材必须保留事实包中的素材 ID、名称、曝光区间 `min/max/raw` 和可用辅助指标；曝光区间不可解析时输出事实包提供的不可用状态，不伪造数值。爆款事实只作为整体分析的一个证据维度，不单独生成 AI 小节。
 
-四个事实包分别与四个顶层输出字段一一对应：`ranking-brand-input.json` 只支撑 `topMaterialCombination`，`audience-marketing-input.json` 只支撑 `chapter02Insights`，`highlight-input.json` 只支撑 `highlightDashboard`，`material-deep-dive-input.json` 只支撑 `materialDeepDives`。章节之间不得借用其他事实包的业务证据。规则只计算事实，模型负责写业务判断。人群卖点包内的 `chapter02AiFacts` 是 02 章 AI 二次分析范围，品牌范围与用户输入一致。视觉高光包内的 `visualAssets` 是本地图片清单，`image_path` 相对于本提示词所在目录；必须实际查看每张成功 JPEG（`available=true`），原视频 URL 过期时仍使用已落盘的本地帧，不得以 URL 不可用为由跳过画面分析。
+五个事实包分别与五个顶层输出字段一一对应：`ranking-brand-input.json` 只支撑 `topMaterialCombination`，`audience-marketing-input.json` 只支撑 `chapter02Insights`，`script-input.json` 只支撑 `scriptInsights`，`highlight-input.json` 只支撑 `highlightDashboard`，`material-deep-dive-input.json` 只支撑 `materialDeepDives`。章节之间不得借用其他事实包的业务证据。规则只计算事实，模型负责写业务判断。脚本事实包的范围固定为 `selected_detail_materials`（已获取详情素材），每条 `scriptInsights` 必须包含 `title`、`summary`、`evidence` 和非空 `material_ids`，只能引用事实包列出的素材 ID。脚本正文、内容公式和创意拆解缺失时输出“数据不足以判断”；当前没有 `scriptSegments`，不得把句子映射到秒点或高光帧，不得把内容公式标签写成因果证据，不得把 `convertCnt` 当成订单数，也不得将详情样本概括成行业普遍规律。视觉高光包内的 `visualAssets` 是本地图片清单，`image_path` 相对于本提示词所在目录；必须实际查看每张成功 JPEG（`available=true`），原视频 URL 过期时仍使用已落盘的本地帧，不得以 URL 不可用为由跳过画面分析。
 
-输出必须是 JSON 对象，包含：topMaterialCombination、chapter02Insights。若事实包中存在成功高光帧，还必须包含 highlightDashboard。若每条素材包含 `secondLevelBreakdown`，还必须包含 materialDeepDives。除 `allBrandsConclusion` 外，不要生成报告未展示的额外分析模块或跨品牌结论字段。
+输出必须是 JSON 对象，包含：topMaterialCombination、chapter02Insights、scriptInsights。若事实包中存在成功高光帧，还必须包含 highlightDashboard。若每条素材包含 `secondLevelBreakdown`，还必须包含 materialDeepDives。除 `allBrandsConclusion` 外，不要生成报告未展示的额外分析模块或跨品牌结论字段。
+
+`scriptInsights` 只输出已获取详情素材范围内的脚本洞察，至少覆盖开场钩子、信任/证明、卖点与场景组合、促销/行动表达以及可测试的改写方向。每条洞察都必须引用 `material_ids`；只能写整段脚本和确定性公式结构能支持的可能关系，不得声称某句脚本导致点击、转化或秒级指标变化，不得生成帧-话术对应关系。若脚本覆盖不足，明确写“数据不足以判断”，不补造脚本内容。
 
 `topMaterialCombination` 必须严格符合 `ranking-brand-input.json` 的 `outputSchema`，包含各品牌的 `brandConclusions`，并新增一个 `allBrandsConclusion` 全品牌对象。每个对象只输出 `brand`、`classificationSource`、`dataSummary`、`hotMaterialInsight`、`evidence`、`material_ids`；`hotMaterialInsight` 必须包含 `title`、`summary` 和带 `scope`/`material_ids` 的 `evidence`。全品牌对象的 `brand` 固定为“全品牌”，只能引用三批榜单列表及其确定性比较/爆款事实；各品牌对象只能解释同一三批列表按标题匹配后的对应范围，不得生成 `marketingSummary` 或其他跨范围结论。第一章只分析对应范围内的全部素材聚合结果，不分析或举例任何单条素材；两个 AI 段落均不得引用单条素材的素材 ID、标题、排名或指标，也不得使用“某条素材”“其中一条”“头部素材”等方式替代素材 ID 进行个案分析。素材 ID 只保留在 `evidence`、`material_ids` 和爆款事实引用中，不进入用户可见的榜单摘要。`dataSummary` 只覆盖当前表现、环比周期和同周期全行业对比，必须覆盖曝光、CTR、CVR、3 秒播放率，并形成“事实锚点 -> 业务判断 -> 可能机制 -> 策略 -> 验证”的自然段；`hotMaterialInsight` 只写当前范围爆款素材的整体特征、内容机会和验证建议，不逐条复述爆款清单。四项指标不得省略；分别输出两个自然段，不把两个字段合并或重复成一个段落。每个 `dataSummary` 控制在 6 至 10 句、约 420 至 700 个中文字符，每个 `hotMaterialInsight.summary` 控制在 3 至 6 句、约 180 至 360 个中文字符；分析必须是业务判断，不得只是重复数字清单；不得把相关性写成因果。第一章不输出人群维度分析。第一章不输出人群图表、看板或交互数据。品牌名称必须与用户输入的完整参数一致；品牌素材来自同一合并 TOP1000 的运行时品牌匹配。
 

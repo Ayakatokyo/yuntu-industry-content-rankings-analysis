@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import re
 from statistics import median
 
 from rpa_io import file_sha256, write_json_atomically
@@ -55,6 +56,7 @@ REPORT_DATA_FIELDS = (
     "comparisonFacts",
     "hotMaterialRule",
     "hotMaterialFacts",
+    "scriptFacts",
 )
 
 
@@ -335,6 +337,156 @@ def _tag_insights(records, selected_ids):
         "eligibleForAssociation": eligible,
         "materialTags": material_tags,
         "peopleTags": people_tags,
+    }
+
+
+def _script_fact_tokens(value):
+    values = value if isinstance(value, list) else [value]
+    tokens = []
+    for item in values:
+        if isinstance(item, dict):
+            if item.get("level_1_label") not in (None, ""):
+                tokens.append(f"level_1_label:{item['level_1_label']}")
+            for label in item.get("level_2_labels", []) if isinstance(item.get("level_2_labels"), list) else []:
+                if label not in (None, ""):
+                    tokens.append(f"level_2_label:{label}")
+            continue
+        for token in re.split(r"[、，,；;\\n]+", str(item or "")):
+            token = token.strip()
+            if token and token not in tokens:
+                tokens.append(token)
+    return tokens
+
+
+def _script_frequency_add(frequencies, dimension, values, material_id):
+    for value in _script_fact_tokens(values):
+        entry = frequencies[dimension].setdefault(value, {"count": 0, "material_ids": []})
+        if material_id not in entry["material_ids"]:
+            entry["material_ids"].append(material_id)
+            entry["count"] += 1
+
+
+def _script_frequencies_for_detail(detail, material_id, frequencies):
+    formula = detail.get("content_formula")
+    if isinstance(formula, dict):
+        for key, value in formula.items():
+            key_text = str(key)
+            if key_text == "labels" or key_text.endswith(".labels"):
+                _script_frequency_add(frequencies, "formula_labels", value, material_id)
+            if any(token in key_text for token in ("卖点", "selling_point", "sellingPoint")):
+                _script_frequency_add(frequencies, "selling_points", value, material_id)
+            if any(token in key_text for token in ("场景", "scene")):
+                _script_frequency_add(frequencies, "scenes", value, material_id)
+            if any(token in key_text for token in ("营销", "促销", "活动", "promotion")):
+                _script_frequency_add(frequencies, "promotions", value, material_id)
+            if any(token in key_text for token in ("形式", "format")):
+                _script_frequency_add(frequencies, "marketing_formats", value, material_id)
+    creative = detail.get("creative_breakdown")
+    if isinstance(creative, dict):
+        raw = creative.get("raw", creative)
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                key_text = str(key)
+                if any(token in key_text for token in ("卖点", "selling_point", "sellingPoint")):
+                    _script_frequency_add(frequencies, "selling_points", value, material_id)
+                if any(token in key_text for token in ("场景", "scene")):
+                    _script_frequency_add(frequencies, "scenes", value, material_id)
+                if any(token in key_text for token in ("营销", "促销", "活动", "promotion")):
+                    _script_frequency_add(frequencies, "promotions", value, material_id)
+                if any(token in key_text for token in ("形式", "format")):
+                    _script_frequency_add(frequencies, "marketing_formats", value, material_id)
+
+
+def _script_detail_equivalence(detail):
+    return {
+        "script_text": detail.get("script_text", ""),
+        "script_segments": detail.get("script_segments", []),
+        "content_formula": detail.get("content_formula"),
+        "creative_breakdown": detail.get("creative_breakdown"),
+        "metrics": detail.get("metrics", {}),
+    }
+
+
+def build_script_facts(details, selected_materials):
+    """Build a deduplicated, source-only fact pack for chapter 03."""
+    if not isinstance(details, list) or not isinstance(selected_materials, list):
+        raise YuntuAnalysisError("script facts inputs must be lists")
+    detail_by_id = {}
+    urls_by_id = {}
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        material_id = str(detail.get("material_id") or "").strip()
+        if not material_id:
+            continue
+        if material_id in detail_by_id:
+            if _script_detail_equivalence(detail_by_id[material_id]) != _script_detail_equivalence(detail):
+                raise YuntuAnalysisError(f"conflicting detail facts for material {material_id}")
+        else:
+            detail_by_id[material_id] = detail
+        url = str(detail.get("video_url") or "").strip()
+        if url and url not in urls_by_id.setdefault(material_id, []):
+            urls_by_id[material_id].append(url)
+
+    selected = []
+    selected_ids = set()
+    for item in selected_materials:
+        if not isinstance(item, dict):
+            continue
+        material_id = str(item.get("material_id") or item.get("materialId") or "").strip()
+        if not material_id or material_id in selected_ids:
+            continue
+        selected_ids.add(material_id)
+        selected.append((material_id, item))
+
+    frequencies = {
+        "formula_labels": {},
+        "selling_points": {},
+        "scenes": {},
+        "promotions": {},
+        "marketing_formats": {},
+    }
+    materials = []
+    for material_id, selected_item in selected:
+        detail = detail_by_id.get(material_id, {})
+        availability = detail.get("data_availability", {})
+        material = {
+            "material_id": material_id,
+            "rank": selected_item.get("rank"),
+            "script_text": str(detail.get("script_text") or ""),
+            "script_segments": detail.get("script_segments", []) if isinstance(detail.get("script_segments", []), list) else [],
+            "content_formula": detail.get("content_formula"),
+            "creative_breakdown": detail.get("creative_breakdown"),
+            "metrics": dict(detail.get("metrics", {})) if isinstance(detail.get("metrics"), dict) else {},
+            "source_paths": dict(detail.get("source_paths", {})) if isinstance(detail.get("source_paths"), dict) else {},
+            "source_hashes": dict(detail.get("source_hashes", {})) if isinstance(detail.get("source_hashes"), dict) else {},
+            "video_url_variants": urls_by_id.get(material_id, []),
+            "data_availability": dict(availability) if isinstance(availability, dict) else {},
+        }
+        if not material["data_availability"]:
+            material["data_availability"] = {
+                "script_text": {"available": bool(material["script_text"]), "missing_reason": "" if material["script_text"] else "source_empty"},
+                "script_segments": {"available": bool(material["script_segments"]), "missing_reason": "" if material["script_segments"] else "source_empty"},
+                "content_formula": {"available": material["content_formula"] is not None, "missing_reason": "" if material["content_formula"] is not None else "source_empty"},
+                "creative_breakdown": {"available": material["creative_breakdown"] is not None, "missing_reason": "" if material["creative_breakdown"] is not None else "source_empty"},
+            }
+        materials.append(material)
+        _script_frequencies_for_detail(detail, material_id, frequencies)
+
+    script_count = sum(bool(item["script_text"].strip()) for item in materials)
+    total = len(materials)
+    for dimension in frequencies:
+        frequencies[dimension] = dict(sorted(frequencies[dimension].items()))
+    return {
+        "schemaVersion": 1,
+        "scope": "selected_detail_materials",
+        "coverage": {"total": total, "script": script_count, "rate": script_count / total if total else 0},
+        "frequencies": frequencies,
+        "materials": materials,
+        "limitations": [
+            "脚本时间戳段落未提供，不能建立秒点或高光帧与话术的对应关系。",
+            "该事实包只覆盖已获取详情素材，不代表行业 TOP1000 普遍规律。",
+        ],
     }
 
 
@@ -890,6 +1042,12 @@ def _analysis_output_schema(fact_pack):
         "chapter02Insights": _chapter02_output_schema(fact_pack),
     }
     required = ["topMaterialCombination", "chapter02Insights"]
+    if "scriptFacts" in fact_pack:
+        properties["scriptInsights"] = {
+            "type": "array",
+            "items": _analysis_insight_schema(),
+        }
+        required.append("scriptInsights")
     if any(asset.get("available") for asset in fact_pack.get("visualAssets", [])):
         properties["highlightDashboard"] = _highlight_output_schema()
         required.append("highlightDashboard")
@@ -933,6 +1091,12 @@ def _write_analysis_units(fact_pack, output):
             "audience_marketing",
             "chapter02Insights",
             {"chapter02AiFacts": fact_pack["chapter02AiFacts"]},
+        ),
+        (
+            "script-input.json",
+            "script_insights",
+            "scriptInsights",
+            {"scriptFacts": fact_pack["scriptFacts"]},
         ),
         (
             "highlight-input.json",
@@ -989,6 +1153,11 @@ def _write_analysis_units(fact_pack, output):
             payload["outputSchema"] = _ranking_output_schema(
                 include_period_contract="hotMaterialFacts" in fact_pack
             )
+        elif unit_name == "script_insights":
+            payload["outputSchema"] = {
+                "type": "array",
+                "items": _analysis_insight_schema(),
+            }
         write_json_atomically(payload, path, indent=None)
         manifest_units.append(
             {
@@ -1202,6 +1371,11 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
                 "material_tags": list_record.get("material_tags", []),
                 "high_points": detail.get("high_points", []),
                 "loss_points": detail.get("loss_points", []),
+                "script_text": detail.get("script_text", ""),
+                "script_segments": detail.get("script_segments", []),
+                "content_formula": detail.get("content_formula"),
+                "creative_breakdown": detail.get("creative_breakdown"),
+                "detailMetrics": detail.get("metrics", {}),
                 "secondLevelBreakdown": _second_level_breakdown(detail),
                 "listDataAvailability": list_record.get("data_availability", {}),
                 "detailDataAvailability": detail.get("data_availability", {}),
@@ -1225,6 +1399,7 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
     audience_dashboard = build_audience_dashboard(pool_records)
     tag_insights = _tag_insights(pool_records, selected_ids)
     trend_summary = _trend_summary(details)
+    script_facts = build_script_facts(details, selected)
     brands = manifest.get("filters", {}).get("brands", [])
     ranking_period_facts, comparison_facts = _build_period_facts(
         manifest, pool_records, previous_records, industry_records
@@ -1318,6 +1493,7 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
         "audienceDashboard": audience_dashboard,
         "tagInsights": tag_insights,
         "trendSummary": trend_summary,
+        "scriptFacts": script_facts,
         "dataAvailabilitySummary": _availability_summary(material_facts),
         "materialFacts": material_facts,
         "chapter02Facts": chapter02_facts,

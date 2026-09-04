@@ -131,6 +131,9 @@ AUDIT_JSON_PATTERN = re.compile(r'(?:\[\s*)?\{\s*"[^"\n]+"\s*:')
 DEEP_DIVE_FORBIDDEN_CLAIM = re.compile(
     r"脚本|话术|内容公式|真实(?:点击|互动|点赞|评论)(?:量|次数)?|转化|因果|导致|提升"
 )
+SCRIPT_INSIGHT_FORBIDDEN_CLAIM = re.compile(
+    r"导致|提升|因果|行业(?:普遍|规律)|帧[-—]?话术|话术[-—]?帧|秒点.{0,8}话术|话术.{0,8}秒点|convertCnt.{0,8}订单|订单.{0,8}convertCnt"
+)
 
 
 def _load_analysis(
@@ -174,9 +177,50 @@ def validate_analysis_input(*, analysis_json, fact_pack=None):
     )
     _validate_ranking_scope_contract(analysis, fact_pack)
     _validate_period_and_hot_material_contract(analysis, fact_pack)
+    _validate_script_insights(analysis, fact_pack)
     _validate_highlight_dashboard(analysis, fact_pack)
     _validate_material_deep_dives(analysis, fact_pack)
     return analysis
+
+
+def _validate_script_insights(analysis, fact_pack):
+    if "scriptInsights" not in analysis:
+        return
+    insights = analysis.get("scriptInsights")
+    if not isinstance(insights, list):
+        raise YuntuReportError("scriptInsights must be a list")
+    facts = fact_pack.get("scriptFacts", {}) if isinstance(fact_pack, dict) else {}
+    known_ids = {
+        str(item.get("material_id"))
+        for item in facts.get("materials", [])
+        if isinstance(item, dict) and str(item.get("material_id") or "").isdigit()
+    }
+    if not known_ids:
+        known_ids = {
+            str(item.get("material_id"))
+            for item in fact_pack.get("selectedMaterials", [])
+            if isinstance(item, dict) and str(item.get("material_id") or "").isdigit()
+        }
+    for index, item in enumerate(insights, start=1):
+        field = f"script insight {index}"
+        if not isinstance(item, dict):
+            raise YuntuReportError(f"{field} must be an object")
+        if set(item) - {"title", "summary", "evidence", "material_ids"}:
+            raise YuntuReportError(f"{field} contains unsupported fields")
+        _validate_summary(item.get("title"), f"{field}.title")
+        _validate_summary(item.get("summary"), f"{field}.summary")
+        evidence = item.get("evidence")
+        if not isinstance(evidence, list) or not evidence:
+            raise YuntuReportError(f"{field} must include evidence")
+        material_ids = item.get("material_ids")
+        if not isinstance(material_ids, list) or not material_ids or any(
+            not isinstance(value, str) or not value.isdigit() for value in material_ids
+        ):
+            raise YuntuReportError(f"{field} must include material IDs")
+        if known_ids and not set(material_ids).issubset(known_ids):
+            raise YuntuReportError(f"{field} references unknown material IDs")
+        if SCRIPT_INSIGHT_FORBIDDEN_CLAIM.search(item["summary"]):
+            raise YuntuReportError(f"{field} contains unsupported claim")
 
 
 def _validate_summary(value, field):
@@ -656,17 +700,24 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
             if unlabeled_count:
                 lines.append(f"- 未识别到该维度标签：{unlabeled_count} 条素材（不计入图表分母）")
             lines.append("")
-    lines.extend([
-        "## 03｜脚本洞察",
-        "",
-        "**脚本数据：未接入**",
-        "",
-        "本次云图 RPA 未提供可用于汇总的脚本正文与时间戳段落；本部分暂不输出话术、内容公式或帧-话术对应关系。",
-        "",
-        "## 04｜高光画面洞察",
-        "",
-        "",
-    ])
+    lines.extend(["## 03｜脚本洞察", ""])
+    script_facts = (fact_pack or {}).get("scriptFacts") if isinstance(fact_pack, dict) else None
+    if isinstance(script_facts, dict) and script_facts.get("materials"):
+        coverage = script_facts.get("coverage", {})
+        lines.extend([
+            "范围：已获取详情素材。",
+            f"脚本文本覆盖 {coverage.get('script', 0)}/{coverage.get('total', 0)} 个素材（{coverage.get('rate', 0):.0%}），该范围不代表行业 TOP1000 普遍规律。",
+            "",
+        ])
+        for insight in analysis.get("scriptInsights", []):
+            lines.extend([f"### {insight.get('title', '脚本洞察')}", "", insight.get("summary", ""), "", f"证据素材：{'、'.join(insight.get('material_ids', []))}。", ""])
+        if not analysis.get("scriptInsights"):
+            lines.extend(["数据不足以判断。", ""])
+        if not any(item.get("script_segments") for item in script_facts.get("materials", []) if isinstance(item, dict)):
+            lines.extend(["未提供脚本时间段，暂不输出帧-话术对应关系。", ""])
+    else:
+        lines.extend(["**脚本数据：未接入**", "", "本次云图 RPA 未提供可用于汇总的脚本正文与时间戳段落；本部分暂不输出话术、内容公式或帧-话术对应关系。", ""])
+    lines.extend(["## 04｜高光画面洞察", "", ""])
     successful_frames = _overview_highlight_frames(fact_pack or {})
     dashboard = analysis.get("highlightDashboard")
     if not successful_frames:
@@ -1388,8 +1439,10 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None, highli
                 continue
             label = "封面" if frame.get("is_cover") else f'{frame.get("second", 0)}s'
             reason = "/".join(str(value.get("trend_name") or value.get("type") or "") for value in frame.get("reasons", []) if isinstance(value, dict))
+            rank = item.get("rank", "-")
+            caption = f"#{rank} · {label} · {reason or '高光帧'}"
             frame_buttons.append(
-                f'<button class="frame-button" type="button" data-material="{esc(material_id)}" data-frame="{html.escape(image_src(frame), quote=True)}" data-caption="{esc(f"#{item.get("rank", "-")} · {label} · {reason or "高光帧"}")}" aria-label="查看 {esc(material_id)} {esc(label)} 高光帧"><img loading="lazy" src="{html.escape(image_src(frame), quote=True)}" alt="{esc(fact.get("title", material_id))} {esc(label)} 高光帧"><span>#{esc(item.get("rank", "-"))} · {esc(label)}</span></button>'
+                f'<button class="frame-button" type="button" data-material="{esc(material_id)}" data-frame="{html.escape(image_src(frame), quote=True)}" data-caption="{esc(caption)}" aria-label="查看 {esc(material_id)} {esc(label)} 高光帧"><img loading="lazy" src="{html.escape(image_src(frame), quote=True)}" alt="{esc(fact.get("title", material_id))} {esc(label)} 高光帧"><span>#{esc(rank)} · {esc(label)}</span></button>'
             )
     frame_options = "".join(f'<option value="{esc(str(item.get("material_id")))}">#{esc(item.get("rank", "-"))} {esc(facts.get(str(item.get("material_id")), {}).get("title", item.get("material_id"))[:18])}</option>' for item in selected)
 
@@ -1401,7 +1454,11 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None, highli
     def highlight_material_title(frame):
         return str(frame.get("title", frame["material_id"])).removesuffix(".mp4")
 
-    script_insights = render_script_insights()
+    script_insights = render_script_insights(
+        script_facts=fact_pack.get("scriptFacts"),
+        script_insights=analysis.get("scriptInsights"),
+        esc=esc,
+    )
     highlight_insights = render_highlight_insights(
         successful_frames=_overview_highlight_frames(fact_pack),
         dashboard=analysis.get("highlightDashboard"),

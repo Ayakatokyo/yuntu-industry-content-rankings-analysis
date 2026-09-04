@@ -22,6 +22,66 @@ def load_module():
 
 
 class YuntuAnalysisTests(unittest.TestCase):
+    def test_build_script_facts_deduplicates_materials_and_counts_only_source_labels(self):
+        analysis = load_module()
+        details = [
+            {
+                "material_id": "101",
+                "video_url": "https://video.example/101-a.mp4",
+                "script_text": "先提出早餐场景，再展示低糖卖点。",
+                "script_segments": [],
+                "content_formula": {
+                    "labels": ["场景引入", "卖点展示"],
+                    "detail.商品卖点": "低糖、便携",
+                    "detail.使用场景": "早餐、通勤",
+                },
+                "creative_breakdown": {"raw": {"素材形式": "口播、产品展示"}, "tags": ["口播", "产品展示"]},
+                "metrics": {"convertCnt": 17, "orderCnt": 3},
+                "source_paths": {"detail": "raw-csv/details/101.csv"},
+                "source_hashes": {"detail": "a" * 64},
+                "data_availability": {
+                    "script_text": {"available": True, "missing_reason": ""},
+                    "script_segments": {"available": False, "missing_reason": "source_empty"},
+                    "content_formula": {"available": True, "missing_reason": ""},
+                    "creative_breakdown": {"available": True, "missing_reason": ""},
+                },
+            },
+            {
+                "material_id": "101",
+                "video_url": "https://video.example/101-b.mp4",
+                "script_text": "先提出早餐场景，再展示低糖卖点。",
+                "script_segments": [],
+                "content_formula": {"labels": ["场景引入", "卖点展示"], "detail.商品卖点": "低糖、便携", "detail.使用场景": "早餐、通勤"},
+                "creative_breakdown": {"raw": {"素材形式": "口播、产品展示"}, "tags": ["口播", "产品展示"]},
+                "metrics": {"convertCnt": 17, "orderCnt": 3},
+                "data_availability": {},
+            },
+            {"material_id": "102", "script_text": "信任表达来自原料证明。", "script_segments": [], "content_formula": {"labels": ["品质证明"], "detail.商品卖点": "原料"}, "creative_breakdown": {"raw": {"营销活动": "限时优惠"}, "tags": ["限时优惠"]}, "metrics": {}, "data_availability": {}},
+            {"material_id": "103", "script_text": "展示通勤中的使用方式。", "script_segments": [], "content_formula": {"labels": ["场景引入"], "detail.使用场景": "通勤"}, "creative_breakdown": {"raw": {"素材形式": "产品展示"}, "tags": ["产品展示"]}, "metrics": {}, "data_availability": {}},
+            {"material_id": "104", "script_text": "", "script_segments": [], "content_formula": None, "creative_breakdown": None, "metrics": {}, "data_availability": {}},
+        ]
+        selected = [{"material_id": str(index), "rank": index} for index in range(101, 105)]
+
+        facts = analysis.build_script_facts(details, selected)
+
+        self.assertEqual(facts["scope"], "selected_detail_materials")
+        self.assertEqual(facts["coverage"], {"total": 4, "script": 3, "rate": 0.75})
+        self.assertEqual([item["material_id"] for item in facts["materials"]], ["101", "102", "103", "104"])
+        self.assertEqual(facts["materials"][0]["video_url_variants"], [
+            "https://video.example/101-a.mp4", "https://video.example/101-b.mp4"
+        ])
+        self.assertEqual(facts["frequencies"]["formula_labels"]["场景引入"]["count"], 2)
+        self.assertEqual(facts["frequencies"]["selling_points"]["低糖"]["count"], 1)
+        self.assertEqual(facts["frequencies"]["scenes"]["通勤"]["count"], 2)
+        self.assertEqual(facts["frequencies"]["marketing_formats"]["产品展示"]["count"], 2)
+        self.assertNotIn("industryTop1000", json.dumps(facts, ensure_ascii=False))
+        self.assertEqual(facts["materials"][0]["metrics"], {"convertCnt": 17, "orderCnt": 3})
+        self.assertEqual(
+            facts["materials"][0]["source_paths"],
+            {"detail": "raw-csv/details/101.csv"},
+        )
+        self.assertEqual(facts["materials"][0]["source_hashes"], {"detail": "a" * 64})
+
     def test_prepare_analysis_does_not_write_legacy_complete_snapshot(self):
         analysis = load_module()
         records = [{
@@ -58,6 +118,7 @@ class YuntuAnalysisTests(unittest.TestCase):
                 "analysis-units/audience-marketing-input.json",
                 "analysis-units/highlight-input.json",
                 "analysis-units/material-deep-dive-input.json",
+                "analysis-units/script-input.json",
             ):
                 self.assertTrue((output / relative_path).is_file(), relative_path)
 
@@ -923,6 +984,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             [
                 "topMaterialCombination",
                 "chapter02Insights",
+                "scriptInsights",
                 "highlightDashboard",
                 "materialDeepDives",
             ],

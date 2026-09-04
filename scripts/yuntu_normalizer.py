@@ -378,6 +378,8 @@ def _flat_content_formula(raw):
         path = key[len(prefix):]
         if path == "视频脚本.text":
             continue
+        if value in (None, "", []):
+            continue
         if path.endswith(".labels") or path == "labels":
             values["labels"] = value
         elif ".detail." in path:
@@ -423,7 +425,12 @@ def _flat_core_metrics(raw):
 
 
 def normalize_detail_records(
-    raw_records, *, material_id, source_path, expected_selection_group=None
+    raw_records,
+    *,
+    material_id,
+    source_path,
+    source_hash=None,
+    expected_selection_group=None,
 ):
     if isinstance(raw_records, list) and raw_records:
         raw = raw_records[0]
@@ -510,8 +517,10 @@ def normalize_detail_records(
     date_type = _flat_detail_value(raw, "dateType") or raw.get("dateRangeType") or raw.get("date_range_type")
     start_date = _flat_detail_value(raw, "customStartDate") or raw.get("startDate") or raw.get("start_date")
     end_date = _flat_detail_value(raw, "customEndDate") or raw.get("endDate") or raw.get("end_date")
+    video_duration = _flat_detail_value(raw, "videoDuration") or raw.get("videoDuration") or raw.get("video_duration")
     core_metrics = _flat_core_metrics(raw) if flat_schema else {}
     video_url = _flat_detail_value(raw, "videoUrl") or raw.get("videoUrl") or raw.get("video_url")
+    source_hashes = {"detail": _text(source_hash)} if source_hash else {}
     return {
         "material_id": expected_material_id,
         "source_schema": "flat_detail_csv" if flat_schema else "legacy_detail",
@@ -521,6 +530,7 @@ def normalize_detail_records(
             "end_date": _text(end_date),
         },
         "video_url": _text(video_url),
+        "video_duration": _number(video_duration),
         "selection_group": selection_group,
         "script_text": _text(script_text_value),
         "content_formula": content_formula,
@@ -547,4 +557,5 @@ def normalize_detail_records(
             "script_segments": script_segments_availability,
         },
         "source_paths": {"detail": source_path},
+        "source_hashes": source_hashes,
     }

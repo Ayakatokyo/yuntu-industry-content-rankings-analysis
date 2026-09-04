@@ -289,10 +289,48 @@ class YuntuPresentationTests(unittest.TestCase):
         payload = build_yuntu_presentation(analysis, facts)
 
         self.assertEqual(payload["presentationSchemaVersion"], 3)
-        self.assertEqual(payload["report"]["sections"], ["chapter01", "chapter02", "chapter04", "chapter05"])
+        self.assertEqual(payload["report"]["sections"], ["chapter01", "chapter02", "chapter03", "chapter04", "chapter05"])
         self.assertIs(payload, validate_yuntu_presentation(payload))
         json.dumps(payload, ensure_ascii=False)
         self.assertEqual(before, json.dumps({"analysis": analysis, "facts": facts}, ensure_ascii=False, sort_keys=True))
+
+    def test_projects_script_dashboard_for_selected_detail_materials(self):
+        facts = self.fact_pack()
+        facts["scriptFacts"] = {
+            "scope": "selected_detail_materials",
+            "coverage": {"total": 2, "script": 1, "rate": 0.5},
+            "frequencies": {
+                "formula_labels": {"场景引入": {"count": 1, "material_ids": ["101"]}},
+                "selling_points": {}, "scenes": {}, "promotions": {},
+                "marketing_formats": {"口播": {"count": 1, "material_ids": ["101"]}},
+            },
+            "materials": [{
+                "material_id": "101", "script_text": "先提出使用场景。", "script_segments": [],
+                "content_formula": {"labels": ["场景引入"]}, "creative_breakdown": {"tags": ["口播"]},
+                "metrics": {"convertCnt": 17, "orderCnt": 3},
+                "data_availability": {"script_text": {"available": True, "missing_reason": ""}},
+            }, {
+                "material_id": "102", "script_text": "", "script_segments": [],
+                "content_formula": None, "creative_breakdown": None, "metrics": {},
+                "data_availability": {"script_text": {"available": False, "missing_reason": "source_empty"}},
+            }],
+        }
+        analysis = self.analysis()
+        analysis["scriptInsights"] = [{
+            "title": "从场景切入后接卖点",
+            "summary": "已获取详情素材中可见的脚本先建立使用场景，再进入商品信息；该结构可作为下一轮变量验证方向。",
+            "evidence": ["script_text", "content_formula.labels"],
+            "material_ids": ["101"],
+        }]
+
+        payload = build_yuntu_presentation(analysis, facts)
+
+        chapter = payload["chapters"]["chapter03"]
+        self.assertEqual(chapter["scriptDashboard"]["scope"], "selected_detail_materials")
+        self.assertEqual(chapter["scriptDashboard"]["coverage"], {"total": 2, "script": 1, "rate": 0.5})
+        self.assertEqual(chapter["scriptDashboard"]["insights"][0]["materialIds"], ["101"])
+        self.assertEqual(chapter["scriptDashboard"]["materials"][1]["availability"], "source_empty")
+        self.assertEqual(payload["report"]["sections"], ["chapter01", "chapter02", "chapter03", "chapter04", "chapter05"])
 
     def test_chapter05_uses_single_panel_source_without_frame_copy_fields(self):
         payload = build_yuntu_presentation(self.analysis(), self.fact_pack())
@@ -364,7 +402,7 @@ class YuntuPresentationTests(unittest.TestCase):
 
         chapter = payload["chapters"]["chapter01"]
         self.assertEqual(payload["presentationSchemaVersion"], 3)
-        self.assertEqual(payload["report"]["sections"], ["chapter01", "chapter02", "chapter04", "chapter05"])
+        self.assertEqual(payload["report"]["sections"], ["chapter01", "chapter02", "chapter03", "chapter04", "chapter05"])
         self.assertNotIn("executiveInsight", chapter)
         self.assertNotIn("overallInsights", chapter)
         self.assertNotIn("brandComparisonInsight", chapter)

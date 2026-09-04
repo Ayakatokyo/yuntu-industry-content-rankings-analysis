@@ -9,7 +9,7 @@ from yuntu_highlight_export import match_brands_from_title
 
 PRESENTATION_SCHEMA_VERSION = 3
 REPORT_TITLE = "云图行业内容榜单分析"
-SECTION_IDS = ("chapter01", "chapter02", "chapter04", "chapter05")
+SECTION_IDS = ("chapter01", "chapter02", "chapter03", "chapter04", "chapter05")
 REPORT_STATUSES = {"complete", "partial", "unavailable"}
 HIGHLIGHT_CATEGORIES = ("portrait", "product", "scene", "text_overlay", "other")
 SECOND_LEVEL_METRIC_ORDER = ("点赞指数", "流失指数", "点击指数", "互动指数", "评论指数")
@@ -268,6 +268,78 @@ def _project_chapter02(analysis, fact_pack):
         "chapter02-scope-tabs": {"id": "chapter02-scope-tabs", "type": "tab-list", "items": tab_items, "defaultItemId": tab_items[0]["id"], "keyboard": ["ArrowLeft", "ArrowRight", "Home", "End"]},
         **{target: {"id": target, "type": "column-drilldown", "targets": values} for target, values in interaction_targets.items()},
     }
+
+
+def _script_insights(analysis, material_ids):
+    insights = analysis.get("scriptInsights", []) if isinstance(analysis, dict) else []
+    if insights in (None, []):
+        return []
+    if not isinstance(insights, list):
+        raise YuntuPresentationError("scriptInsights must be a list")
+    allowed = set(material_ids)
+    projected = []
+    for index, item in enumerate(insights, start=1):
+        if not isinstance(item, dict):
+            raise YuntuPresentationError("script insight is invalid")
+        title = _text(item.get("title"))
+        summary = _text(item.get("summary"))
+        evidence = deepcopy(item.get("evidence", []))
+        ids = [str(value) for value in item.get("material_ids", []) if _text(value)]
+        if not title or not summary or not ids or not set(ids).issubset(allowed):
+            raise YuntuPresentationError("script insight evidence is invalid")
+        projected.append({
+            "id": f"script-insight-{index}",
+            "title": title,
+            "text": summary,
+            "evidence": evidence,
+            "materialIds": ids,
+        })
+    return projected
+
+
+def _project_chapter03(analysis, fact_pack):
+    facts = fact_pack.get("scriptFacts") if isinstance(fact_pack, dict) else None
+    if not isinstance(facts, dict):
+        facts = {
+            "scope": "selected_detail_materials",
+            "coverage": {"total": 0, "script": 0, "rate": 0},
+            "frequencies": {},
+            "materials": [],
+            "limitations": ["未提供脚本事实，数据不足以判断。"],
+        }
+    materials = []
+    material_ids = []
+    for item in facts.get("materials", []):
+        if not isinstance(item, dict):
+            continue
+        material_id = _text(item.get("material_id"))
+        if not material_id:
+            continue
+        material_ids.append(material_id)
+        availability = item.get("data_availability", {})
+        script_state = availability.get("script_text", {}) if isinstance(availability, dict) else {}
+        segments_state = availability.get("script_segments", {}) if isinstance(availability, dict) else {}
+        materials.append({
+            "materialId": material_id,
+            "rank": item.get("rank"),
+            "scriptText": _text(item.get("script_text")),
+            "scriptSegments": deepcopy(item.get("script_segments", [])),
+            "scriptSegmentsAvailable": bool(segments_state.get("available")),
+            "contentFormula": deepcopy(item.get("content_formula")),
+            "creativeBreakdown": deepcopy(item.get("creative_breakdown")),
+            "metrics": deepcopy(item.get("metrics", {})),
+            "availability": _text(script_state.get("missing_reason")) if not script_state.get("available") else "available",
+        })
+    dashboard = {
+        "scope": _text(facts.get("scope")) or "selected_detail_materials",
+        "scopeLabel": "已获取详情素材",
+        "coverage": deepcopy(facts.get("coverage", {"total": len(materials), "script": 0, "rate": 0})),
+        "frequencies": deepcopy(facts.get("frequencies", {})),
+        "materials": materials,
+        "insights": _script_insights(analysis, material_ids),
+        "limitations": deepcopy(facts.get("limitations", [])),
+    }
+    return {"scriptDashboard": dashboard}
 
 
 def _project_chapter01(analysis, fact_pack):
@@ -783,6 +855,15 @@ def _project_chapter05(analysis, fact_pack):
             "title": _text(fact.get("title")),
             "exposure": deepcopy(fact.get("exposure", {})),
             "metrics": deepcopy(fact.get("metrics", {})),
+            "scriptText": _text(fact.get("script_text")),
+            "scriptSegments": deepcopy(fact.get("script_segments", [])),
+            "scriptSegmentsAvailable": any(
+                isinstance(segment, dict) for segment in fact.get("script_segments", [])
+            ),
+            "contentFormula": deepcopy(fact.get("content_formula")),
+            "creativeBreakdown": deepcopy(fact.get("creative_breakdown")),
+            "scriptMetrics": deepcopy(fact.get("detailMetrics", {})),
+            "scriptDataAvailability": deepcopy(fact.get("detailDataAvailability", {})),
             "peopleTags": deepcopy(fact.get("people_tags", [])),
             "materialTags": deepcopy(fact.get("material_tags", [])),
             "listDataAvailability": deepcopy(fact.get("listDataAvailability", {})),
@@ -867,13 +948,14 @@ def build_yuntu_presentation(analysis, fact_pack, *, report_meta=None):
         raise YuntuPresentationError("analysis and fact pack must be objects")
     chapter01 = _project_chapter01(analysis, fact_pack)
     scopes, chapter02, chapter02_interactions = _project_chapter02(analysis, fact_pack)
+    chapter03 = _project_chapter03(analysis, fact_pack)
     chapter04 = _project_chapter04(analysis, fact_pack)
     chapter05, chapter05_interactions = _project_chapter05(analysis, fact_pack)
     payload = {
         "presentationSchemaVersion": PRESENTATION_SCHEMA_VERSION,
         "report": _report_metadata(fact_pack, report_meta),
         "scopes": scopes,
-        "chapters": {"chapter01": chapter01, "chapter02": chapter02, "chapter04": chapter04, "chapter05": chapter05},
+        "chapters": {"chapter01": chapter01, "chapter02": chapter02, "chapter03": chapter03, "chapter04": chapter04, "chapter05": chapter05},
         "interactions": {"chapter01-brand-tabs": {"id": "chapter01-brand-tabs", "type": "tab-list", "items": chapter01["brandTabs"], "defaultItemId": chapter01["brandTabs"][0]["id"] if chapter01["brandTabs"] else "", "keyboard": ["ArrowLeft", "ArrowRight", "Home", "End"]}, **chapter02_interactions, "chapter04-frame-lightbox": {"id": "chapter04-frame-lightbox", "type": "frame-lightbox"}, **chapter05_interactions},
         "extensions": {
             "yuntu": {

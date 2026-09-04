@@ -59,11 +59,13 @@ python <skill-root>/scripts/rpa_connector.py fetch \
 
 ## 分析与报告
 
+详情规范化同时兼容旧版顶层 `trends`、`scriptText`、`contentFormula` 对象和当前 CSV 的 `coreData.*`、`secondTrend.*`、`contentFormula.*`、`creativeBreakdown.*` 点号字段；两者统一进入同一后续分析契约，不新增 CSV 导入脚本或连接器。第三章脚本洞察只覆盖 `selected_detail_materials`，脚本覆盖不足时展示真实覆盖率和“数据不足以判断”；没有脚本时间戳时不输出帧-话术对应关系。
+
 ### 品牌标题匹配规则
 
 品牌范围严格取本轮 `pre_input` 的 `brands`，不扩展未输入品牌；含 `/` 的规范名拆分为中英文组成项，统一 Unicode、大小写、空格和标点后匹配，允许品牌词作为产品/营销短语子串及中英文连续混写，完整标签不是必需条件。按最长词优先并保留 `matchedBrands` 证据；命中多个品牌时同时进入多个分组。短子字段仅限受控别名或已观测上下文（如 `九阳豆浆` → `九阳自律豆浆`），不把单独 `九阳` 无条件视为命中；无有效词则为“未知品牌”，不得凭品类、功效或画面覆盖标题结果。
 
-先运行 `prepare-analysis`。新批次不再生成 `yuntu-analysis-data.json`，只生成精简的 `report-data.json` 和 `analysis-units/` 下的榜单品牌、人群卖点、视觉高光、单素材秒级四个章节事实包。第一章的 `hotMaterialFacts` 使用 `config/hot-material-rules.json` 中的 `hotMaterialRule` 确定性计算；默认规则是曝光量区间下限 `>= 200000`，但实际生效阈值、指标和比较关系以配置为准，保留 `min`/`max`/`raw`；云图顶层 `show_cnt` 返回带范围或单位的展示字符串（如 `200-300w`）时按曝光区间解析，嵌套精确 `object_index.show_cnt` 只作为指标，不得互相替代。数据和高光帧的分析理解必须由当前对话模型直接完成：在同一次调用中读取 manifest 与四包，实际查看全部可用本地 JPEG，再生成一份 `yuntu-ai-analysis.json`；不得通过 `codex exec`、子进程或外部模型服务代替当前对话模型，不得仅凭 `--generator` 文本认定模型身份。不拆成四次模型调用。固定规则只做统计、归类、聚合和图表数据，不生成业务结论。第一章每个品牌（含全品牌）只输出一个 `dataSummary`，整体分析当前数据、环比、行业大盘和爆款事实；爆款清单仍由确定性事实面板展示。前端不再增加“AI二次分析”标题或独立底色卡片。新模型输出只生成当前报告实际展示的分析模块；旧版完整 JSON 中的额外字段会被忽略并继续兼容渲染。历史批次缺少 `report-data.json` 时，`render-report` 仍可回退读取已有 `yuntu-analysis-data.json`。脚本和生成的提示词是 schema 权威，入口不重复维护字段枚举。完成后登记来源回执：
+先运行 `prepare-analysis`。新批次不再生成 `yuntu-analysis-data.json`，只生成精简的 `report-data.json` 和 `analysis-units/` 下的榜单品牌、人群卖点、脚本洞察、视觉高光、单素材秒级五个章节事实包。第一章的 `hotMaterialFacts` 使用 `config/hot-material-rules.json` 中的 `hotMaterialRule` 确定性计算；默认规则是曝光量区间下限 `>= 200000`，但实际生效阈值、指标和比较关系以配置为准，保留 `min`/`max`/`raw`；云图顶层 `show_cnt` 返回带范围或单位的展示字符串（如 `200-300w`）时按曝光区间解析，嵌套精确 `object_index.show_cnt` 只作为指标，不得互相替代。数据和高光帧的分析理解必须由当前对话模型直接完成：在同一次调用中读取 manifest 与五包，实际查看全部可用本地 JPEG，再生成一份 `yuntu-ai-analysis.json`；不得通过 `codex exec`、子进程或外部模型服务代替当前对话模型，不得仅凭 `--generator` 文本认定模型身份。不拆成五次模型调用。固定规则只做统计、归类、聚合和图表数据，不生成业务结论。第一章每个品牌（含全品牌）只输出一个 `dataSummary`，整体分析当前数据、环比、行业大盘和爆款事实；爆款清单仍由确定性事实面板展示。前端不再增加“AI二次分析”标题或独立底色卡片。新模型输出只生成当前报告实际展示的分析模块；旧版完整 JSON 中的额外字段会被忽略并继续兼容渲染。历史批次缺少 `report-data.json` 时，`render-report` 仍可回退读取已有 `yuntu-analysis-data.json`。脚本和生成的提示词是 schema 权威，入口不重复维护字段枚举。完成后登记来源回执：
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py prepare-analysis \
@@ -86,7 +88,7 @@ python <skill-root>/scripts/rpa_connector.py attest-analysis \
 
 ## 产物与失败处理
 
-主要产物：`raw-csv/list.csv`、`raw-csv/list-previous-period.csv`、`raw-csv/list-industry.csv`、`raw-csv/details/<material_id>.csv`、`normalized/list-records.json`、`normalized/list-previous-period-records.json`、`normalized/list-industry-records.json`、`normalized/detail-records/<material_id>.json`、`batch-manifest.json`、`run-summary.json`、`diagnostic-analysis/report-data.json`（含比较与 `hotMaterialFacts`）、`diagnostic-analysis/analysis-units/analysis-unit-manifest.json`、四个 `analysis-units/*-input.json`、`diagnostic-analysis/yuntu-ai-analysis.schema.json`、`diagnostic-analysis/yuntu-analysis-prompt.md`、`diagnostic-analysis/yuntu-ai-analysis.json`、`final-report/final-report-data.json`、`final-report/final-report.md`、`final-report/final-report.html`、`exports/highlight-frames.xlsx`、同级 `final-report.zip`。兼容路径可保留历史批次的 `diagnostic-analysis/yuntu-analysis-data.json`，以及旧版 `list-response.json`、`details/<material_id>.json`、`manifest.json`；CSV 为主路径，兼容 JSON 与安全的 Python 字面量。
+主要产物：`raw-csv/list.csv`、`raw-csv/list-previous-period.csv`、`raw-csv/list-industry.csv`、`raw-csv/details/<material_id>.csv`、`normalized/list-records.json`、`normalized/list-previous-period-records.json`、`normalized/list-industry-records.json`、`normalized/detail-records/<material_id>.json`、`batch-manifest.json`、`run-summary.json`、`diagnostic-analysis/report-data.json`（含比较与 `hotMaterialFacts`）、`diagnostic-analysis/analysis-units/analysis-unit-manifest.json`、五个 `analysis-units/*-input.json`、`diagnostic-analysis/yuntu-ai-analysis.schema.json`、`diagnostic-analysis/yuntu-analysis-prompt.md`、`diagnostic-analysis/yuntu-ai-analysis.json`、`final-report/final-report-data.json`、`final-report/final-report.md`、`final-report/final-report.html`、`exports/highlight-frames.xlsx`、同级 `final-report.zip`。兼容路径可保留历史批次的 `diagnostic-analysis/yuntu-analysis-data.json`，以及旧版 `list-response.json`、`details/<material_id>.json`、`manifest.json`；CSV 为主路径，兼容 JSON 与安全的 Python 字面量。
 
 分析阶段只读 `normalized/` 和 `diagnostic-analysis/`，不读原始 CSV、RPA response 或临时 `fileUrl`。`files-envelope` 校验成功后才下载 CSV；解析失败的嵌套字段保留原文并标记缺失。列表请求失败或无有效素材时写清单、非零退出且不发详情；详情请求失败记录后继续，最终非零但保留成功文件。报告前确认 `status == success`、`selectedCount == targetTopN`、`rejectedCount == 0`，否则按部分完成交付。
 

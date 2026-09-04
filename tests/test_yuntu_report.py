@@ -14,6 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT / "scripts"
 MODULE_PATH = SCRIPTS_DIR / "yuntu_report.py"
 
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from yuntu_report_sections import render_script_insights
+
 
 def load_module():
     if str(SCRIPTS_DIR) not in sys.path:
@@ -89,6 +94,90 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("场景先行再承接商品", rendered)
         self.assertIn("先提出早餐场景，再展示商品。", rendered)
         self.assertIn("未提供脚本时间段，暂不输出帧-话术对应关系", rendered)
+
+    def test_render_report_shows_script_formula_drilldown_keywords_and_copy_dimension(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["scriptFacts"] = {
+            "scope": "selected_detail_materials",
+            "coverage": {"total": 2, "script": 1, "rate": 0.5},
+            "frequencies": {
+                "selling_points": {"优质活菌": {"count": 1, "material_ids": ["101"]}},
+                "scenes": {"早餐": {"count": 1, "material_ids": ["101"]}},
+            },
+            "materials": [
+                {
+                    "material_id": "101", "script_text": "先提出早餐场景，再展示商品。", "script_segments": [],
+                    "content_formula": {"labels": [{"level_1_label": 10, "level_2_labels": [40, 55]}], "视频标题.text": "标题原文不应进入脚本洞察"},
+                    "creative_breakdown": {"raw": {"商品卖点": "优质活菌"}, "tags": ["优质活菌"]},
+                    "metrics": {}, "data_availability": {"script_text": {"available": True, "missing_reason": ""}},
+                },
+                {
+                    "material_id": "102", "script_text": "", "script_segments": [],
+                    "content_formula": None, "creative_breakdown": None, "metrics": {},
+                    "data_availability": {"script_text": {"available": False, "missing_reason": "source_empty"}},
+                },
+            ],
+            "limitations": [],
+        }
+        analysis = self.deep_dive_analysis()
+        analysis["scriptInsights"] = [{
+            "title": "场景先行再承接商品",
+            "summary": "已获取详情素材中的可见脚本呈现场景先行、商品信息后置的结构。",
+            "evidence": ["script_text"],
+            "material_ids": ["101"],
+        }]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "final-report", fact_pack=fact_pack)
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('class="script-formula-dashboard"', rendered)
+        self.assertIn('data-script-formula-primary', rendered)
+        self.assertIn("renderScriptFormulaDrill", rendered)
+        self.assertIn("一句话结论", rendered)
+        self.assertIn("高频关键词云", rendered)
+        self.assertIn("卖点提炼", rendered)
+        self.assertIn("脚本文案", rendered)
+        self.assertNotIn("标题原文不应进入脚本洞察", rendered)
+        self.assertIn("数据不足以判断", rendered)
+        self.assertIn("@media(max-width:700px){.script-insights-grid", rendered)
+
+    def test_chapter03_uses_qianchuan_order_and_three_column_mounts(self):
+        script_facts = {
+            "coverage": {"total": 2, "script": 2, "rate": 1.0},
+            "materials": [
+                {"material_id": "101", "script_text": "先讲场景。", "script_segments": [], "content_formula": {"labels": []}, "creative_breakdown": None, "data_availability": {"script_text": {"available": True}}},
+                {"material_id": "102", "script_text": "再讲卖点。", "script_segments": [], "content_formula": {"labels": []}, "creative_breakdown": None, "data_availability": {"script_text": {"available": True}}},
+            ],
+        }
+        script_dashboard = {
+            "conclusion": {"text": "先场景后卖点。", "materialIds": ["101", "102"]},
+            "keywords": [{"label": "优质活菌", "count": 2, "materialIds": ["101", "102"]}],
+            "sellingPoints": [{"label": "优质活菌", "count": 2, "materialIds": ["101", "102"]}],
+            "dimensions": {"contentFormula": {"primary": [], "secondary": {}}},
+        }
+        script_insights = [
+            {"title": "公式结构", "summary": "内容公式结论。", "material_ids": ["101"], "evidence": ["content_formula.labels"]},
+            {"title": "脚本文案", "summary": "脚本文案结论。", "material_ids": ["102"], "evidence": ["script_text"]},
+        ]
+
+        rendered = render_script_insights(
+            script_facts=script_facts,
+            script_insights=script_insights,
+            script_dashboard=script_dashboard,
+            esc=lambda value: str(value),
+        )
+
+        self.assertLess(rendered.index('class="script-ai-insights"'), rendered.index('class="script-keyword-triad"'))
+        self.assertLess(rendered.index('class="script-keyword-triad"'), rendered.index('class="script-formula-dimension"'))
+        self.assertEqual(rendered.count('class="script-ai-insight-card"'), 2)
+        self.assertIn("一二级内容公式", rendered)
+        self.assertIn("脚本文案", rendered)
+        self.assertNotIn('class="script-material"', rendered)
 
     def test_render_report_creates_sibling_zip_with_final_report_directory(self):
         report = load_module()

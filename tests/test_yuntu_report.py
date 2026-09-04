@@ -190,6 +190,42 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("脚本文案", rendered)
         self.assertNotIn('class="script-material"', rendered)
 
+    def test_chapter03_mounts_qianchuan_layout_and_collapsible_formula_data(self):
+        script_facts = {
+            "coverage": {"total": 2, "script": 2, "rate": 1.0},
+            "materials": [
+                {"material_id": "101", "script_text": "先讲场景。", "script_segments": [], "content_formula": {"labels": []}},
+                {"material_id": "102", "script_text": "再讲卖点。", "script_segments": [], "content_formula": {"labels": []}},
+            ],
+        }
+        script_dashboard = {
+            "conclusion": {"text": "先场景后卖点。"},
+            "keywords": [{"label": "优质活菌", "count": 2}],
+            "sellingPoints": [{"label": "优质活菌", "count": 2}],
+            "dimensions": {"contentFormula": {"primary": [{"id": "10", "label": "场景引入", "count": 2}], "secondary": {"10": [{"label": "问题切入", "count": 2}]}}},
+        }
+
+        rendered = render_script_insights(
+            script_facts=script_facts,
+            script_insights=[
+                {"title": "公式结构", "summary": "内容公式结论。", "material_ids": ["101"], "evidence": ["content_formula.labels"]},
+                {"title": "脚本文案", "summary": "脚本文案结论。", "material_ids": ["102"], "evidence": ["script_text"]},
+            ],
+            script_dashboard=script_dashboard,
+            esc=lambda value: str(value),
+        )
+
+        self.assertIn('class="insight-layout script-ai-insights-grid"', rendered)
+        self.assertIn('class="keyword-cloud-layout script-keyword-triad-grid"', rendered)
+        self.assertIn('class="keyword-cloud-conclusion script-keyword-conclusion"', rendered)
+        self.assertIn('class="keyword-cloud-summary script-keyword-cloud-panel"', rendered)
+        self.assertIn('class="keyword-cloud-selling script-keyword-selling-panel"', rendered)
+        self.assertIn('data-collapsible-toggle', rendered)
+        self.assertIn('data-collapsible-expanded-label="收起脚本汇总数据"', rendered)
+        self.assertIn('id="script-formula-body"', rendered)
+        self.assertIn('class="script-formula-dashboard"', rendered)
+        self.assertIn('class="data-dashboard"', rendered)
+
     def test_formula_dashboard_has_keyboard_and_drilldown_contract(self):
         template = (ROOT / "scripts" / "templates" / "final-report-template.html").read_text(encoding="utf-8")
 

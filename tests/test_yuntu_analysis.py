@@ -122,6 +122,33 @@ class YuntuAnalysisTests(unittest.TestCase):
             ):
                 self.assertTrue((output / relative_path).is_file(), relative_path)
 
+    def test_prepare_analysis_uses_detail_title_when_material_is_not_in_ranking_pool(self):
+        analysis = load_module()
+        records = [{
+            "material_id": "1", "title": "榜单素材", "rank": 1,
+            "metrics": {"show_cnt": 100}, "people_tags": [],
+            "material_tags": [], "data_availability": {},
+        }]
+        selected = [{
+            "rank": "-", "material_id": "999",
+            "detailRecordPath": "normalized/detail-records/999.json",
+        }]
+        details = {
+            "999": {
+                "material_id": "999", "title": "最新详情素材标题",
+                "high_points": [], "loss_points": [], "data_availability": {},
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_input(root, records, selected, details)
+            analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
+            report = json.loads(
+                (root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(report["materialFacts"][0]["title"], "最新详情素材标题")
+
     def test_prepare_analysis_emits_period_comparisons_and_deterministic_hot_material_facts(self):
         analysis = load_module()
         query_records = [

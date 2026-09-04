@@ -300,6 +300,7 @@ class YuntuNormalizerTests(unittest.TestCase):
             "coreData.customStartDate": "",
             "coreData.customEndDate": "",
             "coreData.videoUrl": "https://video.example/flat-a.mp4",
+            "coreData.title": "最新详情素材标题",
             "coreData.convertCnt": "17",
             "coreData.orderCnt": "3",
             "secondTrend.点赞指数.tendList": [{"x": 0, "y": 0.1}],
@@ -324,6 +325,7 @@ class YuntuNormalizerTests(unittest.TestCase):
         self.assertEqual(record["source_schema"], "flat_detail_csv")
         self.assertEqual(record["date_range"]["type"], "LAST_7_DAYS")
         self.assertEqual(record["video_url"], "https://video.example/flat-a.mp4")
+        self.assertEqual(record["title"], "最新详情素材标题")
         self.assertEqual(len(record["trend_series"]), 5)
         self.assertEqual(record["high_points"][0]["trend_name"], "点赞指数")
         self.assertEqual(record["script_text"], "前3秒提出使用场景，再展示商品卖点。")

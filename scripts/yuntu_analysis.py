@@ -1363,7 +1363,7 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
             {
                 "material_id": material_id,
                 "rank": item.get("rank"),
-                "title": list_record.get("title", ""),
+                "title": list_record.get("title") or detail.get("title", ""),
                 "metrics": list_record.get("metrics", {}),
                 "exposure": list_record.get("exposure", {"min": None, "max": None, "raw": ""}),
                 "metricComparison": _metric_comparison(list_record, pool_records),

@@ -519,6 +519,7 @@ def normalize_detail_records(
     end_date = _flat_detail_value(raw, "customEndDate") or raw.get("endDate") or raw.get("end_date")
     video_duration = _flat_detail_value(raw, "videoDuration") or raw.get("videoDuration") or raw.get("video_duration")
     core_metrics = _flat_core_metrics(raw) if flat_schema else {}
+    title = _flat_detail_value(raw, "title") or raw.get("title")
     video_url = _flat_detail_value(raw, "videoUrl") or raw.get("videoUrl") or raw.get("video_url")
     source_hashes = {"detail": _text(source_hash)} if source_hash else {}
     return {
@@ -529,6 +530,7 @@ def normalize_detail_records(
             "start_date": _text(start_date),
             "end_date": _text(end_date),
         },
+        "title": _text(title),
         "video_url": _text(video_url),
         "video_duration": _number(video_duration),
         "selection_group": selection_group,

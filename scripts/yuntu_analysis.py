@@ -960,7 +960,7 @@ def _script_projection(fact):
         if not level1:
             continue
         ref = str(item.get("evidenceRef") or f"{material_id}:{level1}:{level2}").strip()
-        ref = ref if ref.startswith("script:") else f"script:{ref}"
+        ref = ref if ref.startswith(f"script:{material_id}:") else f"script:{material_id}:{level1}:{level2}"
         item["level1"], item["level2"], item["evidenceRef"] = level1, level2, ref
         evidence_refs.append(ref)
     evidence_refs.extend(item["evidenceRef"] for item in evidence)

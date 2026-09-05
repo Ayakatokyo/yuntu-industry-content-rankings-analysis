@@ -1287,6 +1287,16 @@ def _material_deep_dive_output_schema(fact_pack):
             ],
             "properties": {
                 "material_id": {"type": "string", "enum": material_ids},
+                "scriptAnalysis": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["conclusion", "evidenceRefs", "availability"],
+                    "properties": {
+                        "conclusion": {"type": "string"},
+                        "evidenceRefs": {"type": "array", "items": {"type": "string"}},
+                        "availability": {"type": "string", "enum": ["available", "unavailable"]},
+                    },
+                },
                 "frame_observations": {
                     "type": "array",
                     "items": {

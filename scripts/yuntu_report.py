@@ -134,6 +134,9 @@ DEEP_DIVE_FORBIDDEN_CLAIM = re.compile(
 SCRIPT_INSIGHT_FORBIDDEN_CLAIM = re.compile(
     r"导致|提升|因果|行业(?:普遍|规律)|帧[-—]?话术|话术[-—]?帧|秒点.{0,8}话术|话术.{0,8}秒点|convertCnt.{0,8}订单|订单.{0,8}convertCnt"
 )
+SCRIPT_ANALYSIS_FORBIDDEN_CLAIM = re.compile(
+    r"标题|画面|高光帧|秒级|曝光|点击(?:率|量|次数)?|互动(?:率|量|次数)?|评论(?:率|量|次数)?|转化|因果|导致|提升|下降|波峰|流失"
+)
 
 
 def _load_analysis(
@@ -1324,6 +1327,39 @@ def _validate_material_deep_dives(analysis, fact_pack):
             observation_refs.append(observation["frame_ref"])
         if len(observation_refs) != len(set(observation_refs)) or set(observation_refs) != known_refs:
             raise YuntuReportError("materialDeepDives must observe each successful frame exactly once")
+        script_analysis = dive.get("scriptAnalysis")
+        if script_analysis is None:
+            continue
+        if not isinstance(script_analysis, dict) or set(script_analysis) - {"conclusion", "evidenceRefs", "availability"}:
+            raise YuntuReportError("scriptAnalysis is invalid")
+        availability = script_analysis.get("availability")
+        if availability not in {"available", "unavailable"}:
+            raise YuntuReportError("scriptAnalysis availability is invalid")
+        evidence_refs = script_analysis.get("evidenceRefs")
+        if not isinstance(evidence_refs, list) or any(not isinstance(ref, str) for ref in evidence_refs):
+            raise YuntuReportError("scriptAnalysis evidenceRefs must be a list")
+        fact = facts[material_id]
+        index = fact.get("evidenceIndex", {}) if isinstance(fact.get("evidenceIndex"), dict) else {}
+        known_script_refs = set(index.get("script", []))
+        if not known_script_refs:
+            script = fact.get("script", {}) if isinstance(fact.get("script"), dict) else {}
+            known_script_refs = {
+                str(item.get("evidenceRef"))
+                for item in script.get("labels", []) + script.get("evidence", [])
+                if isinstance(item, dict) and item.get("evidenceRef")
+            }
+        if any(ref not in known_script_refs for ref in evidence_refs):
+            raise YuntuReportError("scriptAnalysis evidenceRefs must belong to current material")
+        conclusion = script_analysis.get("conclusion")
+        if availability == "available":
+            if not isinstance(conclusion, str) or not 120 <= len(conclusion.strip()) <= 220:
+                raise YuntuReportError("scriptAnalysis conclusion must be 120-220 characters")
+            if not evidence_refs:
+                raise YuntuReportError("scriptAnalysis evidenceRefs must not be empty when available")
+            if SCRIPT_ANALYSIS_FORBIDDEN_CLAIM.search(conclusion):
+                raise YuntuReportError("scriptAnalysis conclusion contains unsupported claim")
+        elif conclusion is not None and (not isinstance(conclusion, str) or not conclusion.strip()):
+            raise YuntuReportError("scriptAnalysis conclusion is invalid")
 
     if set(dives_by_id) != set(selected_ids):
         raise YuntuReportError("materialDeepDives must cover every selected material")

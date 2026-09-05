@@ -1114,7 +1114,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         )
         self.assertEqual(
             set(deep_dive_schema["properties"]),
-            {"material_id", "frame_observations"},
+            {"material_id", "frame_observations", "scriptAnalysis"},
         )
         self.assertEqual(
             [item["outputField"] for item in unit_manifest["units"]],

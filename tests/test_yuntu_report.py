@@ -40,6 +40,36 @@ class YuntuReportTests(unittest.TestCase):
         "experimentMatrix",
     )
 
+    def test_validate_material_script_analysis_rejects_cross_material_evidence(self):
+        report = load_module()
+        fact_pack = {
+            "selectedMaterials": [{"material_id": "m-001"}],
+            "materialFacts": [{
+                "material_id": "m-001",
+                "script": {
+                    "text": "当前素材脚本文案。",
+                    "formula": [],
+                    "evidence": [],
+                },
+                "evidenceIndex": {"script": ["script:m-001:text:当前素材脚本文案。"]},
+                "secondLevelBreakdown": {"metrics": []},
+            }],
+        }
+        analysis = {
+            "materialDeepDives": [{
+                "material_id": "m-001",
+                "frame_observations": [],
+                "scriptAnalysis": {
+                    "conclusion": "该素材脚本的事实信息需要结合原文继续核对，当前仅保留可验证的文本依据。",
+                    "evidenceRefs": ["script:m-002:text:其他素材句子"],
+                    "availability": "available",
+                },
+            }],
+        }
+
+        with self.assertRaisesRegex(report.YuntuReportError, "scriptAnalysis evidenceRefs"):
+            report._validate_material_deep_dives(analysis, fact_pack)
+
     def test_validate_script_insights_requires_scoped_material_evidence(self):
         report = load_module()
         fact_pack = {

@@ -348,6 +348,40 @@
         });
       });
 
+      function copyScriptValue(button, value) {
+        var copyValue = String(value || '');
+        if (!copyValue) return;
+        var defaultLabel = button.getAttribute('data-copy-label') || button.textContent || '复制';
+        button.setAttribute('data-copy-label', defaultLabel);
+        function showStatus(label) {
+          button.textContent = label;
+          window.clearTimeout(button._copyStatusTimer);
+          button._copyStatusTimer = window.setTimeout(function () { button.textContent = defaultLabel; }, 1400);
+        }
+        function fallbackCopy() {
+          var textarea = document.createElement('textarea');
+          textarea.value = copyValue;
+          textarea.setAttribute('readonly', '');
+          textarea.style.position = 'fixed';
+          textarea.style.left = '-9999px';
+          document.body.append(textarea);
+          textarea.select();
+          try { showStatus(document.execCommand('copy') ? '已复制' : '复制失败'); }
+          catch (error) { showStatus('复制失败'); }
+          finally { textarea.remove(); }
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(copyValue).then(function () { showStatus('已复制'); }).catch(fallbackCopy);
+        } else {
+          fallbackCopy();
+        }
+      }
+      document.querySelectorAll('[data-script-copy]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          copyScriptValue(button, button.getAttribute('data-script-copy'));
+        });
+      });
+
       document.querySelectorAll('[data-audience-records]').forEach(function (dashboard) {
         var records;
         try {
@@ -1218,11 +1252,14 @@
             if (targets.some(function (ref) { return refs.indexOf(ref) >= 0; })) button.setAttribute('aria-pressed', 'true');
           });
           var status = scriptPanel.querySelector('[data-script-evidence-status]');
-          if (status) status.textContent = matches.length ? '已定位当前素材证据句。' : '证据句无法在当前脚本中定位。';
+          if (status) status.textContent = matches.length ? '已定位当前素材证据文字。' : '证据文字无法在当前文案中定位。';
           if (matches[0] && !scriptPrefersReducedMotion()) matches[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
         }
 
-        var scriptPanel = panel.querySelector('[data-material-detail-tab="script"]') && panel.querySelector('[data-material-detail-target="' + panel.querySelector('[data-material-detail-tab="script"]').getAttribute('data-material-detail-target') + '"]');
+        var scriptTab = panel.querySelector('[data-material-detail-tab="script"]');
+        var scriptTarget = scriptTab && scriptTab.getAttribute('data-material-detail-target');
+        // The tab button also carries data-material-detail-target; resolve the actual panel by its id.
+        var scriptPanel = scriptTarget ? document.getElementById(scriptTarget) : null;
         if (scriptPanel) {
           scriptPanel.querySelectorAll('[data-script-formula]').forEach(function (button) {
             function activateFormula() {

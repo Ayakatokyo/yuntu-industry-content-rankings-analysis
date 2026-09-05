@@ -208,19 +208,25 @@ class YuntuPresentationTests(unittest.TestCase):
                 "text": "早餐可以不碰碳水，但鲜炖燕窝一定要坚持吃。",
                 "labels": [{
                     "level1": "商品卖点",
-                    "level2": "品质功效",
-                    "evidenceRef": "script:101:商品卖点:品质功效",
+                    "level2": "成分配方原料",
+                    "evidenceRef": "script:101:商品卖点:成分配方原料",
                 }],
-                "formula": [{"level1": "商品卖点", "level2": "品质功效"}],
+                "formula": [{"level1": "商品卖点", "level2": "成分配方原料"}],
                 "evidence": [{
-                    "level2": "品质功效",
+                    "level2": "成分配方原料",
                     "sentence": "鲜炖燕窝一定要坚持吃。",
                     "evidenceRef": "script:101:text:鲜炖燕窝",
                 }],
                 "availability": {"text": {"available": True}, "formula": {"available": True}, "evidence": {"available": True}},
             },
+            "content_formula": {
+                "labels": [{"level_1_label": 9, "level_2_labels": [42]}],
+                "detail.42": "鲜炖燕窝",
+                "视频标题.text": "早餐可以不碰碳水，但鲜炖燕窝一定要坚持吃。",
+                "视频画面.text": "画面字幕：鲜炖燕窝，每天一瓶。",
+            },
             "evidenceIndex": {"script": [
-                "script:101:商品卖点:品质功效",
+                "script:101:商品卖点:成分配方原料",
                 "script:101:text:鲜炖燕窝",
             ]},
         })
@@ -235,11 +241,34 @@ class YuntuPresentationTests(unittest.TestCase):
         panel = payload["chapters"]["chapter05"]["panels"][0]
         self.assertEqual(panel["script"]["text"], "早餐可以不碰碳水，但鲜炖燕窝一定要坚持吃。")
         self.assertEqual(panel["script"]["formula"][0]["level1"], "商品卖点")
-        self.assertEqual(panel["script"]["analysis"]["availability"], "available")
-        self.assertEqual(panel["script"]["analysis"]["evidenceRefs"], [
-            "script:101:商品卖点:品质功效",
-            "script:101:text:鲜炖燕窝",
-        ])
+        self.assertEqual(panel["videoTitleText"], "早餐可以不碰碳水，但鲜炖燕窝一定要坚持吃。")
+        self.assertEqual(panel["videoFrameText"], "画面字幕：鲜炖燕窝，每天一瓶。")
+        self.assertNotIn("analysis", panel["script"])
+        self.assertIn("script:101:video_title:鲜炖燕窝", panel["script"]["evidenceRefs"])
+        self.assertIn("script:101:video_frame:鲜炖燕窝", panel["script"]["evidenceRefs"])
+
+    def test_chapter05_script_evidence_matches_each_formula_term(self):
+        facts = self.fact_pack()
+        facts["materialFacts"][0].update({
+            "script_text": "饭后喝益生菌，送礼也选益生菌。",
+            "content_formula": {
+                "labels": [
+                    {"level_1_label": 9, "level_2_labels": [42]},
+                    {"level_1_label": 15, "level_2_labels": [87]},
+                ],
+                "detail.42": "益生菌",
+                "detail.87": "饭后、送礼",
+            },
+        })
+
+        panel = build_yuntu_presentation(self.analysis(), facts)["chapters"]["chapter05"]["panels"][0]
+        evidence = panel["script"]["evidence"]
+        by_formula = {}
+        for item in evidence:
+            by_formula.setdefault(item["formulaIndex"], set()).add(item["sentence"])
+
+        self.assertEqual(by_formula[0], {"益生菌"})
+        self.assertEqual(by_formula[1], {"饭后", "送礼"})
 
     def test_projects_modes_for_combined_joyoung_brand_alias(self):
         facts = self.fact_pack()

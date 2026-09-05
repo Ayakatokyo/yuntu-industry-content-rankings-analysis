@@ -488,40 +488,149 @@ def _formula_hierarchy(materials):
     }
 
 
+def _content_formula_text(content_formula, key):
+    if not isinstance(content_formula, dict):
+        return ""
+    return _text(content_formula.get(key))
+
+
+def _content_formula_detail(content_formula, value):
+    if not isinstance(content_formula, dict):
+        return ""
+    raw_value = value.get("value") or value.get("id") if isinstance(value, dict) else value
+    detail = _text(content_formula.get(f"detail.{_text(raw_value)}"))
+    if detail:
+        return detail
+    target_label = content_formula_label("secondary", raw_value) or _text(raw_value)
+    for item in content_formula.get("labels", []) if isinstance(content_formula.get("labels"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        values = item.get("level_2_labels") or item.get("level2_labels") or []
+        if not isinstance(values, list):
+            values = [values]
+        for candidate in values:
+            if content_formula_label("secondary", candidate) == target_label or _text(candidate) == target_label:
+                detail = _text(content_formula.get(f"detail.{_text(candidate.get('value') or candidate.get('id') if isinstance(candidate, dict) else candidate)}"))
+                if detail:
+                    return detail
+    return ""
+
+
+def _chapter05_formula_items(raw_script, content_formula):
+    source_formula = raw_script.get("formula") if isinstance(raw_script, dict) else None
+    formula = []
+    if isinstance(source_formula, list) and source_formula:
+        for item in source_formula:
+            if not isinstance(item, dict):
+                continue
+            level1 = _text(item.get("level1") or item.get("level_1") or item.get("level1_label") or item.get("level_1_label"))
+            level2 = _text(item.get("level2") or item.get("level_2") or item.get("level2_label") or item.get("level_2_label"))
+            if not level1 and not level2:
+                continue
+            normalized = {"level1": level1, "level2": level2}
+            detail = _text(item.get("detail") or item.get("detailLabel") or item.get("detail_label")) or _content_formula_detail(content_formula, level2)
+            if detail:
+                normalized["detail"] = detail
+            formula.append(normalized)
+        return formula
+
+    labels = content_formula.get("labels") if isinstance(content_formula, dict) else []
+    if not isinstance(labels, list):
+        return formula
+    for item in labels:
+        if not isinstance(item, dict):
+            continue
+        primary_value = item.get("level_1_label") or item.get("level1_label") or item.get("level1")
+        primary = content_formula_label("primary", primary_value) or _text(primary_value)
+        secondary_values = item.get("level_2_labels") or item.get("level2_labels") or item.get("level2") or []
+        if not isinstance(secondary_values, list):
+            secondary_values = [secondary_values]
+        for secondary_value in secondary_values:
+            secondary = content_formula_label("secondary", secondary_value) or _text(secondary_value)
+            if not primary and not secondary:
+                continue
+            normalized = {"level1": primary, "level2": secondary}
+            detail = _content_formula_detail(content_formula, secondary_value)
+            if detail:
+                normalized["detail"] = detail
+            formula.append(normalized)
+    return formula
+
+
+def _chapter05_copy_blocks(material_id, content_formula, formula):
+    sources = (
+        ("video_title", "视频标题", "视频标题.text"),
+        ("video_frame", "视频画面", "视频画面.text"),
+    )
+    blocks = []
+    for source_id, label, source_key in sources:
+        text = _content_formula_text(content_formula, source_key)
+        if not text:
+            continue
+        evidence = []
+        used_refs = set()
+        for formula_index, item in enumerate(formula):
+            for term in _chapter05_formula_terms(item):
+                if term not in text:
+                    continue
+                reference = f"script:{material_id}:{source_id}:{term}"
+                if reference in used_refs:
+                    reference += f":formula:{formula_index}"
+                used_refs.add(reference)
+                evidence.append({
+                    "formulaIndex": formula_index,
+                    "level1": _text(item.get("level1")),
+                    "level2": _text(item.get("level2")),
+                    "detail": _text(item.get("detail")),
+                    "sentence": term,
+                    "evidenceRef": reference,
+                })
+        blocks.append({"id": source_id, "label": label, "text": text, "evidence": evidence})
+    return blocks
+
+
+def _chapter05_formula_terms(item):
+    """Return the concrete, non-overlapping terms that may be located in copy."""
+    values = (_text(item.get("detail")), _text(item.get("level2")), _text(item.get("level1")))
+    terms = []
+    for value in values:
+        for term in re.split(r"[、，,/／]+", value):
+            term = term.strip()
+            if term and term not in terms:
+                terms.append(term)
+    return sorted(terms, key=len, reverse=True)
+
+
 def _chapter05_script_projection(fact, dive):
-    """Project only the selected material's script facts and AI conclusion."""
+    """Project selected material script facts and deterministic copy evidence."""
     material_id = _text(fact.get("material_id"))
     raw_script = fact.get("script") if isinstance(fact.get("script"), dict) else {}
     script_text = _text(raw_script.get("text") or fact.get("script_text"))
-    formula = deepcopy(raw_script.get("formula")) if isinstance(raw_script.get("formula"), list) else []
+    content_formula = fact.get("content_formula") if isinstance(fact.get("content_formula"), dict) else {}
+    formula = _chapter05_formula_items(raw_script, content_formula)
     if not formula:
-        raw_formula = fact.get("content_formula")
-        raw_labels = raw_formula.get("labels") if isinstance(raw_formula, dict) else raw_formula if isinstance(raw_formula, list) else []
-        if not isinstance(raw_labels, list):
-            raw_labels = []
-        for item in raw_labels:
-            if isinstance(item, dict):
-                primary_value = item.get("level1") or item.get("level_1") or item.get("level1_label") or item.get("level_1_label")
-                secondary_values = item.get("level2") or item.get("level_2") or item.get("level2_labels") or item.get("level_2_labels") or []
-                if not isinstance(secondary_values, list):
-                    secondary_values = [secondary_values]
-            else:
-                primary_value, secondary_values = item, []
-            primary = content_formula_label("primary", primary_value) or _text(primary_value)
-            if not primary:
-                continue
-            secondary = [content_formula_label("secondary", value) or _text(value) for value in secondary_values]
-            secondary = [value for value in dict.fromkeys(secondary) if value]
-            formula.extend({"level1": primary, "level2": value} for value in (secondary or [""]))
+        formula = []
     evidence = deepcopy(raw_script.get("evidence")) if isinstance(raw_script.get("evidence"), list) else []
     if not evidence and script_text:
-        sentences = re.findall(r"[^。！？；\n]+[。！？；]?", script_text)
-        default_level2 = formula[0].get("level2", "") if formula else ""
-        evidence = [
-            {"level2": default_level2, "sentence": sentence.strip(), "evidenceRef": f"script:{material_id}:text:{sentence.strip()}"}
-            for sentence in sentences if sentence.strip()
-        ]
+        used_refs = set()
+        for formula_index, item in enumerate(formula):
+            for term in _chapter05_formula_terms(item):
+                if term not in script_text:
+                    continue
+                reference = f"script:{material_id}:text:{term}"
+                if reference in used_refs:
+                    reference += f":formula:{formula_index}"
+                used_refs.add(reference)
+                evidence.append({
+                    "formulaIndex": formula_index,
+                    "level1": _text(item.get("level1")),
+                    "level2": _text(item.get("level2")),
+                    "detail": _text(item.get("detail")),
+                    "sentence": term,
+                    "evidenceRef": reference,
+                })
     evidence = [item for item in evidence if isinstance(item, dict) and _text(item.get("sentence")) and _text(item.get("evidenceRef"))]
+    copy_blocks = _chapter05_copy_blocks(material_id, content_formula, formula)
     index = fact.get("evidenceIndex") if isinstance(fact.get("evidenceIndex"), dict) else {}
     evidence_refs = [str(ref) for ref in index.get("script", []) if _text(ref)]
     if not evidence_refs:
@@ -534,23 +643,40 @@ def _chapter05_script_projection(fact, dive):
             str(item.get("evidenceRef")) for item in evidence
             if isinstance(item, dict) and item.get("evidenceRef")
         )
+    for block in copy_blocks:
+        evidence_refs.extend(
+            str(item.get("evidenceRef")) for item in block.get("evidence", [])
+            if isinstance(item, dict) and item.get("evidenceRef")
+        )
     evidence_refs = list(dict.fromkeys(ref for ref in evidence_refs if ref.startswith(f"script:{material_id}:")))
-    analysis = dive.get("scriptAnalysis") if isinstance(dive, dict) and isinstance(dive.get("scriptAnalysis"), dict) else {}
-    analysis_refs = [
-        str(ref) for ref in analysis.get("evidenceRefs", [])
-        if isinstance(ref, str) and ref in set(evidence_refs)
-    ]
-    script_available = bool(script_text or formula or evidence)
+    for formula_index, item in enumerate(formula):
+        refs = []
+        for candidate in evidence:
+            if not isinstance(candidate, dict):
+                continue
+            if candidate.get("formulaIndex") == formula_index or (
+                candidate.get("formulaIndex") is None and (
+                    _text(candidate.get("level2")) == _text(item.get("level2"))
+                    or _text(candidate.get("level1")) == _text(item.get("level1"))
+                )
+            ):
+                refs.append(_text(candidate.get("evidenceRef")))
+        for block in copy_blocks:
+            refs.extend(
+                _text(candidate.get("evidenceRef"))
+                for candidate in block.get("evidence", [])
+                if isinstance(candidate, dict) and candidate.get("formulaIndex") == formula_index
+            )
+        refs = list(dict.fromkeys(ref for ref in refs if ref))
+        if refs:
+            item["evidenceRefs"] = refs
+    script_available = bool(script_text or formula or evidence or copy_blocks)
     return {
         "text": script_text,
         "formula": formula,
         "evidence": evidence,
+        "copyBlocks": copy_blocks,
         "evidenceRefs": evidence_refs,
-        "analysis": {
-            "conclusion": _text(analysis.get("conclusion")),
-            "evidenceRefs": list(dict.fromkeys(analysis_refs)),
-            "availability": _text(analysis.get("availability")) if _text(analysis.get("availability")) in {"available", "unavailable"} else "unavailable",
-        },
         "availability": _text(raw_script.get("availability")) if _text(raw_script.get("availability")) in {"available", "unavailable"} else ("available" if script_available else "unavailable"),
     }
 
@@ -1235,6 +1361,8 @@ def _project_chapter05(analysis, fact_pack):
             "materialId": material_id,
             "rank": fact.get("rank"),
             "title": _text(fact.get("title")),
+            "videoTitleText": _content_formula_text(fact.get("content_formula"), "视频标题.text"),
+            "videoFrameText": _content_formula_text(fact.get("content_formula"), "视频画面.text"),
             "exposure": deepcopy(fact.get("exposure", {})),
             "metrics": deepcopy(fact.get("metrics", {})),
             "scriptText": _text(fact.get("script_text")),

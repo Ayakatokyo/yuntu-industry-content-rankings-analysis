@@ -1134,27 +1134,87 @@ def render_material_deep_dive(
         script_text = str(raw_script.get("text") or fact.get("script_text") or "").strip()
         formula = raw_script.get("formula") if isinstance(raw_script.get("formula"), list) else []
         evidence = raw_script.get("evidence") if isinstance(raw_script.get("evidence"), list) else []
-        analysis = dive.get("scriptAnalysis") if isinstance(dive.get("scriptAnalysis"), dict) else {}
-        has_script_data = bool(script_text or formula or evidence)
+        copy_blocks = raw_script.get("copyBlocks") if isinstance(raw_script.get("copyBlocks"), list) else []
+        has_script_data = bool(script_text or formula or evidence or copy_blocks)
+        empty_card = '<div class="raw-fact-card material-script-analysis"><b class="collapsible-body-title">脚本分析数据</b><p class="data-note">暂无脚本分析数据</p></div>'
         if not has_script_data:
-            return '<div class="material-script-empty"><span>脚本数据：不足</span><p class="material-script-boundary">脚本分析数据不足，数据不足以判断。</p></div>'
+            return empty_card
         allowed_refs = set(str(ref) for ref in raw_script.get("evidenceRefs", []) if ref)
         if not allowed_refs:
             allowed_refs = {
                 str(item.get("evidenceRef")) for item in evidence
                 if isinstance(item, dict) and item.get("evidenceRef")
             }
-        ai_refs = [
-            str(ref) for ref in analysis.get("evidenceRefs", [])
-            if isinstance(ref, str) and ref in allowed_refs
-        ]
-        ai_conclusion = str(analysis.get("conclusion") or "").strip()
-        ai_state = str(analysis.get("availability") or "unavailable")
-        ai_body = esc(ai_conclusion) if ai_conclusion and ai_state == "available" else "暂无 AI 二次分析结果。"
-        sections = ['<section class="material-script-ai" aria-live="polite"><h4>AI 脚本结论</h4><p>' + ai_body + '</p>']
-        if ai_refs:
-            sections.append('<p class="material-script-ai-evidence">当前素材证据：' + esc("、".join(ai_refs)) + '</p>')
-        sections.append('</section>')
+        formula_palette = ("#2f8f5b", "#d5543f", "#d98324", "#3478c7", "#169a9a", "#c4477e", "#7157c8", "#6f7f2f")
+        formula_level_colors = {
+            "人群": "#ef6b53",
+            "适用人群": "#ef6b53",
+            "品牌印象": "#7c5cff",
+            "商品卖点": "#25b56b",
+            "使用场景": "#2f8ff7",
+        }
+        formula_colors = {
+            index: formula_level_colors.get(str(item.get("level1") or "").strip(), formula_palette[index % len(formula_palette)])
+            for index, item in enumerate(formula) if isinstance(item, dict)
+        }
+
+        def evidence_refs_for_formula(item, formula_index):
+            refs = [str(ref) for ref in item.get("evidenceRefs", []) if ref] if isinstance(item, dict) else []
+            level1 = str(item.get("level1") or "").strip() if isinstance(item, dict) else ""
+            level2 = str(item.get("level2") or "").strip() if isinstance(item, dict) else ""
+            for candidate in evidence:
+                if not isinstance(candidate, dict):
+                    continue
+                candidate_formula_index = candidate.get("formulaIndex")
+                if candidate_formula_index == formula_index or (
+                    candidate_formula_index is None and (
+                        str(candidate.get("level2") or "").strip() == level2
+                        or str(candidate.get("level1") or "").strip() == level1
+                    )
+                ):
+                    refs.append(str(candidate.get("evidenceRef")))
+            for block in copy_blocks:
+                for candidate in block.get("evidence", []) if isinstance(block, dict) else []:
+                    if isinstance(candidate, dict) and candidate.get("formulaIndex") == formula_index:
+                        refs.append(str(candidate.get("evidenceRef")))
+            return list(dict.fromkeys(ref for ref in refs if ref in allowed_refs))
+
+        def render_copy_text(copy_text, copy_evidence):
+            text = str(copy_text or "")
+            ranges = []
+            for item in copy_evidence:
+                if not isinstance(item, dict):
+                    continue
+                sentence = str(item.get("sentence") or "").strip()
+                ref = str(item.get("evidenceRef") or "").strip()
+                if not sentence or ref not in allowed_refs:
+                    continue
+                cursor = 0
+                while cursor < len(text):
+                    start = text.find(sentence, cursor)
+                    if start < 0:
+                        break
+                    ranges.append({"start": start, "end": start + len(sentence), "sentence": sentence, "ref": ref, "level2": str(item.get("level2") or ""), "detail": str(item.get("detail") or ""), "formulaIndex": item.get("formulaIndex")})
+                    cursor = start + len(sentence)
+            ranges.sort(key=lambda item: (item["start"], -(item["end"] - item["start"])))
+            located = []
+            for item in ranges:
+                if not located or item["start"] >= located[-1]["end"]:
+                    located.append(item)
+            parts, cursor = [], 0
+            for item in located:
+                if item["start"] > cursor:
+                    parts.append(esc(text[cursor:item["start"]]))
+                color = formula_colors.get(item.get("formulaIndex"), "#d79a4b")
+                title = item["detail"] or item["level2"] or "证据文字"
+                parts.append('<span class="script-evidence-highlight" data-script-evidence-ref="' + html_module.escape(item["ref"], quote=True) + '" data-script-formula-index="' + str(item.get("formulaIndex", "")) + '" tabindex="0" role="button" aria-pressed="false" title="' + esc(title) + '" style="--script-color:' + color + '">' + esc(item["sentence"]) + '</span>')
+                cursor = item["end"]
+            if cursor < len(text):
+                parts.append(esc(text[cursor:]))
+            return "".join(parts) or esc(text)
+
+        sections = []
+        formula_copy_values = []
 
         if formula:
             chips = []
@@ -1165,52 +1225,43 @@ def render_material_deep_dive(
                 level2 = str(item.get("level2") or "").strip()
                 if not level1 and not level2:
                     continue
-                targets = [
-                    str(candidate.get("evidenceRef")) for candidate in evidence
-                    if isinstance(candidate, dict)
-                    and str(candidate.get("evidenceRef")) in allowed_refs
-                    and (not level2 or str(candidate.get("level2") or "").strip() == level2)
-                ]
+                targets = evidence_refs_for_formula(item, formula_index)
                 target_payload = html_module.escape(json_module.dumps(targets, ensure_ascii=False), quote=True)
-                label = level1 + ("：" + level2 if level2 else "")
-                chips.append('<button type="button" class="script-formula-item" data-script-formula data-script-evidence-refs="' + target_payload + '" aria-controls="material-script-transcript-' + str(material_index) + '" aria-pressed="false">' + esc(label) + '</button>')
-            sections.append('<section class="material-script-formula"><h4>本视频内容公式</h4><div class="script-formula-chain" role="group" aria-label="本视频内容公式">' + '<span class="script-formula-connector">→</span>'.join(chips) + '</div></section>')
+                detail = str(item.get("detail") or "").strip()
+                display_level1 = level1 or "一级标签"
+                display_level2 = level2 or "二级标签"
+                color = formula_colors.get(formula_index, formula_palette[formula_index % len(formula_palette)])
+                copy_label = display_level1 + ("-" + display_level2 if display_level2 else "")
+                if detail:
+                    copy_label += "（" + detail + "）"
+                formula_copy_values.append(copy_label)
+                chip_body = '<span class="script-formula-title-label"><span class="script-formula-label"></span><span class="script-formula-title script-formula-level1">' + esc(display_level1) + '</span></span><span class="script-formula-token script-formula-level2" style="--script-color:' + color + '">' + esc(display_level2)
+                if detail:
+                    chip_body += '<span class="script-formula-detail">' + esc(detail) + '</span>'
+                chip_body += '</span>'
+                chips.append('<button type="button" class="script-formula-item script-formula-token" data-script-formula data-script-evidence-refs="' + target_payload + '" aria-controls="material-script-transcript-' + str(material_index) + '" aria-pressed="false" style="--script-color:' + color + '">' + chip_body + '</button>')
+            if chips:
+                formula_copy = html_module.escape(" + ".join(formula_copy_values), quote=True)
+                sections.append('<section class="script-analysis-section"><div class="script-analysis-section-header"><b>本视频内容公式</b><button type="button" class="copy-button" data-script-copy="' + formula_copy + '">复制内容公式</button></div><div class="script-formula-chain script-formula-text" role="group" aria-label="本视频内容公式">' + '<span class="script-formula-connector">+</span>'.join(chips) + '</div></section>')
 
-        located = []
-        for item in evidence:
-            if not isinstance(item, dict):
+        transcript_parts = []
+        script_copy_parts = []
+        for block in copy_blocks:
+            if not isinstance(block, dict) or not str(block.get("text") or "").strip():
                 continue
-            sentence = str(item.get("sentence") or "").strip()
-            ref = str(item.get("evidenceRef") or "").strip()
-            if not sentence or not ref or ref not in allowed_refs:
-                continue
-            start = script_text.find(sentence)
-            if start < 0:
-                continue
-            candidate = {"start": start, "end": start + len(sentence), "sentence": sentence, "ref": ref, "level2": str(item.get("level2") or "")}
-            if any(candidate["start"] < existing["end"] and candidate["end"] > existing["start"] for existing in located):
-                continue
-            located.append(candidate)
-        located.sort(key=lambda item: item["start"])
-        transcript_parts, cursor = [], 0
-        for item in located:
-            if item["start"] > cursor:
-                transcript_parts.append(esc(script_text[cursor:item["start"]]))
-            transcript_parts.append('<span class="script-evidence-highlight" data-script-evidence-ref="' + html_module.escape(item["ref"], quote=True) + '" tabindex="0" role="button" title="' + esc(item["level2"] or "证据句") + '">' + esc(item["sentence"]) + '</span>')
-            cursor = item["end"]
-        if cursor < len(script_text):
-            transcript_parts.append(esc(script_text[cursor:]))
-        transcript = "".join(transcript_parts) if script_text else '<span class="data-note">数据不足以判断</span>'
-        sections.append('<section class="material-script-transcript"><h4>本视频脚本</h4><p id="material-script-transcript-' + str(material_index) + '" class="script-transcript">' + transcript + '</p></section>')
-        unlocated = [
-            str(item.get("evidenceRef")) for item in evidence
-            if isinstance(item, dict) and item.get("evidenceRef") in allowed_refs and str(item.get("sentence") or "").strip() and not any(item.get("evidenceRef") == found["ref"] for found in located)
-        ]
-        if unlocated:
-            sections.append('<p class="material-script-boundary">证据句无法在当前脚本中定位：' + esc("、".join(unlocated)) + '</p>')
-        if not fact.get("script_segments"):
-            sections.append('<p class="material-script-boundary">未提供脚本时间段，暂不输出帧-话术对应关系。</p>')
-        return "".join(sections)
+            block_label = str(block.get("label") or "视频文字")
+            block_text = str(block.get("text") or "").strip()
+            block_evidence = block.get("evidence") if isinstance(block.get("evidence"), list) else []
+            transcript_parts.append('<p class="script-copy-source"><strong>' + esc(block_label) + '</strong><span>' + render_copy_text(block_text, block_evidence) + '</span></p>')
+            script_copy_parts.append(block_label + "：" + block_text)
+        if script_text:
+            transcript_parts.append('<p class="script-copy-source"><strong>脚本文案</strong><span>' + render_copy_text(script_text, evidence) + '</span></p>')
+            script_copy_parts.append("脚本文案：" + script_text)
+        if transcript_parts:
+            script_copy_value = html_module.escape("\n".join(script_copy_parts), quote=True)
+            sections.append('<section class="script-analysis-section"><div class="script-analysis-section-header"><b>本视频脚本</b><button type="button" class="copy-button" data-script-copy="' + script_copy_value + '">复制脚本</button></div><div id="material-script-transcript-' + str(material_index) + '" class="transcript script-text-body script-transcript">' + "".join(transcript_parts) + '</div></section>')
+
+        return '<div class="raw-fact-card material-script-analysis"><b class="collapsible-body-title">脚本分析数据</b><div class="script-analysis-panel">' + "".join(sections) + '</div></div>'
 
     for index, material_id in enumerate(ordered_ids):
         fact = facts.get(material_id, {})
@@ -1252,5 +1303,5 @@ def render_material_deep_dive(
             metric_items.append('<li><span>' + esc(metric_labels[key]) + '</span><b>' + esc(value) + "</b></li>")
         metric_summary = "".join(metric_items)
         script_panel = render_script_panel(fact, dive, index)
-        panels.append('<article class="material-deep-panel material-card" role="tabpanel" id="material-deep-panel-' + str(index) + '" aria-labelledby="material-deep-tab-' + str(index) + '"' + ("" if selected_tab else " hidden") + '><header class="material-deep-header material-head"><span>#' + esc(fact.get("rank", "-")) + '</span><h3>' + esc(title) + '</h3><p class="material-deep-id">素材 ID：' + esc(material_id) + '</p></header><ul class="material-deep-metrics">' + metric_summary + '</ul><dl class="material-fact-tags">' + source_tags(fact, "people_tags", "核心人群标签") + source_tags(fact, "material_tags", "营销卖点标签") + '</dl><div class="material-detail-tabs" role="tablist" aria-label="' + esc(title) + '分析视图">' + '<button type="button" role="tab" id="material-detail-tab-visual-' + str(index) + '" aria-controls="material-detail-visual-' + str(index) + '" aria-selected="true" data-material-detail-tab="visual" data-material-detail-target="material-detail-visual-' + str(index) + '">高光帧观察</button>' + '<button type="button" role="tab" id="material-detail-tab-timeline-' + str(index) + '" aria-controls="material-detail-timeline-' + str(index) + '" aria-selected="false" tabindex="-1" data-material-detail-tab="timeline" data-material-detail-target="material-detail-timeline-' + str(index) + '">秒级拆解</button>' + '<button type="button" role="tab" id="material-detail-tab-script-' + str(index) + '" aria-controls="material-detail-script-' + str(index) + '" aria-selected="false" tabindex="-1" data-material-detail-tab="script" data-material-detail-target="material-detail-script-' + str(index) + '">脚本分析</button></div>' + '<div class="material-detail-panel" id="material-detail-visual-' + str(index) + '" role="tabpanel" aria-labelledby="material-detail-tab-visual-' + str(index) + '"><div class="deep-visual-strip"><div class="deep-frame-selection-controls">' + '<button type="button" data-deep-frame-select-all>全选高光帧</button><button type="button" data-deep-frame-clear>全不选高光帧</button></div><div class="deep-frame-grid fixed-six">' + "".join(frame_cards) + '</div>' + frame_state + '</div><div class="deep-frame-observations"><h4>高光帧观察</h4><p class="deep-frame-observation-empty" data-deep-frame-observation-empty hidden aria-live="polite">尚未选择高光帧，请选择至少一帧查看观察内容。</p><ul data-deep-frame-observations>' + frame_observations + '</ul></div></div><div class="material-detail-panel" id="material-detail-timeline-' + str(index) + '" role="tabpanel" aria-labelledby="material-detail-tab-timeline-' + str(index) + '" hidden><div class="second-level-section">' + second_level_timeline(metrics, index) + '</div></div><div class="material-detail-panel data-state" id="material-detail-script-' + str(index) + '" role="tabpanel" aria-labelledby="material-detail-tab-script-' + str(index) + '" hidden>' + script_panel + '</div></article>')
+        panels.append('<article class="material-deep-panel material-card" role="tabpanel" id="material-deep-panel-' + str(index) + '" aria-labelledby="material-deep-tab-' + str(index) + '"' + ("" if selected_tab else " hidden") + '><header class="material-deep-header material-head"><span>#' + esc(fact.get("rank", "-")) + '</span><h3>' + esc(title) + '</h3><p class="material-deep-id">素材 ID：' + esc(material_id) + '</p></header><ul class="material-deep-metrics">' + metric_summary + '</ul><dl class="material-fact-tags">' + source_tags(fact, "people_tags", "核心人群标签") + source_tags(fact, "material_tags", "营销卖点标签") + '</dl><div class="material-detail-tabs" role="tablist" aria-label="' + esc(title) + '分析视图">' + '<button type="button" role="tab" id="material-detail-tab-visual-' + str(index) + '" aria-controls="material-detail-visual-' + str(index) + '" aria-selected="true" data-material-detail-tab="visual" data-material-detail-target="material-detail-visual-' + str(index) + '">高光帧观察</button>' + '<button type="button" role="tab" id="material-detail-tab-timeline-' + str(index) + '" aria-controls="material-detail-timeline-' + str(index) + '" aria-selected="false" tabindex="-1" data-material-detail-tab="timeline" data-material-detail-target="material-detail-timeline-' + str(index) + '">秒级拆解</button>' + '<button type="button" role="tab" id="material-detail-tab-script-' + str(index) + '" aria-controls="material-detail-script-' + str(index) + '" aria-selected="false" tabindex="-1" data-material-detail-tab="script" data-material-detail-target="material-detail-script-' + str(index) + '">脚本分析</button></div>' + '<div class="material-detail-panel" id="material-detail-visual-' + str(index) + '" role="tabpanel" aria-labelledby="material-detail-tab-visual-' + str(index) + '"><div class="deep-visual-strip"><div class="deep-frame-selection-controls">' + '<button type="button" data-deep-frame-select-all>全选高光帧</button><button type="button" data-deep-frame-clear>全不选高光帧</button></div><div class="deep-frame-grid fixed-six">' + "".join(frame_cards) + '</div>' + frame_state + '</div><div class="deep-frame-observations"><h4>高光帧观察</h4><p class="deep-frame-observation-empty" data-deep-frame-observation-empty hidden aria-live="polite">尚未选择高光帧，请选择至少一帧查看观察内容。</p><ul data-deep-frame-observations>' + frame_observations + '</ul></div></div><div class="material-detail-panel" id="material-detail-timeline-' + str(index) + '" role="tabpanel" aria-labelledby="material-detail-tab-timeline-' + str(index) + '" hidden><div class="second-level-section">' + second_level_timeline(metrics, index) + '</div></div><div class="material-detail-panel" id="material-detail-script-' + str(index) + '" role="tabpanel" aria-labelledby="material-detail-tab-script-' + str(index) + '" hidden>' + script_panel + '</div></article>')
     return '<div class="material-deep-layout side-tabs"><div class="material-deep-tab-list" role="tablist" aria-label="单素材深度分析">' + "".join(tabs) + '</div><div class="material-deep-panels">' + "".join(panels) + "</div></div>"

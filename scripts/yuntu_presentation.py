@@ -525,7 +525,15 @@ def _chapter05_script_projection(fact, dive):
     index = fact.get("evidenceIndex") if isinstance(fact.get("evidenceIndex"), dict) else {}
     evidence_refs = [str(ref) for ref in index.get("script", []) if _text(ref)]
     if not evidence_refs:
-        evidence_refs = [str(item.get("evidenceRef")) for item in evidence]
+        evidence_refs = [
+            f"script:{material_id}:{item.get('level1')}:{item.get('level2')}"
+            for item in formula
+            if isinstance(item, dict) and _text(item.get("level1"))
+        ]
+        evidence_refs.extend(
+            str(item.get("evidenceRef")) for item in evidence
+            if isinstance(item, dict) and item.get("evidenceRef")
+        )
     evidence_refs = list(dict.fromkeys(ref for ref in evidence_refs if ref.startswith(f"script:{material_id}:")))
     analysis = dive.get("scriptAnalysis") if isinstance(dive, dict) and isinstance(dive.get("scriptAnalysis"), dict) else {}
     analysis_refs = [

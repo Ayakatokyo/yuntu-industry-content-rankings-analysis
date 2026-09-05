@@ -10,7 +10,7 @@ from pathlib import Path
 from string import Template
 
 from rpa_io import write_json_atomically
-from yuntu_presentation import build_yuntu_presentation
+from yuntu_presentation import build_yuntu_presentation, _chapter05_script_projection
 from yuntu_highlight_export import match_brands_from_title
 from yuntu_report_sections import (
     _chapter01_baseline_metric_value,
@@ -1342,12 +1342,7 @@ def _validate_material_deep_dives(analysis, fact_pack):
         index = fact.get("evidenceIndex", {}) if isinstance(fact.get("evidenceIndex"), dict) else {}
         known_script_refs = set(index.get("script", []))
         if not known_script_refs:
-            script = fact.get("script", {}) if isinstance(fact.get("script"), dict) else {}
-            known_script_refs = {
-                str(item.get("evidenceRef"))
-                for item in script.get("labels", []) + script.get("evidence", [])
-                if isinstance(item, dict) and item.get("evidenceRef")
-            }
+            known_script_refs = set(_chapter05_script_projection(fact, dive).get("evidenceRefs", []))
         if any(ref not in known_script_refs for ref in evidence_refs):
             raise YuntuReportError("scriptAnalysis evidenceRefs must belong to current material")
         conclusion = script_analysis.get("conclusion")

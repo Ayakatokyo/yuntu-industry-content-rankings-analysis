@@ -168,6 +168,17 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("data-script-evidence-ref", script_tab)
         self.assertIn("未提供脚本时间段，暂不输出帧-话术对应关系", script_tab)
 
+    def test_chapter05_script_tab_has_formula_evidence_and_responsive_contract(self):
+        template = (ROOT / "scripts" / "templates" / "final-report-template.html").read_text(encoding="utf-8")
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+        self.assertIn("highlightScriptEvidence", template)
+        self.assertIn("prefers-reduced-motion", template)
+        self.assertIn("data-script-evidence-ref", template)
+        self.assertIn(".material-script-ai", css)
+        self.assertIn(".material-script-formula", css)
+        self.assertIn(".script-evidence-highlight.is-evidence-active", css)
+        self.assertIn("@media (max-width: 720px)", css)
+
     def test_render_report_shows_script_formula_drilldown_keywords_and_copy_dimension(self):
         report = load_module()
         fact_pack = self.deep_dive_fact_pack()

@@ -146,6 +146,13 @@
           candidate.tabIndex = selected ? 0 : -1;
           if (panel) panel.hidden = !selected;
         }
+        document.querySelectorAll('.script-evidence-highlight.is-evidence-active').forEach(function (item) {
+          item.classList.remove('is-evidence-active');
+          item.setAttribute('aria-pressed', 'false');
+        });
+        document.querySelectorAll('[data-script-formula][aria-pressed="true"]').forEach(function (item) {
+          item.setAttribute('aria-pressed', 'false');
+        });
         if (focus) tab.focus();
       }
       for (var materialIndex = 0; materialIndex < materialTabs.length; materialIndex += 1) {
@@ -1075,6 +1082,9 @@
             item.tabIndex = selected ? 0 : -1;
           });
           detailPanels.forEach(function (item) { item.hidden = item.id !== target; });
+          if (target !== panel.querySelector('[data-material-detail-tab="script"]')?.getAttribute('data-material-detail-target')) {
+            clearScriptEvidence(panel);
+          }
         }
         tabs.forEach(function (tab, tabIndex) {
           tab.addEventListener('click', function () { selectDetailTab(tab); });
@@ -1172,6 +1182,72 @@
           syncSelection();
         });
         syncSelection();
+
+        function scriptPrefersReducedMotion() {
+          return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        }
+
+        function clearScriptEvidence(scriptPanel) {
+          if (!scriptPanel) return;
+          scriptPanel.querySelectorAll('.script-evidence-highlight.is-evidence-active').forEach(function (item) {
+            item.classList.remove('is-evidence-active');
+            item.setAttribute('aria-pressed', 'false');
+          });
+          scriptPanel.querySelectorAll('[data-script-formula][aria-pressed="true"]').forEach(function (item) {
+            item.setAttribute('aria-pressed', 'false');
+          });
+          var status = scriptPanel.querySelector('[data-script-evidence-status]');
+          if (status) status.textContent = '';
+        }
+
+        function highlightScriptEvidence(scriptPanel, evidenceRefs) {
+          if (!scriptPanel) return;
+          var refs = Array.isArray(evidenceRefs) ? evidenceRefs : [evidenceRefs];
+          refs = refs.filter(function (ref) { return typeof ref === 'string' && ref; });
+          clearScriptEvidence(scriptPanel);
+          var matches = Array.prototype.slice.call(scriptPanel.querySelectorAll('[data-script-evidence-ref]')).filter(function (item) {
+            return refs.indexOf(item.getAttribute('data-script-evidence-ref')) >= 0;
+          });
+          matches.forEach(function (item) {
+            item.classList.add('is-evidence-active');
+            item.setAttribute('aria-pressed', 'true');
+          });
+          scriptPanel.querySelectorAll('[data-script-formula]').forEach(function (button) {
+            var targets = [];
+            try { targets = JSON.parse(button.getAttribute('data-script-evidence-refs') || '[]'); } catch (error) { targets = []; }
+            if (targets.some(function (ref) { return refs.indexOf(ref) >= 0; })) button.setAttribute('aria-pressed', 'true');
+          });
+          var status = scriptPanel.querySelector('[data-script-evidence-status]');
+          if (status) status.textContent = matches.length ? '已定位当前素材证据句。' : '证据句无法在当前脚本中定位。';
+          if (matches[0] && !scriptPrefersReducedMotion()) matches[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+
+        var scriptPanel = panel.querySelector('[data-material-detail-tab="script"]') && panel.querySelector('[data-material-detail-target="' + panel.querySelector('[data-material-detail-tab="script"]').getAttribute('data-material-detail-target') + '"]');
+        if (scriptPanel) {
+          scriptPanel.querySelectorAll('[data-script-formula]').forEach(function (button) {
+            function activateFormula() {
+              var refs = [];
+              try { refs = JSON.parse(button.getAttribute('data-script-evidence-refs') || '[]'); } catch (error) { refs = []; }
+              highlightScriptEvidence(scriptPanel, refs);
+            }
+            button.addEventListener('click', activateFormula);
+            button.addEventListener('keydown', function (event) {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
+              activateFormula();
+            });
+          });
+          scriptPanel.querySelectorAll('[data-script-evidence-ref]').forEach(function (item) {
+            function activateEvidence() { highlightScriptEvidence(scriptPanel, [item.getAttribute('data-script-evidence-ref')]); }
+            item.setAttribute('aria-pressed', 'false');
+            item.addEventListener('click', activateEvidence);
+            item.addEventListener('keydown', function (event) {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
+              activateEvidence();
+            });
+          });
+        }
       });
     }());
   </script>

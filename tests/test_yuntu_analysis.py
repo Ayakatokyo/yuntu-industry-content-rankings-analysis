@@ -22,6 +22,54 @@ def load_module():
 
 
 class YuntuAnalysisTests(unittest.TestCase):
+    def test_build_script_facts_emits_deterministic_keyword_cloud_from_script_text(self):
+        analysis = load_module()
+        details = [
+            {
+                "material_id": "101",
+                "script_text": "早餐 鲜炖 鲜炖 早餐",
+                "script_segments": [],
+                "content_formula": None,
+                "creative_breakdown": None,
+                "metrics": {},
+                "data_availability": {},
+            },
+            {
+                "material_id": "102",
+                "script_text": "早餐 鲜炖",
+                "script_segments": [],
+                "content_formula": None,
+                "creative_breakdown": None,
+                "metrics": {},
+                "data_availability": {},
+            },
+        ]
+
+        facts = analysis.build_script_facts(
+            details,
+            [{"material_id": "101", "rank": 1}, {"material_id": "102", "rank": 2}],
+        )
+
+        self.assertEqual(facts["keywordCloud"]["source"], "facts.scripts.materials[*].script_text")
+        keyword_by_name = {
+            item["keyword"]: item for item in facts["keywordCloud"]["keywords"]
+        }
+        self.assertEqual(keyword_by_name["鲜炖"]["frequency"], 3)
+        self.assertEqual(keyword_by_name["鲜炖"]["materialIds"], ["101", "102"])
+        self.assertEqual(
+            keyword_by_name["鲜炖"]["evidenceRefs"],
+            ["script:101:text:鲜炖", "script:102:text:鲜炖"],
+        )
+
+    def test_prompt_requires_two_script_dimensions_and_keyword_cloud_ai_contract(self):
+        prompt = (ROOT / "prompts" / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
+
+        self.assertIn("keywordCloudReview", prompt)
+        self.assertIn("keywordCloudInsight", prompt)
+        self.assertIn("scriptInsights` 固定输出 2 条", prompt)
+        self.assertIn("一二级内容公式", prompt)
+        self.assertIn("脚本文案", prompt)
+
     def test_build_script_facts_deduplicates_materials_and_counts_only_source_labels(self):
         analysis = load_module()
         details = [
@@ -852,6 +900,19 @@ class YuntuAnalysisTests(unittest.TestCase):
             ["category", "label", "rule", "frame_refs", "common_patterns", "derivative_directions"],
         )
 
+    def test_script_prompt_requires_qianchuan_aligned_ordered_insights(self):
+        analysis = load_module()
+
+        prompt = analysis._prompt_text(filters={"brands": ["小仙炖"]})
+
+        self.assertIn("scriptInsights` 固定输出 2 条脚本洞察", prompt)
+        self.assertIn("一二级内容公式：", prompt)
+        self.assertIn("脚本文案：", prompt)
+        self.assertIn("一级/二级标签的高频结构", prompt)
+        self.assertIn("完整脚本文案中的利益点", prompt)
+        self.assertIn("每条洞察都必须包含 `title`、`summary`、`evidence` 和 `material_ids`", prompt)
+        self.assertIn("没有对应事实时必须写“数据不足以判断”", prompt)
+
     def test_prepare_analysis_writes_report_projection_and_single_call_unit_inputs(self):
         analysis = load_module()
         records = [
@@ -974,6 +1035,10 @@ class YuntuAnalysisTests(unittest.TestCase):
             "yuntu-ai-analysis.schema.json",
         )
         self.assertEqual(output_schema["type"], "object")
+        self.assertEqual(output_schema["properties"]["scriptInsights"]["minItems"], 2)
+        self.assertEqual(output_schema["properties"]["scriptInsights"]["maxItems"], 2)
+        self.assertIn("keywordCloudReview", output_schema["properties"])
+        self.assertIn("keywordCloudInsight", output_schema["properties"])
         self.assertEqual(
             output_schema["properties"]["chapter02Insights"]["required"],
             ["scopeOrder", "scopes"],

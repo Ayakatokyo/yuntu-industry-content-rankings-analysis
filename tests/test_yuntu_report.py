@@ -174,6 +174,7 @@ class YuntuReportTests(unittest.TestCase):
         script_insights = [
             {"title": "公式结构", "summary": "内容公式结论。", "material_ids": ["101"], "evidence": ["content_formula.labels"]},
             {"title": "脚本文案", "summary": "脚本文案结论。", "material_ids": ["102"], "evidence": ["script_text"]},
+            {"title": "可测试改写方向", "summary": "下一轮可将场景开场与卖点承接拆成变量验证。", "material_ids": ["101", "102"], "evidence": ["script_text", "content_formula.labels"]},
         ]
 
         rendered = render_script_insights(
@@ -185,9 +186,10 @@ class YuntuReportTests(unittest.TestCase):
 
         self.assertLess(rendered.index('class="script-ai-insights"'), rendered.index('class="script-keyword-triad"'))
         self.assertLess(rendered.index('class="script-keyword-triad"'), rendered.index('class="script-formula-dimension"'))
-        self.assertEqual(rendered.count('class="script-ai-insight-card"'), 2)
+        self.assertEqual(rendered.count('script-ai-insight-card'), 2)
         self.assertIn("一二级内容公式", rendered)
         self.assertIn("脚本文案", rendered)
+        self.assertNotIn("可测试改写方向", rendered)
         self.assertNotIn('class="script-material"', rendered)
 
     def test_chapter03_mounts_qianchuan_layout_and_collapsible_formula_data(self):
@@ -226,6 +228,98 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('class="script-formula-dashboard"', rendered)
         self.assertIn('class="data-dashboard"', rendered)
 
+    def test_chapter03_keeps_only_two_ai_dimensions_and_uses_keyword_cloud_projection(self):
+        rendered = render_script_insights(
+            script_facts={
+                "coverage": {"total": 2, "script": 2, "rate": 1.0},
+                "materials": [
+                    {"material_id": "101", "script_text": "鲜炖。", "script_segments": []},
+                    {"material_id": "102", "script_text": "燕窝。", "script_segments": []},
+                ],
+            },
+            script_insights=[
+                {"title": "一二级内容公式：场景承接产品证明", "summary": "公式分析。", "material_ids": ["101"], "evidence": ["formula"]},
+                {"title": "脚本文案：用产品信息承接场景", "summary": "文案分析。", "material_ids": ["101", "102"], "evidence": ["script_text"]},
+                {"title": "不应显示的第三维度", "summary": "旧结构。", "material_ids": ["101"], "evidence": ["old"]},
+            ],
+            script_dashboard={
+                "dimensions": {"contentFormula": {"primary": [{"id": "10", "label": "商品卖点", "count": 2}], "secondary": {"10": [{"id": "40", "label": "品质证明", "count": 2, "detailLabels": ["小蓝瓶"]}]} }},
+                "keywordCloudPanel": {
+                    "oneSentenceConclusion": "脚本以鲜炖品质承接日常使用场景。",
+                    "summary": "关键词集中在产品品质表达，下一轮可比较品质信息与场景信息的前置顺序。",
+                    "keywords": [{"keyword": "鲜炖", "frequency": 2}],
+                    "sellingPoints": [{"title": "鲜炖品质", "description": "产品品质词承担购买理由。", "keywordRefs": ["鲜炖"]}],
+                },
+            },
+            esc=lambda value: str(value),
+        )
+
+        self.assertNotIn("AI 二次分析", rendered)
+        self.assertNotIn("关键词洞察", rendered)
+        self.assertEqual(rendered.count("script-ai-insight-card"), 2)
+        self.assertIn("脚本以鲜炖品质承接日常使用场景。", rendered)
+        self.assertIn("关键词集中在产品品质表达，下一轮可比较品质信息与场景信息的前置顺序。", rendered)
+        self.assertIn("鲜炖品质", rendered)
+        self.assertIn("一二级内容公式：场景承接产品证明", rendered)
+        self.assertIn("商品卖点", rendered)
+        self.assertIn("2 个素材", rendered)
+        self.assertIn("二级标签：品质证明（小蓝瓶）", rendered)
+
+        card = rendered.split('class="raw-fact-card dashboard-data-card script-dashboard"', 1)[1]
+        self.assertLess(card.index("收起脚本汇总数据"), card.index("一二级内容公式"))
+        self.assertIn("data-script-formula-primary", card)
+
+    def test_markdown_chapter03_includes_keyword_cloud_triad_content(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["scriptFacts"] = {
+            "coverage": {"total": 1, "script": 1, "rate": 1.0},
+            "materials": [{"material_id": "101", "script_text": "鲜炖。", "script_segments": []}],
+            "keywordCloud": {"keywords": [{"keyword": "鲜炖", "frequency": 2, "materialIds": ["101"], "evidenceRefs": ["script:101:text:鲜炖"]}]},
+        }
+        analysis = self.deep_dive_analysis()
+        analysis["scriptInsights"] = [
+            {"title": "一二级内容公式：产品承接场景", "summary": "公式分析。", "material_ids": ["101"], "evidence": ["formula"]},
+            {"title": "脚本文案：用品质承接场景", "summary": "文案分析。", "material_ids": ["101"], "evidence": ["script_text"]},
+        ]
+        analysis["keywordCloudInsight"] = {
+            "oneSentenceConclusion": "脚本以鲜炖品质承接日常场景。",
+            "summary": "关键词体现品质与场景的承接关系。",
+            "sellingPoints": [{"title": "鲜炖品质", "description": "品质信息承担购买理由。", "keywordRefs": ["鲜炖"], "evidenceRefs": ["script:101:text:鲜炖"]}],
+        }
+
+        markdown = report._render_markdown(analysis, fact_pack=fact_pack)
+
+        self.assertIn("#### 一句话结论", markdown)
+        self.assertIn("#### 高频关键词云", markdown)
+        self.assertIn("#### 从关键词云提炼的卖点", markdown)
+        self.assertIn("鲜炖品质", markdown)
+
+    def test_chapter03_server_markup_matches_qianchuan_mount_structure(self):
+        rendered = render_script_insights(
+            script_facts={
+                "coverage": {"total": 1, "script": 1, "rate": 1.0},
+                "materials": [{"material_id": "101", "script_text": "先讲场景。", "script_segments": [], "content_formula": {"labels": []}}],
+            },
+            script_insights=[{"title": "脚本文案", "summary": "先讲场景，再承接卖点。", "material_ids": ["101"], "evidence": ["script_text"]}],
+            script_dashboard={
+                "conclusion": {"text": "先讲场景，再承接卖点。"},
+                "keywords": [{"label": "早餐", "count": 1}],
+                "sellingPoints": [{"label": "场景卖点", "count": 1}],
+                "dimensions": {"contentFormula": {"primary": [], "secondary": {}}},
+            },
+            esc=lambda value: str(value),
+        )
+
+        self.assertIn('<div class="insight-layout">', rendered)
+        self.assertIn('id="script-primary"', rendered)
+        self.assertIn('class="insight-stack"', rendered)
+        self.assertIn('class="insight-card insight-card-primary script-ai-insight-card"', rendered)
+        self.assertIn('id="keyword-cloud-panel"', rendered)
+        self.assertIn('class="keyword-cloud-words"', rendered)
+        self.assertIn('class="keyword-selling-card"', rendered)
+        self.assertIn('id="script-dashboard"', rendered)
+
     def test_formula_dashboard_has_keyboard_and_drilldown_contract(self):
         template = (ROOT / "scripts" / "templates" / "final-report-template.html").read_text(encoding="utf-8")
 
@@ -244,6 +338,10 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", css)
         self.assertIn("@media (max-width: 759px)", css)
         self.assertIn("@media (max-width: 960px)", css)
+        formula_rule = css.split(".unified-yuntu .script-formula-overview", 1)[1].split("}", 1)[0]
+        self.assertIn("display: grid;", formula_rule)
+        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));", formula_rule)
+        self.assertNotIn("border-left: 3px", css)
 
     def test_render_report_creates_sibling_zip_with_final_report_directory(self):
         report = load_module()

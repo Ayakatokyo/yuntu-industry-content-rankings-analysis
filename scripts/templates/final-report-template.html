@@ -1218,7 +1218,8 @@
             var row = document.createElement('div');
             row.className = 'script-formula-secondary-item';
             var label = document.createElement('span');
-            label.textContent = '二级标签 ' + item.label;
+            var detailLabels = Array.isArray(item.detailLabels) && item.detailLabels.length ? '（' + item.detailLabels.join('、') + '）' : '';
+            label.textContent = '二级标签 ' + item.label + detailLabels;
             var value = document.createElement('b');
             value.textContent = item.count + ' 个素材';
             row.append(label, value);

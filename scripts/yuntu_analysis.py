@@ -5,6 +5,11 @@ from pathlib import Path
 import re
 from statistics import median
 
+try:
+    import jieba.posseg as pseg
+except ImportError:  # pragma: no cover - the production environment provides jieba
+    pseg = None
+
 from rpa_io import file_sha256, write_json_atomically
 from yuntu_highlights import (
     ALLOWED_HIGHLIGHT_TRENDS,
@@ -366,6 +371,74 @@ def _script_frequency_add(frequencies, dimension, values, material_id):
             entry["count"] += 1
 
 
+_SCRIPT_KEYWORD_MIN_FREQUENCY = 2
+_SCRIPT_KEYWORD_POS_PREFIXES = ("n", "v", "a", "eng")
+
+
+def _script_keyword_tokens(text):
+    """Extract content words from script text without using titles or labels."""
+    value = str(text or "").strip()
+    if not value:
+        return []
+    if pseg is None:
+        return [
+            token
+            for token in re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z]{2,}", value)
+            if not token.isdigit()
+        ]
+
+    tokens = []
+    previous = None
+    for item in pseg.cut(value):
+        token = str(item.word or "").strip()
+        flag = str(item.flag or "")
+        if not token or not flag.startswith(_SCRIPT_KEYWORD_POS_PREFIXES):
+            previous = None
+            continue
+        if token.isascii():
+            normalized = token.lower() if len(token) >= 2 and not token.isdigit() else ""
+        else:
+            normalized = token if re.search(r"[\u4e00-\u9fff]", token) else ""
+        if normalized:
+            if len(normalized) >= 2:
+                tokens.append(normalized)
+            if previous and len(previous) == 1 and len(normalized) == 1:
+                tokens.append(previous + normalized)
+            previous = normalized
+    return tokens
+
+
+def _script_keyword_cloud(materials):
+    stats = {}
+    for material in materials:
+        if not isinstance(material, dict):
+            continue
+        material_id = str(material.get("material_id") or "").strip()
+        for keyword in _script_keyword_tokens(material.get("script_text")):
+            entry = stats.setdefault(keyword, {"frequency": 0, "material_ids": set()})
+            entry["frequency"] += 1
+            if material_id:
+                entry["material_ids"].add(material_id)
+
+    keywords = []
+    for keyword, item in sorted(stats.items(), key=lambda pair: (-pair[1]["frequency"], pair[0])):
+        if item["frequency"] < _SCRIPT_KEYWORD_MIN_FREQUENCY:
+            continue
+        material_ids = sorted(item["material_ids"])
+        keywords.append({
+            "keyword": keyword,
+            "frequency": item["frequency"],
+            "materialIds": material_ids,
+            "evidenceRefs": [
+                f"script:{material_id}:text:{keyword}" for material_id in material_ids
+            ],
+        })
+    return {
+        "source": "facts.scripts.materials[*].script_text",
+        "keywords": keywords,
+    }
+
+
 def _script_frequencies_for_detail(detail, material_id, frequencies):
     formula = detail.get("content_formula")
     if isinstance(formula, dict):
@@ -482,6 +555,7 @@ def build_script_facts(details, selected_materials):
         "scope": "selected_detail_materials",
         "coverage": {"total": total, "script": script_count, "rate": script_count / total if total else 0},
         "frequencies": frequencies,
+        "keywordCloud": _script_keyword_cloud(materials),
         "materials": materials,
         "limitations": [
             "脚本时间戳段落未提供，不能建立秒点或高光帧与话术的对应关系。",
@@ -860,6 +934,46 @@ def _analysis_insight_schema():
     }
 
 
+def _keyword_cloud_review_schema():
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["keyword", "decision", "target"],
+        "properties": {
+            "keyword": {"type": "string"},
+            "decision": {"type": "string", "enum": ["accept", "exclude", "merge"]},
+            "target": {"type": "string"},
+        },
+    }
+
+
+def _keyword_cloud_insight_schema():
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["oneSentenceConclusion", "summary", "sellingPoints"],
+        "properties": {
+            "oneSentenceConclusion": {"type": "string"},
+            "summary": {"type": "string"},
+            "sellingPoints": {
+                "type": "array",
+                "maxItems": 4,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["title", "description", "keywordRefs", "evidenceRefs"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "keywordRefs": {"type": "array", "items": {"type": "string"}},
+                        "evidenceRefs": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+            },
+        },
+    }
+
+
 def _chapter02_output_schema(fact_pack):
     scope_order = [str(scope) for scope in fact_pack["chapter02AiFacts"]["scopeOrder"]]
     scope_schema = {
@@ -1043,10 +1157,20 @@ def _analysis_output_schema(fact_pack):
     }
     required = ["topMaterialCombination", "chapter02Insights"]
     if "scriptFacts" in fact_pack:
-        properties["scriptInsights"] = {
+        script_schema = {
             "type": "array",
             "items": _analysis_insight_schema(),
         }
+        script_facts = fact_pack.get("scriptFacts", {})
+        if isinstance(script_facts, dict) and "keywordCloud" in script_facts:
+            script_schema.update({"minItems": 2, "maxItems": 2})
+            properties["keywordCloudReview"] = {
+                "type": "array",
+                "items": _keyword_cloud_review_schema(),
+            }
+            properties["keywordCloudInsight"] = _keyword_cloud_insight_schema()
+            required.extend(["keywordCloudReview", "keywordCloudInsight"])
+        properties["scriptInsights"] = script_schema
         required.append("scriptInsights")
     if any(asset.get("available") for asset in fact_pack.get("visualAssets", [])):
         properties["highlightDashboard"] = _highlight_output_schema()

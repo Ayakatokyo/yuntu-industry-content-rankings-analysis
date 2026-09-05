@@ -343,6 +343,11 @@ def _formula_hierarchy(materials):
         labels = formula.get("labels") if isinstance(formula, dict) else None
         if not isinstance(labels, list):
             continue
+        detail_labels = {
+            _text(str(key)[len("detail."):]): [_text(value)]
+            for key, value in formula.items()
+            if str(key).startswith("detail.") and _text(str(key)[len("detail."):]) and _text(value)
+        }
         material_id = _text(material.get("material_id"))
         seen_primary = set()
         seen_secondary = set()
@@ -367,12 +372,15 @@ def _formula_hierarchy(materials):
                 if not secondary_id:
                     continue
                 pair = (primary_id, secondary_id)
-                child = children.setdefault(secondary_id, {"id": secondary_id, "label": secondary_id, "count": 0, "materialIds": []})
+                child = children.setdefault(secondary_id, {"id": secondary_id, "label": secondary_id, "count": 0, "materialIds": [], "detailLabels": []})
                 if pair in seen_secondary:
                     continue
                 child["count"] += 1
                 if material_id and material_id not in child["materialIds"]:
                     child["materialIds"].append(material_id)
+                for detail in detail_labels.get(secondary_id, []):
+                    if detail not in child["detailLabels"]:
+                        child["detailLabels"].append(detail)
                 seen_secondary.add(pair)
     return {
         "primary": sorted(primary.values(), key=lambda item: (-item["count"], item["label"])),
@@ -380,6 +388,98 @@ def _formula_hierarchy(materials):
             primary_id: sorted(children.values(), key=lambda item: (-item["count"], item["label"]))
             for primary_id, children in secondary.items()
         },
+    }
+
+
+def _project_keyword_cloud(facts, analysis, material_ids):
+    """Apply the AI review to deterministic keyword facts without re-counting text."""
+    raw_cloud = facts.get("keywordCloud", {}) if isinstance(facts, dict) else {}
+    raw_keywords = raw_cloud.get("keywords", []) if isinstance(raw_cloud, dict) else []
+    if not isinstance(raw_keywords, list):
+        raw_keywords = []
+
+    ai_source = analysis if isinstance(analysis, dict) else {}
+    review_items = ai_source.get("keywordCloudReview", [])
+    if not isinstance(review_items, list):
+        review_items = []
+    review = {
+        _text(item.get("keyword")): {
+            "decision": _text(item.get("decision")),
+            "target": _text(item.get("target")),
+        }
+        for item in review_items
+        if isinstance(item, dict) and _text(item.get("keyword"))
+    }
+    allowed_material_ids = {str(value) for value in material_ids}
+    merged = {}
+    for raw in raw_keywords:
+        if not isinstance(raw, dict) or not _text(raw.get("keyword")):
+            continue
+        keyword = _text(raw.get("keyword"))
+        decision = review.get(keyword, {}).get("decision", "accept")
+        if decision == "exclude":
+            continue
+        target = review.get(keyword, {}).get("target", "") if decision == "merge" else ""
+        projected_keyword = target or keyword
+        item = merged.setdefault(projected_keyword, {
+            "keyword": projected_keyword,
+            "frequency": 0,
+            "materialIds": [],
+            "evidenceRefs": [],
+        })
+        frequency = raw.get("frequency", 0)
+        if isinstance(frequency, bool) or not isinstance(frequency, (int, float)):
+            frequency = 0
+        item["frequency"] += frequency
+        for value in raw.get("materialIds", []):
+            value = str(value)
+            if value in allowed_material_ids and value not in item["materialIds"]:
+                item["materialIds"].append(value)
+        for ref in raw.get("evidenceRefs", []):
+            ref = _text(ref)
+            if ref and ref not in item["evidenceRefs"]:
+                item["evidenceRefs"].append(ref)
+
+    keywords = sorted(merged.values(), key=lambda item: (-item["frequency"], item["keyword"]))
+    ai_cloud = ai_source.get("keywordCloudInsight", {})
+    if not isinstance(ai_cloud, dict):
+        ai_cloud = {}
+    valid_keywords = {item["keyword"] for item in keywords}
+    valid_refs = {ref for item in keywords for ref in item["evidenceRefs"]}
+    selling_points = []
+    raw_selling_points = ai_cloud.get("sellingPoints", [])
+    if not isinstance(raw_selling_points, list):
+        raw_selling_points = []
+    for raw in raw_selling_points[:4]:
+        if not isinstance(raw, dict):
+            continue
+        keyword_refs = [
+            _text(ref) for ref in raw.get("keywordRefs", [])
+            if _text(ref) in valid_keywords
+        ]
+        evidence_refs = [
+            _text(ref) for ref in raw.get("evidenceRefs", [])
+            if _text(ref) in valid_refs
+        ]
+        title = _text(raw.get("title"))
+        description = _text(raw.get("description"))
+        if title and description and keyword_refs and evidence_refs:
+            selling_points.append({
+                "title": title,
+                "description": description,
+                "keywordRefs": keyword_refs,
+                "evidenceRefs": evidence_refs,
+            })
+    return {
+        "oneSentenceConclusion": _text(ai_cloud.get("oneSentenceConclusion")),
+        "summary": _text(ai_cloud.get("summary")),
+        "keywords": keywords,
+        "sellingPoints": selling_points,
+        "source": "facts.scriptFacts.keywordCloud + ai.keywordCloudInsight",
+        "evidenceRefs": list(dict.fromkeys(
+            ref for item in keywords for ref in item["evidenceRefs"]
+        )),
+        "availability": "available" if keywords else "unavailable",
     }
 
 
@@ -416,7 +516,7 @@ def _project_chapter03(analysis, fact_pack):
             "metrics": deepcopy(item.get("metrics", {})),
             "availability": _text(script_state.get("missing_reason")) if not script_state.get("available") else "available",
         })
-    insights = _script_insights(analysis, material_ids)
+    insights = _script_insights(analysis, material_ids)[:2]
     frequencies = facts.get("frequencies", {}) if isinstance(facts.get("frequencies"), dict) else {}
     coverage = deepcopy(facts.get("coverage", {"total": len(materials), "script": 0, "rate": 0}))
     if insights:
@@ -432,6 +532,7 @@ def _project_chapter03(analysis, fact_pack):
             "source": "coverage",
         }
     content_formula = _formula_hierarchy(facts.get("materials", []))
+    keyword_cloud_panel = _project_keyword_cloud(facts, analysis, material_ids)
     dashboard = {
         "scope": _text(facts.get("scope")) or "selected_detail_materials",
         "scopeLabel": "已获取详情素材",
@@ -439,6 +540,7 @@ def _project_chapter03(analysis, fact_pack):
         "conclusion": conclusion,
         "keywords": _script_keywords(frequencies),
         "sellingPoints": _script_frequency_items(frequencies, "selling_points"),
+        "keywordCloudPanel": keyword_cloud_panel,
         "frequencies": deepcopy(frequencies),
         "dimensions": {
             "contentFormula": {

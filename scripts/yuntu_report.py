@@ -190,6 +190,9 @@ def _validate_script_insights(analysis, fact_pack):
     if not isinstance(insights, list):
         raise YuntuReportError("scriptInsights must be a list")
     facts = fact_pack.get("scriptFacts", {}) if isinstance(fact_pack, dict) else {}
+    strict_script_contract = isinstance(facts, dict) and "keywordCloud" in facts
+    if strict_script_contract and len(insights) != 2:
+        raise YuntuReportError("scriptInsights must contain exactly two dimensions")
     known_ids = {
         str(item.get("material_id"))
         for item in facts.get("materials", [])
@@ -221,6 +224,90 @@ def _validate_script_insights(analysis, fact_pack):
             raise YuntuReportError(f"{field} references unknown material IDs")
         if SCRIPT_INSIGHT_FORBIDDEN_CLAIM.search(item["summary"]):
             raise YuntuReportError(f"{field} contains unsupported claim")
+        if strict_script_contract:
+            expected_prefix = "一二级内容公式：" if index == 1 else "脚本文案："
+            if not item["title"].startswith(expected_prefix):
+                raise YuntuReportError(f"{field}.title must start with {expected_prefix}")
+
+    if strict_script_contract:
+        _validate_keyword_cloud_analysis(analysis, facts)
+
+
+def _validate_keyword_cloud_analysis(analysis, script_facts):
+    cloud = script_facts.get("keywordCloud", {})
+    raw_keywords = cloud.get("keywords", []) if isinstance(cloud, dict) else []
+    if not isinstance(raw_keywords, list):
+        raise YuntuReportError("keywordCloud keywords must be a list")
+    candidates = {
+        str(item.get("keyword")): item
+        for item in raw_keywords
+        if isinstance(item, dict) and str(item.get("keyword") or "").strip()
+    }
+    candidate_refs = {
+        str(ref)
+        for item in candidates.values()
+        for ref in item.get("evidenceRefs", [])
+        if str(ref).strip()
+    }
+    review = analysis.get("keywordCloudReview")
+    if not isinstance(review, list):
+        raise YuntuReportError("keywordCloudReview must be a list")
+    reviewed_keywords = set()
+    merge_targets = set()
+    for index, item in enumerate(review, start=1):
+        field = f"keyword cloud review {index}"
+        if not isinstance(item, dict) or set(item) - {"keyword", "decision", "target"}:
+            raise YuntuReportError(f"{field} is invalid")
+        keyword = str(item.get("keyword") or "").strip()
+        decision = str(item.get("decision") or "").strip()
+        target = str(item.get("target") or "").strip()
+        if keyword not in candidates:
+            raise YuntuReportError(f"{field} references unknown keyword")
+        if keyword in reviewed_keywords:
+            raise YuntuReportError(f"{field} duplicates keyword")
+        if decision not in {"accept", "exclude", "merge"}:
+            raise YuntuReportError(f"{field} has invalid decision")
+        if decision == "merge" and not target:
+            raise YuntuReportError(f"{field} merge target is required")
+        if decision != "merge" and target:
+            raise YuntuReportError(f"{field} target is only allowed for merge")
+        reviewed_keywords.add(keyword)
+        if decision == "merge":
+            merge_targets.add(target)
+
+    review_by_keyword = {
+        str(item.get("keyword")): item
+        for item in review
+        if isinstance(item, dict)
+    }
+    projected_keywords = {
+        keyword for keyword in candidates
+        if review_by_keyword.get(keyword, {}).get("decision", "accept") != "exclude"
+    } | merge_targets
+    insight = analysis.get("keywordCloudInsight")
+    if not isinstance(insight, dict) or set(insight) - {"oneSentenceConclusion", "summary", "sellingPoints"}:
+        raise YuntuReportError("keywordCloudInsight is invalid")
+    _validate_summary(insight.get("oneSentenceConclusion"), "keywordCloudInsight.oneSentenceConclusion")
+    _validate_summary(insight.get("summary"), "keywordCloudInsight.summary")
+    selling_points = insight.get("sellingPoints")
+    if not isinstance(selling_points, list) or len(selling_points) > 4:
+        raise YuntuReportError("keywordCloudInsight.sellingPoints must contain at most four items")
+    for index, item in enumerate(selling_points, start=1):
+        field = f"keyword cloud selling point {index}"
+        if not isinstance(item, dict) or set(item) - {"title", "description", "keywordRefs", "evidenceRefs"}:
+            raise YuntuReportError(f"{field} is invalid")
+        _validate_summary(item.get("title"), f"{field}.title")
+        _validate_summary(item.get("description"), f"{field}.description")
+        keyword_refs = item.get("keywordRefs")
+        evidence_refs = item.get("evidenceRefs")
+        if not isinstance(keyword_refs, list) or not keyword_refs or any(
+            not isinstance(ref, str) or ref not in projected_keywords for ref in keyword_refs
+        ):
+            raise YuntuReportError(f"{field} keywordRefs are invalid")
+        if not isinstance(evidence_refs, list) or not evidence_refs or any(
+            not isinstance(ref, str) or ref not in candidate_refs for ref in evidence_refs
+        ):
+            raise YuntuReportError(f"{field} evidenceRefs are invalid")
 
 
 def _validate_summary(value, field):
@@ -713,6 +800,45 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
             lines.extend([f"### {insight.get('title', '脚本洞察')}", "", insight.get("summary", ""), "", f"证据素材：{'、'.join(insight.get('material_ids', []))}。", ""])
         if not analysis.get("scriptInsights"):
             lines.extend(["数据不足以判断。", ""])
+        keyword_cloud = script_facts.get("keywordCloud", {})
+        raw_keywords = keyword_cloud.get("keywords", []) if isinstance(keyword_cloud, dict) else []
+        review = {
+            str(item.get("keyword")): item
+            for item in analysis.get("keywordCloudReview", [])
+            if isinstance(item, dict) and str(item.get("keyword") or "").strip()
+        }
+        projected = {}
+        for raw in raw_keywords if isinstance(raw_keywords, list) else []:
+            if not isinstance(raw, dict) or not str(raw.get("keyword") or "").strip():
+                continue
+            keyword = str(raw["keyword"]).strip()
+            decision = str(review.get(keyword, {}).get("decision", "accept"))
+            if decision == "exclude":
+                continue
+            target = str(review.get(keyword, {}).get("target", "")).strip() if decision == "merge" else ""
+            target = target or keyword
+            item = projected.setdefault(target, {"frequency": 0, "evidenceRefs": []})
+            item["frequency"] += raw.get("frequency", 0) if isinstance(raw.get("frequency", 0), (int, float)) else 0
+            for ref in raw.get("evidenceRefs", []):
+                if ref not in item["evidenceRefs"]:
+                    item["evidenceRefs"].append(ref)
+        keyword_insight = analysis.get("keywordCloudInsight")
+        if isinstance(keyword_insight, dict):
+            lines.extend([
+                "#### 一句话结论", "", keyword_insight.get("oneSentenceConclusion", "数据不足以判断。"), "",
+                "#### 高频关键词云", "",
+            ])
+            for keyword, item in sorted(projected.items(), key=lambda pair: (-pair[1]["frequency"], pair[0])):
+                lines.append(f"- {keyword}（{item['frequency']} 次出现）")
+            lines.append("")
+            lines.extend(["#### 关键词组合摘要", "", keyword_insight.get("summary", "数据不足以判断。"), ""])
+            selling_points = keyword_insight.get("sellingPoints", [])
+            if isinstance(selling_points, list) and selling_points:
+                lines.extend(["#### 从关键词云提炼的卖点", ""])
+                for index, point in enumerate(selling_points[:4], start=1):
+                    if isinstance(point, dict):
+                        lines.extend([f"- {index}｜{point.get('title', '卖点')}：{point.get('description', '')}"])
+                lines.append("")
         if not any(item.get("script_segments") for item in script_facts.get("materials", []) if isinstance(item, dict)):
             lines.extend(["未提供脚本时间段，暂不输出帧-话术对应关系。", ""])
     else:

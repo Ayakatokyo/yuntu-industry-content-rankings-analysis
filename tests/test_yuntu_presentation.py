@@ -347,7 +347,7 @@ class YuntuPresentationTests(unittest.TestCase):
             "materials": [
                 {
                     "material_id": "101", "script_text": "先提出场景，再展示商品。", "script_segments": [],
-                    "content_formula": {"labels": [{"level_1_label": 10, "level_2_labels": [40, 55]}]},
+                    "content_formula": {"labels": [{"level_1_label": 10, "level_2_labels": [40, 55]}], "detail.40": "小蓝瓶"},
                     "creative_breakdown": {"tags": ["口播"]}, "metrics": {},
                     "data_availability": {"script_text": {"available": True, "missing_reason": ""}},
                 },
@@ -375,6 +375,7 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(dashboard["dimensions"]["contentFormula"]["primary"][0]["count"], 2)
         self.assertEqual(dashboard["dimensions"]["contentFormula"]["secondary"]["10"][0]["id"], "40")
         self.assertEqual(dashboard["dimensions"]["contentFormula"]["secondary"]["10"][0]["count"], 2)
+        self.assertEqual(dashboard["dimensions"]["contentFormula"]["secondary"]["10"][0]["detailLabels"], ["小蓝瓶"])
         self.assertEqual(dashboard["dimensions"]["scriptCopy"]["coverage"], {"total": 2, "script": 2, "rate": 1.0})
         self.assertEqual(dashboard["sellingPoints"][0]["label"], "优质活菌")
         self.assertEqual(dashboard["keywords"][0]["label"], "优质活菌")
@@ -394,6 +395,76 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(dashboard["dimensions"]["contentFormula"]["primary"], [])
         self.assertEqual(dashboard["dimensions"]["scriptCopy"]["coverage"]["script"], 0)
         self.assertEqual(dashboard["conclusion"]["source"], "coverage")
+
+    def test_projects_keyword_cloud_with_ai_review_and_merge_without_changing_fact_frequency(self):
+        facts = self.fact_pack()
+        facts["scriptFacts"] = {
+            "scope": "selected_detail_materials",
+            "coverage": {"total": 2, "script": 2, "rate": 1.0},
+            "frequencies": {},
+            "keywordCloud": {
+                "source": "facts.scripts.materials[*].script_text",
+                "keywords": [
+                    {
+                        "keyword": "鲜炖",
+                        "frequency": 2,
+                        "materialIds": ["101"],
+                        "evidenceRefs": ["script:101:text:鲜炖"],
+                    },
+                    {
+                        "keyword": "燕窝",
+                        "frequency": 1,
+                        "materialIds": ["101"],
+                        "evidenceRefs": ["script:101:text:燕窝"],
+                    },
+                ],
+            },
+            "materials": [
+                {"material_id": "101", "script_text": "鲜炖 燕窝。", "script_segments": []},
+                {"material_id": "102", "script_text": "鲜炖。", "script_segments": []},
+            ],
+        }
+        analysis = self.analysis()
+        analysis["scriptInsights"] = [
+            {
+                "title": "一二级内容公式：场景承接产品证明",
+                "summary": "内容公式从具体场景进入产品证明。",
+                "material_ids": ["101"],
+                "evidence": ["content_formula.labels"],
+            },
+            {
+                "title": "脚本文案：用产品信息承接场景",
+                "summary": "脚本文案用产品信息承接具体场景。",
+                "material_ids": ["101", "102"],
+                "evidence": ["script_text"],
+            },
+        ]
+        analysis["keywordCloudReview"] = [
+            {"keyword": "鲜炖", "decision": "accept", "target": ""},
+            {"keyword": "燕窝", "decision": "merge", "target": "鲜炖"},
+        ]
+        analysis["keywordCloudInsight"] = {
+            "oneSentenceConclusion": "脚本以鲜炖品质承接日常使用场景。",
+            "summary": "关键词集中在产品品质表达，下一轮可比较品质信息与场景信息的前置顺序。",
+            "sellingPoints": [
+                {
+                    "title": "鲜炖品质",
+                    "description": "产品品质词承担购买理由的解释。",
+                    "keywordRefs": ["鲜炖"],
+                    "evidenceRefs": ["script:101:text:鲜炖"],
+                }
+            ],
+        }
+
+        dashboard = build_yuntu_presentation(analysis, facts)["chapters"]["chapter03"]["scriptDashboard"]
+        panel = dashboard["keywordCloudPanel"]
+
+        self.assertEqual(panel["oneSentenceConclusion"], "脚本以鲜炖品质承接日常使用场景。")
+        self.assertEqual(panel["summary"], "关键词集中在产品品质表达，下一轮可比较品质信息与场景信息的前置顺序。")
+        self.assertEqual(panel["keywords"][0]["keyword"], "鲜炖")
+        self.assertEqual(panel["keywords"][0]["frequency"], 3)
+        self.assertEqual(panel["keywords"][0]["materialIds"], ["101"])
+        self.assertEqual(panel["sellingPoints"][0]["keywordRefs"], ["鲜炖"])
 
     def test_chapter05_uses_single_panel_source_without_frame_copy_fields(self):
         payload = build_yuntu_presentation(self.analysis(), self.fact_pack())

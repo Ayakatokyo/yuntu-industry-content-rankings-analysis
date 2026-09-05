@@ -163,38 +163,56 @@ def render_script_insights(*, script_facts=None, script_insights=None, script_da
     )
     if not formula_columns:
         formula_columns = '<div class="data-state"><span>内容公式：不可用</span><p>未提供可用的一二级内容公式标签，数据不足以判断。</p></div>'
-    formula_markup = '<section class="script-formula-dimension"><div class="collapsible-head"><button class="collapsible-toggle" type="button" data-collapsible-toggle data-collapsible-expanded-label="收起脚本汇总数据" data-collapsible-collapsed-label="展开脚本汇总数据" aria-expanded="true" aria-controls="script-formula-body"><span class="collapsible-toggle-action">收起脚本汇总数据</span></button></div><div class="collapsible-body" id="script-formula-body"><div class="section-title-row"><h3>一二级内容公式</h3><p class="script-dashboard-hint">点击一级标签柱状图可查看二级标签分布</p></div><div class="script-formula-dashboard"><div class="data-dashboard" data-script-formula="' + esc(json.dumps(formula_data, ensure_ascii=False)) + '"><div id="script-formula-view" data-script-formula-view aria-live="polite"><div class="script-formula-overview" role="region" aria-label="一级内容公式柱状图">' + formula_columns + '</div></div></div></div></div></section>'
+    formula_rows = "".join(
+        '<div class="script-formula-summary-row"><strong>一级标签 ' + esc(item.get("label")) + '</strong><span>二级标签：' + esc("、".join(str(child.get("label")) + (("（" + "、".join(str(detail) for detail in child.get("detailLabels", [])) + "）") if child.get("detailLabels") else "") for child in secondary.get(str(item.get("id")), []) if isinstance(child, dict))) + '</span><small>' + esc(item.get("count", 0)) + ' 个素材</small></div>'
+        for item in primary if isinstance(item, dict)
+    )
+    formula_markup = '<section class="script-formula-dimension"><div class="collapsible-head"><button class="collapsible-toggle" type="button" data-collapsible-toggle data-collapsible-expanded-label="收起脚本汇总数据" data-collapsible-collapsed-label="展开脚本汇总数据" aria-expanded="true" aria-controls="script-formula-body"><span class="collapsible-toggle-action">收起脚本汇总数据</span></button></div><div class="collapsible-body" id="script-formula-body"><div class="script-formula-head"><h3>一二级内容公式</h3><p class="script-dashboard-hint">点击一级标签柱状图可查看二级标签分布</p></div><div class="script-formula-summary" aria-label="一二级内容公式明细">' + (formula_rows or '<p class="data-note">暂无可用公式明细。</p>') + '</div><div class="script-formula-dashboard"><div class="data-dashboard" data-script-formula="' + esc(json.dumps(formula_data, ensure_ascii=False)) + '"><div id="script-formula-view" data-script-formula-view aria-live="polite"><div class="script-formula-overview" role="region" aria-label="一级内容公式柱状图">' + formula_columns + '</div></div></div></div></div></section>'
 
     projected_insights = dashboard.get("insights") if isinstance(dashboard.get("insights"), list) else script_insights
     ai_cards = []
     dimension_labels = ("一二级内容公式", "脚本文案")
-    for index, label in enumerate(dimension_labels):
-        item = projected_insights[index] if isinstance(projected_insights, list) and index < len(projected_insights) and isinstance(projected_insights[index], dict) else {}
+    if not isinstance(projected_insights, list):
+        projected_insights = []
+    for index, raw_item in enumerate(projected_insights[:2]):
+        item = raw_item if isinstance(raw_item, dict) else {}
         title = item.get("title") or item.get("text") or "暂无脚本洞察"
         summary = item.get("summary") or item.get("text") or "数据不足以判断。"
         evidence = item.get("evidence", [])
         material_ids = item.get("material_ids", item.get("materialIds", []))
+        title_text = str(title)
+        evidence_values = [str(value) for value in evidence] if isinstance(evidence, list) else [str(evidence)]
+        if "公式" in title_text:
+            label = "一二级内容公式"
+        elif "脚本" in title_text or any("script_text" in value for value in evidence_values):
+            label = "脚本文案"
+        else:
+            label = dimension_labels[index] if index < len(dimension_labels) else "脚本洞察"
         evidence_text = "；".join(str(value) for value in evidence if value) if isinstance(evidence, list) else str(evidence or "")
         if material_ids:
             evidence_text = (evidence_text + "；" if evidence_text else "") + "关联素材 " + "、".join(str(value) for value in material_ids)
-        ai_cards.append('<article class="script-ai-insight-card"><span class="script-ai-dimension">' + esc(label) + '</span><h4>' + esc(title) + '</h4><p>' + esc(summary) + '</p>' + ('<small class="script-ai-evidence">证据：' + esc(evidence_text) + '</small>' if evidence_text else '<small class="script-ai-evidence">暂无可用 AI 证据，数据不足以判断。</small>') + '</article>')
-    ai_markup = '<section class="script-ai-insights"><div class="section-title-row"><h3>AI 二次分析</h3><p class="script-dashboard-hint">分别分析一二级内容公式与脚本文案</p></div><div class="insight-layout script-ai-insights-grid">' + "".join(ai_cards) + '</div></section>'
+        card_class = "insight-card insight-card-primary script-ai-insight-card" if index == 0 else "insight-card script-ai-insight-card"
+        ai_cards.append('<article class="' + card_class + '"><span class="part-label script-ai-dimension">' + esc(label) + '</span><b class="script-ai-title">' + esc(title) + '</b><p>' + esc(summary) + '</p>' + ('<small class="script-ai-evidence evidence-label">证据：' + esc(evidence_text) + '</small>' if evidence_text else '<small class="script-ai-evidence evidence-label">暂无可用 AI 证据，数据不足以判断。</small>') + '</article>')
+    ai_markup = '<div class="primary-summary" id="script-primary"><section class="script-ai-insights"><div class="insight-layout script-ai-insights-grid"><div class="insight-stack">' + "".join(ai_cards) + '</div></div></section></div>'
 
+    keyword_panel = dashboard.get("keywordCloudPanel", {}) if isinstance(dashboard.get("keywordCloudPanel"), dict) else {}
     conclusion = dashboard.get("conclusion", {}) if isinstance(dashboard.get("conclusion"), dict) else {}
-    conclusion_text = conclusion.get("text") or ("脚本文本覆盖 " + str(script_count) + "/" + str(total) + " 个素材；数据不足以判断脚本文案结构。")
-    keywords = dashboard.get("keywords", []) if isinstance(dashboard.get("keywords"), list) else []
+    conclusion_text = keyword_panel.get("oneSentenceConclusion") or conclusion.get("text") or ("脚本文本覆盖 " + str(script_count) + "/" + str(total) + " 个素材；数据不足以判断脚本文案结构。")
+    summary_text = keyword_panel.get("summary") or ("脚本文本覆盖 " + str(script_count) + "/" + str(total) + " 个已获取详情素材（" + str(rate_text) + "）。")
+    keywords = keyword_panel.get("keywords", []) if isinstance(keyword_panel.get("keywords"), list) else dashboard.get("keywords", [])
     keywords = [item for item in keywords[:24] if isinstance(item, dict)]
-    keyword_maximum = max([item.get("count", 0) for item in keywords] or [1])
+    keyword_maximum = max([item.get("frequency", item.get("count", 0)) for item in keywords] or [1])
     keyword_markup = "".join(
-        '<span class="script-keyword" style="--keyword-weight:' + str(round(1 + float(item.get("count", 0)) / keyword_maximum * 0.8, 2)) + '" title="' + esc(str(item.get("count", 0)) + ' 个素材') + '">' + esc(item.get("label")) + '</span>'
-        for item in keywords
+        '<span class="keyword-cloud-word keyword-cloud-tone-' + str(index % 6) + ' script-keyword" style="--keyword-weight:' + str(round(1 + float(item.get("frequency", item.get("count", 0))) / keyword_maximum * 1.35, 2)) + '" title="' + esc(str(item.get("frequency", item.get("count", 0))) + ' 次出现') + '">' + esc(item.get("keyword") or item.get("label")) + '</span>'
+        for index, item in enumerate(keywords)
     ) or '<span class="data-note">暂无可用关键词，数据不足以判断。</span>'
-    selling_points = dashboard.get("sellingPoints", []) if isinstance(dashboard.get("sellingPoints"), list) else []
+    selling_points = keyword_panel.get("sellingPoints", []) if isinstance(keyword_panel.get("sellingPoints"), list) else dashboard.get("sellingPoints", [])
     selling_points = [item for item in selling_points[:4] if isinstance(item, dict)]
-    selling_markup = "".join('<li class="keyword-selling-card"><strong>' + esc(item.get("label")) + '</strong><span>' + esc(item.get("count", 0)) + ' 个素材</span></li>' for item in selling_points) or '<li class="data-note">暂无可用卖点，数据不足以判断。</li>'
-    triad_markup = '<section class="script-keyword-triad"><div class="section-title-row"><h3>关键词洞察</h3><p class="script-dashboard-hint">关键词频次与排序来自确定性事实统计</p></div><div class="keyword-cloud-layout script-keyword-triad-grid"><article class="keyword-cloud-conclusion script-keyword-conclusion"><span class="keyword-cloud-kicker script-keyword-kicker">一句话结论</span><p>' + esc(conclusion_text) + '</p></article><article class="keyword-cloud-summary script-keyword-cloud-panel"><span class="keyword-cloud-kicker script-keyword-kicker">高频关键词云</span><div class="script-keyword-cloud">' + keyword_markup + '</div></article><article class="keyword-cloud-selling script-keyword-selling-panel"><span class="keyword-cloud-kicker script-keyword-kicker">从关键词云提炼的卖点</span><ul class="script-selling-points">' + selling_markup + '</ul></article></div></section>'
+    selling_markup = "".join('<div class="keyword-selling-card"><b>' + esc(str(index + 1) + '｜' + str(item.get("title") or item.get("label") or "卖点")) + '</b><p>' + esc(str(item.get("description") or (str(item.get("count", 0)) + " 个素材覆盖"))) + '</p></div>' for index, item in enumerate(selling_points)) or '<p class="muted data-note">暂无可用卖点，数据不足以判断。</p>'
+    triad_markup = '<div class="keyword-cloud-panel" id="keyword-cloud-panel"><section class="script-keyword-triad"><div class="keyword-cloud-layout script-keyword-triad-grid"><article class="keyword-cloud-conclusion script-keyword-conclusion"><small class="keyword-cloud-kicker script-keyword-kicker">一句话结论</small><h3>' + esc(conclusion_text) + '</h3><p>' + esc(summary_text) + '</p></article><article class="keyword-cloud-summary script-keyword-cloud-panel"><small class="keyword-cloud-kicker script-keyword-kicker">高频关键词云</small><div class="keyword-cloud-words">' + keyword_markup + '</div></article><article class="keyword-cloud-selling script-keyword-selling-panel"><small class="keyword-cloud-kicker script-keyword-kicker">从关键词云提炼的卖点</small><div class="script-selling-points">' + selling_markup + '</div></article></div></section></div>'
     timestamp_note = "" if any(item.get("script_segments") for item in script_facts.get("materials", []) if isinstance(item, dict)) else '<p class="data-note">未提供脚本时间段，暂不输出帧-话术对应关系。</p>'
-    return '<div class="script-dashboard">' + ai_markup + triad_markup + formula_markup + timestamp_note + '</div>'
+    dashboard_markup = '<div class="raw-fact-card dashboard-data-card script-dashboard" id="script-dashboard">' + formula_markup + timestamp_note + '</div>'
+    return '<div class="insight-layout">' + ai_markup + triad_markup + dashboard_markup + '</div>'
 
 
 def render_top_material_combination(

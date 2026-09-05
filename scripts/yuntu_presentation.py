@@ -488,6 +488,65 @@ def _formula_hierarchy(materials):
     }
 
 
+def _chapter05_script_projection(fact, dive):
+    """Project only the selected material's script facts and AI conclusion."""
+    material_id = _text(fact.get("material_id"))
+    raw_script = fact.get("script") if isinstance(fact.get("script"), dict) else {}
+    script_text = _text(raw_script.get("text") or fact.get("script_text"))
+    formula = deepcopy(raw_script.get("formula")) if isinstance(raw_script.get("formula"), list) else []
+    if not formula:
+        raw_formula = fact.get("content_formula")
+        raw_labels = raw_formula.get("labels") if isinstance(raw_formula, dict) else raw_formula if isinstance(raw_formula, list) else []
+        if not isinstance(raw_labels, list):
+            raw_labels = []
+        for item in raw_labels:
+            if isinstance(item, dict):
+                primary_value = item.get("level1") or item.get("level_1") or item.get("level1_label") or item.get("level_1_label")
+                secondary_values = item.get("level2") or item.get("level_2") or item.get("level2_labels") or item.get("level_2_labels") or []
+                if not isinstance(secondary_values, list):
+                    secondary_values = [secondary_values]
+            else:
+                primary_value, secondary_values = item, []
+            primary = content_formula_label("primary", primary_value) or _text(primary_value)
+            if not primary:
+                continue
+            secondary = [content_formula_label("secondary", value) or _text(value) for value in secondary_values]
+            secondary = [value for value in dict.fromkeys(secondary) if value]
+            formula.extend({"level1": primary, "level2": value} for value in (secondary or [""]))
+    evidence = deepcopy(raw_script.get("evidence")) if isinstance(raw_script.get("evidence"), list) else []
+    if not evidence and script_text:
+        sentences = re.findall(r"[^。！？；\n]+[。！？；]?", script_text)
+        default_level2 = formula[0].get("level2", "") if formula else ""
+        evidence = [
+            {"level2": default_level2, "sentence": sentence.strip(), "evidenceRef": f"script:{material_id}:text:{sentence.strip()}"}
+            for sentence in sentences if sentence.strip()
+        ]
+    evidence = [item for item in evidence if isinstance(item, dict) and _text(item.get("sentence")) and _text(item.get("evidenceRef"))]
+    index = fact.get("evidenceIndex") if isinstance(fact.get("evidenceIndex"), dict) else {}
+    evidence_refs = [str(ref) for ref in index.get("script", []) if _text(ref)]
+    if not evidence_refs:
+        evidence_refs = [str(item.get("evidenceRef")) for item in evidence]
+    evidence_refs = list(dict.fromkeys(ref for ref in evidence_refs if ref.startswith(f"script:{material_id}:")))
+    analysis = dive.get("scriptAnalysis") if isinstance(dive, dict) and isinstance(dive.get("scriptAnalysis"), dict) else {}
+    analysis_refs = [
+        str(ref) for ref in analysis.get("evidenceRefs", [])
+        if isinstance(ref, str) and ref in set(evidence_refs)
+    ]
+    script_available = bool(script_text or formula or evidence)
+    return {
+        "text": script_text,
+        "formula": formula,
+        "evidence": evidence,
+        "evidenceRefs": evidence_refs,
+        "analysis": {
+            "conclusion": _text(analysis.get("conclusion")),
+            "evidenceRefs": list(dict.fromkeys(analysis_refs)),
+            "availability": _text(analysis.get("availability")) if _text(analysis.get("availability")) in {"available", "unavailable"} else "unavailable",
+        },
+        "availability": _text(raw_script.get("availability")) if _text(raw_script.get("availability")) in {"available", "unavailable"} else ("available" if script_available else "unavailable"),
+    }
+
+
 def _project_keyword_cloud(facts, analysis, material_ids):
     """Apply the AI review to deterministic keyword facts without re-counting text."""
     raw_cloud = facts.get("keywordCloud", {}) if isinstance(facts, dict) else {}
@@ -1176,6 +1235,7 @@ def _project_chapter05(analysis, fact_pack):
                 isinstance(segment, dict) for segment in fact.get("script_segments", [])
             ),
             "contentFormula": deepcopy(fact.get("content_formula")),
+            "script": _chapter05_script_projection(fact, dive),
             "creativeBreakdown": deepcopy(fact.get("creative_breakdown")),
             "scriptMetrics": deepcopy(fact.get("detailMetrics", {})),
             "scriptDataAvailability": deepcopy(fact.get("detailDataAvailability", {})),

@@ -201,6 +201,46 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(chapter04["brands"][0]["classificationModes"][0]["categories"][0]["label"], "portrait")
         self.assertEqual(chapter04["brands"][0]["classificationModes"][1]["categories"][0]["label"], "主体协同")
 
+    def test_chapter05_panel_projects_script_analysis_and_evidence(self):
+        facts = self.fact_pack()
+        facts["materialFacts"][0].update({
+            "script": {
+                "text": "早餐可以不碰碳水，但鲜炖燕窝一定要坚持吃。",
+                "labels": [{
+                    "level1": "商品卖点",
+                    "level2": "品质功效",
+                    "evidenceRef": "script:101:商品卖点:品质功效",
+                }],
+                "formula": [{"level1": "商品卖点", "level2": "品质功效"}],
+                "evidence": [{
+                    "level2": "品质功效",
+                    "sentence": "鲜炖燕窝一定要坚持吃。",
+                    "evidenceRef": "script:101:text:鲜炖燕窝",
+                }],
+                "availability": {"text": {"available": True}, "formula": {"available": True}, "evidence": {"available": True}},
+            },
+            "evidenceIndex": {"script": [
+                "script:101:商品卖点:品质功效",
+                "script:101:text:鲜炖燕窝",
+            ]},
+        })
+        analysis = self.analysis()
+        analysis["materialDeepDives"][0]["scriptAnalysis"] = {
+            "conclusion": "该素材先用早餐场景建立日常代入，再以鲜炖燕窝和坚持食用承接品质价值，表达生活化且利益点明确，适合保留具体场景与产品价值的结构；下一轮可测试场景前置和卖点前置两种改写方向，并继续核对原文证据。",
+            "evidenceRefs": ["script:101:商品卖点:品质功效", "script:101:text:鲜炖燕窝"],
+            "availability": "available",
+        }
+
+        payload = build_yuntu_presentation(analysis, facts)
+        panel = payload["chapters"]["chapter05"]["panels"][0]
+        self.assertEqual(panel["script"]["text"], "早餐可以不碰碳水，但鲜炖燕窝一定要坚持吃。")
+        self.assertEqual(panel["script"]["formula"][0]["level1"], "商品卖点")
+        self.assertEqual(panel["script"]["analysis"]["availability"], "available")
+        self.assertEqual(panel["script"]["analysis"]["evidenceRefs"], [
+            "script:101:商品卖点:品质功效",
+            "script:101:text:鲜炖燕窝",
+        ])
+
     def test_projects_modes_for_combined_joyoung_brand_alias(self):
         facts = self.fact_pack()
         brand = "Joyoung soymilk/九阳豆浆"

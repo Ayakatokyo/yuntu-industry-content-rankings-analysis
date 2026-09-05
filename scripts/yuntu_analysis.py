@@ -38,6 +38,24 @@ class YuntuAnalysisError(RuntimeError):
 SECOND_LEVEL_TRENDS = ALLOWED_HIGHLIGHT_TRENDS
 RANKING_FACT_METRICS = ("show_cnt", "ctr", "cvr", "play_3s_rate")
 RANKING_MATERIAL_METRICS = ("ctr", "cvr", "play_3s_rate")
+SCRIPT_FORMULA_PRIMARY_LABELS = {
+    "9": "商品卖点",
+    "10": "品牌印象",
+    "13": "人群",
+    "15": "使用场景",
+}
+SCRIPT_FORMULA_SECONDARY_LABELS = {
+    "34": "功效功能",
+    "39": "使用感受和服务体验",
+    "40": "产品代名词",
+    "42": "成分配方原料",
+    "44": "工艺科技",
+    "52": "人群",
+    "55": "身份认同",
+    "56": "市场地位和权威背书",
+    "57": "品牌调性和故事",
+    "87": "使用场景",
+}
 REPORT_DATA_FIELDS = (
     "schemaVersion",
     "filters",
@@ -831,6 +849,144 @@ def _model_visual_assets(visual_assets):
     return projected
 
 
+def _script_formula_label(level, value):
+    labels = (
+        SCRIPT_FORMULA_PRIMARY_LABELS
+        if level == "primary"
+        else SCRIPT_FORMULA_SECONDARY_LABELS
+    )
+    if isinstance(value, dict):
+        explicit = str(value.get("label") or "").strip()
+        value = value.get("value") or value.get("id")
+    else:
+        explicit = ""
+    value = str(value or "").strip()
+    return labels.get(value) or (explicit if explicit and not explicit.isdigit() else value)
+
+
+def _script_formula_projection(value):
+    """Normalize cloud formula labels without carrying numeric taxonomy IDs."""
+    if isinstance(value, dict):
+        raw_labels = value.get("labels")
+    elif isinstance(value, list):
+        raw_labels = value
+    else:
+        raw_labels = []
+    if not isinstance(raw_labels, list):
+        raw_labels = [raw_labels] if raw_labels else []
+
+    formula = []
+    labels = []
+    for item in raw_labels:
+        if isinstance(item, dict):
+            primary_value = item.get("level1") or item.get("level_1") or item.get("level1_label") or item.get("level_1_label")
+            primary = _script_formula_label("primary", primary_value)
+            secondary_values = item.get("level2") or item.get("level_2") or item.get("level2_labels") or item.get("level_2_labels") or []
+            if not isinstance(secondary_values, list):
+                secondary_values = [secondary_values]
+        else:
+            primary = _script_formula_label("primary", item)
+            secondary_values = []
+        if not primary:
+            continue
+        secondary = [_script_formula_label("secondary", raw) for raw in secondary_values]
+        secondary = list(dict.fromkeys(item for item in secondary if item))
+        if secondary:
+            for level2 in secondary:
+                formula.append({"level1": primary, "level2": level2})
+                labels.append({
+                    "level1": primary,
+                    "level2": level2,
+                    "evidenceRef": "",
+                })
+        else:
+            formula.append({"level1": primary, "level2": ""})
+            labels.append({"level1": primary, "level2": "", "evidenceRef": ""})
+    return formula, labels
+
+
+def _script_evidence_projection(material_id, script_text, formula, raw_evidence=None):
+    prefix = f"script:{material_id}:"
+    evidence = []
+    if isinstance(raw_evidence, list):
+        for item in raw_evidence:
+            if not isinstance(item, dict):
+                continue
+            sentence = str(item.get("sentence") or item.get("text") or "").strip()
+            ref = str(item.get("evidenceRef") or item.get("evidence_ref") or "").strip()
+            if not sentence or (ref and not ref.startswith(prefix)):
+                continue
+            if not ref:
+                ref = f"{prefix}text:{sentence}"
+            evidence.append({
+                "level2": str(item.get("level2") or item.get("level_2") or "").strip(),
+                "sentence": sentence,
+                "evidenceRef": ref,
+            })
+    if not evidence and script_text:
+        sentences = re.findall(r"[^。！？；\n]+[。！？；]?", script_text)
+        default_level2 = formula[0]["level2"] if formula and formula[0].get("level2") else ""
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if sentence:
+                evidence.append({
+                    "level2": default_level2,
+                    "sentence": sentence,
+                    "evidenceRef": f"{prefix}text:{sentence}",
+                })
+    return list({item["evidenceRef"]: item for item in evidence}.values())
+
+
+def _script_projection(fact):
+    material_id = str(fact.get("material_id") or "").strip()
+    existing = fact.get("script") if isinstance(fact.get("script"), dict) else {}
+    text = str(existing.get("text") or fact.get("script_text") or "").strip()
+    formula_source = existing.get("formula") if existing.get("formula") is not None else fact.get("content_formula")
+    formula, labels = _script_formula_projection(formula_source)
+    existing_labels = existing.get("labels") if isinstance(existing.get("labels"), list) else []
+    if existing_labels:
+        labels = [dict(item) for item in existing_labels if isinstance(item, dict)]
+        formula = [
+            {"level1": str(item.get("level1") or "").strip(), "level2": str(item.get("level2") or "").strip()}
+            for item in labels
+            if str(item.get("level1") or "").strip()
+        ]
+    raw_evidence = existing.get("evidence") if existing.get("evidence") is not None else fact.get("script_evidence")
+    evidence = _script_evidence_projection(material_id, text, formula, raw_evidence)
+    evidence_refs = []
+    for item in labels:
+        level1 = str(item.get("level1") or "").strip()
+        level2 = str(item.get("level2") or "").strip()
+        if not level1:
+            continue
+        ref = str(item.get("evidenceRef") or f"{material_id}:{level1}:{level2}").strip()
+        ref = ref if ref.startswith("script:") else f"script:{ref}"
+        item["level1"], item["level2"], item["evidenceRef"] = level1, level2, ref
+        evidence_refs.append(ref)
+    evidence_refs.extend(item["evidenceRef"] for item in evidence)
+    evidence_refs = list(dict.fromkeys(ref for ref in evidence_refs if ref.startswith(f"script:{material_id}:")))
+    availability = fact.get("data_availability", {})
+    if not isinstance(availability, dict):
+        availability = {}
+    def state(name, available, fallback):
+        raw = availability.get(name, {})
+        return {
+            "available": bool(raw.get("available")) if isinstance(raw, dict) and "available" in raw else available,
+            "missing_reason": str(raw.get("missing_reason") or "") if isinstance(raw, dict) else ("" if available else fallback),
+        }
+    return {
+        "text": text,
+        "labels": labels,
+        "formula": formula,
+        "evidence": evidence,
+        "availability": {
+            "text": state("script_text", bool(text), "source_empty"),
+            "formula": state("content_formula", bool(formula), "source_empty"),
+            "evidence": state("script_evidence", bool(evidence), "source_empty"),
+        },
+    }, {"script": evidence_refs}
+
+
 def _model_material_facts(material_facts):
     projected = []
     for fact in material_facts:
@@ -839,6 +995,7 @@ def _model_material_facts(material_facts):
             "secondLevelBreakdown": fact.get("secondLevelBreakdown", {"metrics": []}),
             "highlightFrames": [],
         }
+        copied["script"], copied["evidenceIndex"] = _script_projection(fact)
         for frame in fact.get("highlightFrames", []):
             frame_copy = {
                 key: frame[key]

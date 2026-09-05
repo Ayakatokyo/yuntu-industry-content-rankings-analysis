@@ -22,6 +22,42 @@ def load_module():
 
 
 class YuntuAnalysisTests(unittest.TestCase):
+    def test_material_deep_dive_input_contains_script_facts_and_evidence_allowlist(self):
+        analysis = load_module()
+        fact_pack = {
+            "reportScopes": {"ranking": {}, "detail": {"sample_count": 1}},
+            "industryTop1000Facts": {},
+            "brandRankingFacts": {},
+            "chapter02AiFacts": {"scopeOrder": ["all"]},
+            "scriptFacts": {},
+            "visualAssets": [],
+            "dataLimitations": [],
+            "filters": {},
+            "dataAvailabilitySummary": {},
+            "materialFacts": [{
+                "material_id": "m-001",
+                "script_text": "早餐可以不碰碳水，但鲜炖燕窝一定要坚持吃。",
+                "content_formula": {
+                    "labels": [{"level_1_label": 9, "level_2_labels": [34]}],
+                },
+                "highlightFrames": [],
+                "secondLevelBreakdown": {"metrics": []},
+            }],
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            analysis._write_analysis_units(fact_pack, Path(directory))
+            payload = json.loads(
+                (Path(directory) / "analysis-units/material-deep-dive-input.json")
+                .read_text(encoding="utf-8")
+            )
+
+        material = payload["evidence"]["materialFacts"][0]
+        self.assertEqual(material["script"]["text"], fact_pack["materialFacts"][0]["script_text"])
+        self.assertEqual(material["script"]["formula"][0], {"level1": "商品卖点", "level2": "功效功能"})
+        self.assertTrue(material["script"]["evidence"])
+        self.assertTrue(material["evidenceIndex"]["script"])
+
     def test_build_script_facts_emits_deterministic_keyword_cloud_from_script_text(self):
         analysis = load_module()
         details = [
@@ -755,7 +791,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         )
         deep_fact = deep_dive["evidence"]["materialFacts"][0]
         self.assertEqual(
-            set(deep_fact), {"material_id", "secondLevelBreakdown", "highlightFrames"}
+            set(deep_fact), {"material_id", "secondLevelBreakdown", "highlightFrames", "script", "evidenceIndex"}
         )
         self.assertEqual(
             set(deep_fact["highlightFrames"][0]),

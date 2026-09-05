@@ -1087,9 +1087,10 @@ def render_material_deep_dive(
         material_frames = {}
         for panel in presentation.get("panels", []):
             material_id = str(panel.get("materialId", "")); selected_material_ids.append(material_id)
-            facts[material_id] = {"material_id": material_id, "rank": panel.get("rank", "-"), "title": panel.get("title", ""), "exposure": panel.get("exposure", {}), "metrics": panel.get("metrics", {}), "script_text": panel.get("scriptText", ""), "script_segments": panel.get("scriptSegments", []), "content_formula": panel.get("contentFormula"), "creative_breakdown": panel.get("creativeBreakdown"), "detailMetrics": panel.get("scriptMetrics", {}), "detailDataAvailability": panel.get("scriptDataAvailability", {}), "people_tags": panel.get("peopleTags", []), "material_tags": panel.get("materialTags", []), "listDataAvailability": panel.get("listDataAvailability", {}), "secondLevelBreakdown": {"metrics": [{"trend_name": metric.get("id"), "available": metric.get("available"), "missing_reason": metric.get("reason", ""), "points": metric.get("points", []), "high_points": metric.get("highPoints", []), "loss_points": metric.get("lossPoints", [])} for metric in panel.get("secondLevel", {}).get("metrics", [])]}}
+            panel_script = panel.get("script") if isinstance(panel.get("script"), dict) else {}
+            facts[material_id] = {"material_id": material_id, "rank": panel.get("rank", "-"), "title": panel.get("title", ""), "exposure": panel.get("exposure", {}), "metrics": panel.get("metrics", {}), "script_text": panel.get("scriptText", ""), "script_segments": panel.get("scriptSegments", []), "content_formula": panel.get("contentFormula"), "creative_breakdown": panel.get("creativeBreakdown"), "script": panel_script, "evidenceIndex": {"script": panel_script.get("evidenceRefs", [])}, "detailMetrics": panel.get("scriptMetrics", {}), "detailDataAvailability": panel.get("scriptDataAvailability", {}), "people_tags": panel.get("peopleTags", []), "material_tags": panel.get("materialTags", []), "listDataAvailability": panel.get("listDataAvailability", {}), "secondLevelBreakdown": {"metrics": [{"trend_name": metric.get("id"), "available": metric.get("available"), "missing_reason": metric.get("reason", ""), "points": metric.get("points", []), "high_points": metric.get("highPoints", []), "loss_points": metric.get("lossPoints", [])} for metric in panel.get("secondLevel", {}).get("metrics", [])]}}
             material_frames[material_id] = [{"frame_ref": frame.get("frameRef"), "available": True, "relative_path": frame.get("relativePath"), "second": frame.get("second"), "frame_type": frame.get("frameType"), "peak_rank": frame.get("peakRank"), "click_value": frame.get("clickValue")} for frame in panel.get("frames", [])] + [{"available": False, "failure_reason": reason} for reason in panel.get("frameFailures", [])]
-            deep_dives.append({"material_id": material_id, "frame_observations": panel.get("frameObservations", [])})
+            deep_dives.append({"material_id": material_id, "frame_observations": panel.get("frameObservations", []), "scriptAnalysis": panel_script.get("analysis")})
     if not isinstance(deep_dives, list) or not deep_dives:
         return '<p class="data-note">暂无单素材深度分析数据。</p>'
     dives_by_id = {str(dive.get("material_id")): dive for dive in deep_dives}
@@ -1127,6 +1128,89 @@ def render_material_deep_dive(
         if not availability.get("available") or not isinstance(values, list) or not values:
             return '<dt>' + esc(label) + '</dt><dd>未返回</dd>'
         return '<dt>' + esc(label) + '</dt><dd>' + "".join('<span class="material-fact-tag">' + esc(value) + '</span>' for value in values if isinstance(value, str) and value) + '</dd>'
+
+    def render_script_panel(fact, dive, material_index):
+        raw_script = fact.get("script") if isinstance(fact.get("script"), dict) else {}
+        script_text = str(raw_script.get("text") or fact.get("script_text") or "").strip()
+        formula = raw_script.get("formula") if isinstance(raw_script.get("formula"), list) else []
+        evidence = raw_script.get("evidence") if isinstance(raw_script.get("evidence"), list) else []
+        analysis = dive.get("scriptAnalysis") if isinstance(dive.get("scriptAnalysis"), dict) else {}
+        has_script_data = bool(script_text or formula or evidence)
+        if not has_script_data:
+            return '<div class="material-script-empty"><span>脚本数据：不足</span><p class="material-script-boundary">脚本分析数据不足，数据不足以判断。</p></div>'
+        allowed_refs = set(str(ref) for ref in raw_script.get("evidenceRefs", []) if ref)
+        if not allowed_refs:
+            allowed_refs = {
+                str(item.get("evidenceRef")) for item in evidence
+                if isinstance(item, dict) and item.get("evidenceRef")
+            }
+        ai_refs = [
+            str(ref) for ref in analysis.get("evidenceRefs", [])
+            if isinstance(ref, str) and ref in allowed_refs
+        ]
+        ai_conclusion = str(analysis.get("conclusion") or "").strip()
+        ai_state = str(analysis.get("availability") or "unavailable")
+        ai_body = esc(ai_conclusion) if ai_conclusion and ai_state == "available" else "暂无 AI 二次分析结果。"
+        sections = ['<section class="material-script-ai" aria-live="polite"><h4>AI 脚本结论</h4><p>' + ai_body + '</p>']
+        if ai_refs:
+            sections.append('<p class="material-script-ai-evidence">当前素材证据：' + esc("、".join(ai_refs)) + '</p>')
+        sections.append('</section>')
+
+        if formula:
+            chips = []
+            for formula_index, item in enumerate(formula):
+                if not isinstance(item, dict):
+                    continue
+                level1 = str(item.get("level1") or "").strip()
+                level2 = str(item.get("level2") or "").strip()
+                if not level1 and not level2:
+                    continue
+                targets = [
+                    str(candidate.get("evidenceRef")) for candidate in evidence
+                    if isinstance(candidate, dict)
+                    and str(candidate.get("evidenceRef")) in allowed_refs
+                    and (not level2 or str(candidate.get("level2") or "").strip() == level2)
+                ]
+                target_payload = html_module.escape(json_module.dumps(targets, ensure_ascii=False), quote=True)
+                label = level1 + ("：" + level2 if level2 else "")
+                chips.append('<button type="button" class="script-formula-item" data-script-formula data-script-evidence-refs="' + target_payload + '" aria-controls="material-script-transcript-' + str(material_index) + '" aria-pressed="false">' + esc(label) + '</button>')
+            sections.append('<section class="material-script-formula"><h4>本视频内容公式</h4><div class="script-formula-chain" role="group" aria-label="本视频内容公式">' + '<span class="script-formula-connector">→</span>'.join(chips) + '</div></section>')
+
+        located = []
+        for item in evidence:
+            if not isinstance(item, dict):
+                continue
+            sentence = str(item.get("sentence") or "").strip()
+            ref = str(item.get("evidenceRef") or "").strip()
+            if not sentence or not ref or ref not in allowed_refs:
+                continue
+            start = script_text.find(sentence)
+            if start < 0:
+                continue
+            candidate = {"start": start, "end": start + len(sentence), "sentence": sentence, "ref": ref, "level2": str(item.get("level2") or "")}
+            if any(candidate["start"] < existing["end"] and candidate["end"] > existing["start"] for existing in located):
+                continue
+            located.append(candidate)
+        located.sort(key=lambda item: item["start"])
+        transcript_parts, cursor = [], 0
+        for item in located:
+            if item["start"] > cursor:
+                transcript_parts.append(esc(script_text[cursor:item["start"]]))
+            transcript_parts.append('<span class="script-evidence-highlight" data-script-evidence-ref="' + html_module.escape(item["ref"], quote=True) + '" tabindex="0" role="button" title="' + esc(item["level2"] or "证据句") + '">' + esc(item["sentence"]) + '</span>')
+            cursor = item["end"]
+        if cursor < len(script_text):
+            transcript_parts.append(esc(script_text[cursor:]))
+        transcript = "".join(transcript_parts) if script_text else '<span class="data-note">数据不足以判断</span>'
+        sections.append('<section class="material-script-transcript"><h4>本视频脚本</h4><p id="material-script-transcript-' + str(material_index) + '" class="script-transcript">' + transcript + '</p></section>')
+        unlocated = [
+            str(item.get("evidenceRef")) for item in evidence
+            if isinstance(item, dict) and item.get("evidenceRef") in allowed_refs and str(item.get("sentence") or "").strip() and not any(item.get("evidenceRef") == found["ref"] for found in located)
+        ]
+        if unlocated:
+            sections.append('<p class="material-script-boundary">证据句无法在当前脚本中定位：' + esc("、".join(unlocated)) + '</p>')
+        if not fact.get("script_segments"):
+            sections.append('<p class="material-script-boundary">未提供脚本时间段，暂不输出帧-话术对应关系。</p>')
+        return "".join(sections)
 
     for index, material_id in enumerate(ordered_ids):
         fact = facts.get(material_id, {})
@@ -1167,15 +1251,6 @@ def render_material_deep_dive(
             value = exposure_interval if key == "show_cnt" and exposure_interval else format_metric(fact.get("metrics", {}).get(key), key)
             metric_items.append('<li><span>' + esc(metric_labels[key]) + '</span><b>' + esc(value) + "</b></li>")
         metric_summary = "".join(metric_items)
-        script_text = str(fact.get("script_text") or "").strip()
-        script_formula = fact.get("content_formula")
-        script_creative = fact.get("creative_breakdown")
-        script_available = bool(script_text or script_formula is not None or script_creative is not None)
-        if script_available:
-            script_panel = '<span>脚本数据：已获取</span><p><strong>脚本文本：</strong>' + esc(script_text or "数据不足以判断") + '</p><p><strong>内容公式：</strong>' + esc(str(script_formula or "未返回")) + '</p><p><strong>创意拆解：</strong>' + esc(str(script_creative or "未返回")) + '</p>'
-        else:
-            script_panel = '<span>脚本数据：不足</span><p>脚本文本、内容公式和创意拆解均未提供，数据不足以判断。</p>'
-        if not fact.get("script_segments"):
-            script_panel += '<p class="data-note">未提供脚本时间段，暂不输出帧-话术对应关系。</p>'
+        script_panel = render_script_panel(fact, dive, index)
         panels.append('<article class="material-deep-panel material-card" role="tabpanel" id="material-deep-panel-' + str(index) + '" aria-labelledby="material-deep-tab-' + str(index) + '"' + ("" if selected_tab else " hidden") + '><header class="material-deep-header material-head"><span>#' + esc(fact.get("rank", "-")) + '</span><h3>' + esc(title) + '</h3><p class="material-deep-id">素材 ID：' + esc(material_id) + '</p></header><ul class="material-deep-metrics">' + metric_summary + '</ul><dl class="material-fact-tags">' + source_tags(fact, "people_tags", "核心人群标签") + source_tags(fact, "material_tags", "营销卖点标签") + '</dl><div class="material-detail-tabs" role="tablist" aria-label="' + esc(title) + '分析视图">' + '<button type="button" role="tab" id="material-detail-tab-visual-' + str(index) + '" aria-controls="material-detail-visual-' + str(index) + '" aria-selected="true" data-material-detail-tab="visual" data-material-detail-target="material-detail-visual-' + str(index) + '">高光帧观察</button>' + '<button type="button" role="tab" id="material-detail-tab-timeline-' + str(index) + '" aria-controls="material-detail-timeline-' + str(index) + '" aria-selected="false" tabindex="-1" data-material-detail-tab="timeline" data-material-detail-target="material-detail-timeline-' + str(index) + '">秒级拆解</button>' + '<button type="button" role="tab" id="material-detail-tab-script-' + str(index) + '" aria-controls="material-detail-script-' + str(index) + '" aria-selected="false" tabindex="-1" data-material-detail-tab="script" data-material-detail-target="material-detail-script-' + str(index) + '">脚本分析</button></div>' + '<div class="material-detail-panel" id="material-detail-visual-' + str(index) + '" role="tabpanel" aria-labelledby="material-detail-tab-visual-' + str(index) + '"><div class="deep-visual-strip"><div class="deep-frame-selection-controls">' + '<button type="button" data-deep-frame-select-all>全选高光帧</button><button type="button" data-deep-frame-clear>全不选高光帧</button></div><div class="deep-frame-grid fixed-six">' + "".join(frame_cards) + '</div>' + frame_state + '</div><div class="deep-frame-observations"><h4>高光帧观察</h4><p class="deep-frame-observation-empty" data-deep-frame-observation-empty hidden aria-live="polite">尚未选择高光帧，请选择至少一帧查看观察内容。</p><ul data-deep-frame-observations>' + frame_observations + '</ul></div></div><div class="material-detail-panel" id="material-detail-timeline-' + str(index) + '" role="tabpanel" aria-labelledby="material-detail-tab-timeline-' + str(index) + '" hidden><div class="second-level-section">' + second_level_timeline(metrics, index) + '</div></div><div class="material-detail-panel data-state" id="material-detail-script-' + str(index) + '" role="tabpanel" aria-labelledby="material-detail-tab-script-' + str(index) + '" hidden>' + script_panel + '</div></article>')
     return '<div class="material-deep-layout side-tabs"><div class="material-deep-tab-list" role="tablist" aria-label="单素材深度分析">' + "".join(tabs) + '</div><div class="material-deep-panels">' + "".join(panels) + "</div></div>"

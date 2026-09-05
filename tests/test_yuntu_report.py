@@ -135,6 +135,39 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("先提出早餐场景，再展示商品。", chapter05)
         self.assertIn("未提供脚本时间段，暂不输出帧-话术对应关系", chapter05)
 
+    def test_chapter05_script_tab_orders_ai_formula_transcript_and_evidence(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["materialFacts"][0]["script"] = {
+            "text": "早餐可以不碰碳水，但鲜炖燕窝一定要坚持吃。",
+            "labels": [{"level1": "商品卖点", "level2": "品质功效", "evidenceRef": "script:101:商品卖点:品质功效"}],
+            "formula": [{"level1": "商品卖点", "level2": "品质功效"}],
+            "evidence": [{"level2": "品质功效", "sentence": "鲜炖燕窝一定要坚持吃。", "evidenceRef": "script:101:text:鲜炖燕窝"}],
+            "availability": "available",
+        }
+        fact_pack["materialFacts"][0]["evidenceIndex"] = {"script": [
+            "script:101:商品卖点:品质功效", "script:101:text:鲜炖燕窝"
+        ]}
+        analysis = self.deep_dive_analysis()
+        analysis["materialDeepDives"][0]["scriptAnalysis"] = {
+            "conclusion": "该素材从早餐场景切入，再把鲜炖燕窝与坚持食用放入同一表达，利益点聚焦且承接自然，生活化口吻降低理解门槛，建议保留场景到产品价值的顺序；下一轮可测试卖点前置与场景前置的改写，继续以原文证据核对表达是否清晰，并观察不同受众对信息顺序的理解差异。",
+            "evidenceRefs": ["script:101:商品卖点:品质功效", "script:101:text:鲜炖燕窝"],
+            "availability": "available",
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        script_tab = rendered.split('data-material-detail-tab="script"', 1)[1]
+        self.assertLess(script_tab.index("material-script-ai"), script_tab.index("material-script-formula"))
+        self.assertLess(script_tab.index("material-script-formula"), script_tab.index("material-script-transcript"))
+        self.assertIn("data-script-evidence-ref", script_tab)
+        self.assertIn("未提供脚本时间段，暂不输出帧-话术对应关系", script_tab)
+
     def test_render_report_shows_script_formula_drilldown_keywords_and_copy_dimension(self):
         report = load_module()
         fact_pack = self.deep_dive_fact_pack()

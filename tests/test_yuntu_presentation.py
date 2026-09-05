@@ -372,14 +372,48 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(dashboard["conclusion"]["text"], "已获取详情素材中的可见脚本呈现先建立场景、再承接卖点的结构。")
         self.assertEqual(dashboard["conclusion"]["materialIds"], ["101", "102"])
         self.assertEqual(dashboard["dimensions"]["contentFormula"]["primary"][0]["id"], "10")
+        self.assertEqual(dashboard["dimensions"]["contentFormula"]["primary"][0]["label"], "品牌印象")
         self.assertEqual(dashboard["dimensions"]["contentFormula"]["primary"][0]["count"], 2)
         self.assertEqual(dashboard["dimensions"]["contentFormula"]["secondary"]["10"][0]["id"], "40")
+        self.assertEqual(dashboard["dimensions"]["contentFormula"]["secondary"]["10"][0]["label"], "产品代名词")
         self.assertEqual(dashboard["dimensions"]["contentFormula"]["secondary"]["10"][0]["count"], 2)
         self.assertEqual(dashboard["dimensions"]["contentFormula"]["secondary"]["10"][0]["detailLabels"], ["小蓝瓶"])
         self.assertEqual(dashboard["dimensions"]["scriptCopy"]["coverage"], {"total": 2, "script": 2, "rate": 1.0})
         self.assertEqual(dashboard["sellingPoints"][0]["label"], "优质活菌")
         self.assertEqual(dashboard["keywords"][0]["label"], "优质活菌")
         self.assertFalse(any(item["label"].startswith("level_") for item in dashboard["keywords"]))
+
+    def test_projects_numeric_formula_references_as_semantic_labels_in_insight_text(self):
+        facts = self.fact_pack()
+        facts["scriptFacts"] = {
+            "scope": "selected_detail_materials",
+            "coverage": {"total": 1, "script": 1, "rate": 1.0},
+            "frequencies": {"formula_labels": {}, "selling_points": {}, "scenes": {}, "promotions": {}, "marketing_formats": {}},
+            "materials": [{
+                "material_id": "101",
+                "script_text": "文案",
+                "script_segments": [],
+                "content_formula": {"labels": [{"level_1_label": 10, "level_2_labels": [40]}]},
+                "creative_breakdown": None,
+                "metrics": {},
+            }],
+        }
+        analysis = self.analysis()
+        analysis["scriptInsights"] = [{
+            "title": "一二级内容公式：产品信息形成共同骨架",
+            "summary": "一级标签10和9均覆盖3个素材，二级标签40“小蓝瓶”和42“益生菌”反复出现；建议保留10/9对应的产品骨架。",
+            "evidence": ["content_formula.labels"],
+            "material_ids": ["101"],
+        }]
+
+        dashboard = build_yuntu_presentation(analysis, facts)["chapters"]["chapter03"]["scriptDashboard"]
+        text = dashboard["insights"][0]["text"]
+
+        self.assertIn('一级公式“品牌印象”和“商品卖点”', text)
+        self.assertIn('二级公式“产品代名词”和“成分配方原料”', text)
+        self.assertIn('“品牌印象”/“商品卖点”对应', text)
+        self.assertNotIn("一级标签10", text)
+        self.assertNotIn("二级标签40", text)
 
     def test_script_dashboard_keeps_legacy_missing_fields_compatible(self):
         facts = self.fact_pack()

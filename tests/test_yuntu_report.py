@@ -255,7 +255,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("一二级内容公式</strong><span>：场景承接产品证明", rendered)
         self.assertIn("脚本文案</strong><span>：用品质承接场景", rendered)
 
-    def test_script_formula_summary_only_keeps_chart_and_uses_concrete_formula_names(self):
+    def test_script_formula_summary_uses_semantic_formula_names_not_detail_values(self):
         rendered = render_script_insights(
             script_facts={
                 "coverage": {"total": 3, "script": 3, "rate": 1.0},
@@ -283,10 +283,13 @@ class YuntuReportTests(unittest.TestCase):
 
         self.assertNotIn("一二级内容公式明细", rendered)
         self.assertNotIn("script-formula-summary-row", rendered)
-        self.assertIn('class="script-formula-display-label">小蓝瓶、胡军</strong>', rendered)
-        self.assertIn('"displayLabel": "小蓝瓶、胡军"', rendered)
+        self.assertIn('class="script-formula-display-label">品牌印象</strong>', rendered)
+        self.assertIn('"displayLabel": "品牌印象"', rendered)
+        self.assertIn('"label": "产品代名词"', rendered)
+        self.assertIn('"label": "身份认同"', rendered)
+        self.assertNotIn('class="script-formula-display-label">小蓝瓶、胡军</strong>', rendered)
 
-    def test_script_formula_names_use_explicit_empty_state_instead_of_numeric_ids(self):
+    def test_script_formula_names_resolve_known_numeric_ids_to_semantic_labels(self):
         rendered = render_script_insights(
             script_facts={
                 "coverage": {"total": 1, "script": 1, "rate": 1.0},
@@ -304,8 +307,9 @@ class YuntuReportTests(unittest.TestCase):
             esc=lambda value: str(value),
         )
 
-        self.assertIn('class="script-formula-display-label">内容公式不可用</strong>', rendered)
+        self.assertIn('class="script-formula-display-label">品牌印象</strong>', rendered)
         self.assertNotIn('class="script-formula-display-label">10</strong>', rendered)
+        self.assertIn('"label": "产品代名词"', rendered)
 
     def test_formula_drilldown_has_qianchuan_pie_contract(self):
         template = (ROOT / "scripts" / "templates" / "final-report-template.html").read_text(encoding="utf-8")
@@ -315,6 +319,19 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("script-formula-pie-legend", template)
         self.assertIn("conic-gradient", template)
         self.assertIn("占比", template)
+
+    def test_script_dashboard_omits_missing_timestamp_note(self):
+        rendered = render_script_insights(
+            script_facts={
+                "coverage": {"total": 1, "script": 1, "rate": 1.0},
+                "materials": [{"material_id": "101", "script_text": "文案", "script_segments": []}],
+            },
+            script_insights=[],
+            script_dashboard={"dimensions": {"contentFormula": {"primary": [], "secondary": {}}}},
+            esc=lambda value: str(value),
+        )
+
+        self.assertNotIn("未提供脚本时间段，暂不输出帧-话术对应关系", rendered)
 
     def test_chapter03_keeps_only_two_ai_dimensions_and_uses_keyword_cloud_projection(self):
         rendered = render_script_insights(
@@ -434,6 +451,25 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));", css)
         self.assertIn(".unified-yuntu .script-ai-insights-layout", css)
         self.assertIn(".unified-yuntu .script-insight-dimension-block", css)
+        self.assertIn(".unified-yuntu .script-insights-sections", css)
+        self.assertIn("row-gap: 30px;", css)
+
+    def test_chapter03_keyword_cloud_fills_small_panel_without_wrapping_words(self):
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+
+        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));", css)
+        self.assertIn("grid-auto-rows: minmax(54px, 1fr);", css)
+        self.assertIn("gap: 26px 18px;", css)
+        self.assertIn("white-space: nowrap;", css)
+        self.assertIn("padding-top: 6px;", css)
+        self.assertIn("grid-template-columns: 144px minmax(0, 1fr);", css)
+        self.assertIn("min-height: 0;", css)
+        self.assertIn("height: 124px;", css)
+        self.assertIn("width: min(210px, 100%) !important;", css)
+        self.assertIn(".unified-yuntu .keyword-cloud-words", css)
+        self.assertIn("gap: 14px 18px;", css)
+        self.assertIn("align-content: space-evenly;", css)
+        self.assertIn("justify-content: space-around;", css)
         self.assertNotIn("border-left: 3px", css)
 
     def test_render_report_creates_sibling_zip_with_final_report_directory(self):
@@ -3055,6 +3091,8 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn(".second-level-section {", css)
         self.assertIn("border-top: 0;", css)
         self.assertIn("padding-top: 0;", css)
+        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));", css)
+        self.assertIn("grid-auto-rows: minmax(54px, 1fr);", css)
 
     def test_shared_style_keeps_audience_drill_height_and_compacts_pies(self):
         css = (ROOT / "assets" / "report" / "unified-report.css").read_text(

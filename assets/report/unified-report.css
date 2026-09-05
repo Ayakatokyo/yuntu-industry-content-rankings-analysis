@@ -1602,6 +1602,7 @@ body.unified-report {
 }
 
 .unified-yuntu .script-formula-dimension > .collapsible-head {
+  padding-top: 6px;
   margin: 0 0 10px;
 }
 
@@ -2407,6 +2408,11 @@ body.unified-report {
 .highlight-classification-tabs{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:16px;padding:8px 0}.highlight-classification-tabs::before{content:"分类标准：";color:var(--muted);font-size:13px;font-weight:800}.highlight-classification-tabs button{min-height:36px;border:1px solid var(--line);border-radius:999px;background:#fff8ec;color:var(--muted);padding:7px 13px;cursor:pointer;font-weight:700}.highlight-classification-tabs button[aria-selected="true"]{border-color:var(--accent-dark);background:#2c1810;color:#fff}.highlight-classification-tabs button[disabled]{opacity:.45;cursor:not-allowed}.highlight-classification-tabs button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}.highlight-classification-panel[hidden]{display:none!important}.highlight-classification-rule{margin:0 0 10px;padding:9px 12px;border-left:3px solid var(--accent-dark);background:#fbf0df;color:var(--muted);font-size:.82rem;line-height:1.5}
 
 /* Last-cascade corrections for Chapter 03 after the legacy report rules above. */
+.unified-yuntu .script-insights-sections {
+  display: grid;
+  row-gap: 30px;
+}
+
 .unified-yuntu .script-ai-insights-layout {
   display: grid;
   gap: 24px;
@@ -2458,17 +2464,21 @@ body.unified-report {
 }
 
 .unified-yuntu .script-formula-drill {
-  grid-template-columns: 180px minmax(0, 1fr);
-  gap: 24px;
-  min-height: 320px;
+  grid-template-columns: 144px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  min-height: 0;
   margin-top: 0;
-  padding: 8px 0 0;
+  padding: 4px 0 0;
 }
 
 .unified-yuntu .script-formula-drill-primary {
-  grid-template-rows: auto auto 170px auto;
-  align-content: center;
-  padding: 12px 18px 12px 4px;
+  grid-template-rows: auto auto auto 124px;
+  align-self: start;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  padding: 0 16px 0 0;
   border: 0;
   border-right: 1px solid var(--unified-line);
   border-radius: 0;
@@ -2476,21 +2486,26 @@ body.unified-report {
 }
 
 .unified-yuntu .script-formula-drill-primary-bar {
-  width: min(64px, 64%);
-  height: 170px;
+  width: min(44px, 60%);
+  height: 124px;
+  margin-top: 2px;
   border-radius: 5px 5px 2px 2px;
 }
 
 .unified-yuntu .script-formula-drill-chart {
   min-width: 0;
-  padding: 12px 0 0;
+  padding-top: 0;
 }
 
 .unified-yuntu .script-formula-pie-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
-  gap: 22px;
+  grid-template-columns: minmax(180px, 210px) minmax(0, 1fr);
+  gap: 16px;
   align-items: center;
+}
+
+.unified-yuntu .script-formula-pie {
+  width: min(210px, 100%) !important;
 }
 
 .unified-yuntu .script-formula-pie-legend {
@@ -2508,6 +2523,28 @@ body.unified-report {
 .unified-yuntu .script-keyword-triad-grid > article {
   min-height: 246px;
   padding: 20px;
+}
+
+.unified-yuntu .keyword-cloud-words {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  grid-auto-rows: minmax(54px, 1fr);
+  flex: 1 1 auto;
+  justify-content: space-around;
+  align-items: center;
+  justify-items: center;
+  align-content: space-evenly;
+  gap: 26px 18px;
+  min-height: 204px;
+  padding: 8px 6px;
+}
+
+.unified-yuntu .keyword-cloud-word {
+  display: inline-block;
+  max-width: 100%;
+  padding: 4px 6px;
+  text-align: center;
+  white-space: nowrap;
 }
 
 @media (max-width: 759px) {
@@ -2553,4 +2590,10 @@ body.unified-report {
   .unified-yuntu .script-formula-pie-legend { max-height: none; overflow: visible; }
 
   .unified-yuntu .script-keyword-triad-grid > article { min-height: 220px; }
+  .unified-yuntu .keyword-cloud-words {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: minmax(54px, 1fr);
+    gap: 14px 18px;
+    min-height: 204px;
+  }
 }

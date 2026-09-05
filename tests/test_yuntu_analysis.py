@@ -70,6 +70,15 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("一二级内容公式", prompt)
         self.assertIn("脚本文案", prompt)
 
+    def test_prompt_requires_semantic_yuntu_content_formula_names(self):
+        prompt = (ROOT / "prompts" / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
+
+        self.assertIn("一级 ID 10 对应品牌印象", prompt)
+        self.assertIn("一级 ID 9 对应商品卖点", prompt)
+        self.assertIn("二级 ID 40 对应产品代名词", prompt)
+        self.assertIn("二级 ID 42 对应成分配方原料", prompt)
+        self.assertIn("用户可见正文只写语义名称", prompt)
+
     def test_build_script_facts_deduplicates_materials_and_counts_only_source_labels(self):
         analysis = load_module()
         details = [

@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import math
+import re
 from pathlib import PurePosixPath
 
 from yuntu_highlight_export import match_brands_from_title
@@ -14,6 +15,27 @@ REPORT_STATUSES = {"complete", "partial", "unavailable"}
 HIGHLIGHT_CATEGORIES = ("portrait", "product", "scene", "text_overlay", "other")
 SECOND_LEVEL_METRIC_ORDER = ("点赞指数", "流失指数", "点击指数", "互动指数", "评论指数")
 
+# 云图内容公式接口返回数字 ID；detail.* 只保存某条素材命中的具体词，
+# 不能用具体词反向充当一级/二级公式类别。
+CONTENT_FORMULA_PRIMARY_LABELS = {
+    "9": "商品卖点",
+    "10": "品牌印象",
+    "13": "人群",
+    "15": "使用场景",
+}
+CONTENT_FORMULA_SECONDARY_LABELS = {
+    "34": "功效功能",
+    "39": "使用感受和服务体验",
+    "40": "产品代名词",
+    "42": "成分配方原料",
+    "44": "工艺科技",
+    "52": "人群",
+    "55": "身份认同",
+    "56": "市场地位和权威背书",
+    "57": "品牌调性和故事",
+    "87": "使用场景",
+}
+
 
 class YuntuPresentationError(ValueError):
     """Raised when the report inputs cannot form a safe presentation projection."""
@@ -21,6 +43,74 @@ class YuntuPresentationError(ValueError):
 
 def _text(value):
     return str(value or "").strip()
+
+
+def _normalize_script_formula_text(value):
+    """Replace legacy numeric formula references with YunTu semantic labels."""
+    text = _text(value)
+    if not text:
+        return text
+
+    def replace_sequence(match, level, prefix):
+        body = match.group(1)
+        parts = re.split(r"(\s*(?:和|、|/)\s*)", body)
+        rendered = []
+        for part in parts:
+            identifier = re.search(r"\d+", part)
+            if identifier:
+                label = content_formula_label(level, identifier.group(0))
+                rendered.append(f'“{label}”' if label else part)
+            else:
+                rendered.append(part)
+        return prefix + "".join(rendered)
+
+    sequence_patterns = (
+        ("primary", "一级公式", r"一级标签\s*(\d+(?:\s*[“\"][^”\"]+[”\"])?(?:\s*(?:和|、|/)\s*\d+(?:\s*[“\"][^”\"]+[”\"])?)+)"),
+        ("secondary", "二级公式", r"二级标签\s*(\d+(?:\s*[“\"][^”\"]+[”\"])?(?:\s*(?:和|、|/)\s*\d+(?:\s*[“\"][^”\"]+[”\"])?)+)"),
+    )
+    for level, prefix, pattern in sequence_patterns:
+        text = re.sub(
+            pattern,
+            lambda match: replace_sequence(match, level, prefix),
+            text,
+        )
+
+    def replace_single(match):
+        level = "primary" if match.group(1) == "一级" else "secondary"
+        label = content_formula_label(level, match.group(2))
+        return f'{match.group(1)}公式“{label}”' if label else match.group(0)
+
+    text = re.sub(r"(一级|二级)标签\s*(\d+)(?:\s*[“\"][^”\"]+[”\"])?", replace_single, text)
+    text = re.sub(
+        r"(?<!\d)10\s*/\s*9(?=\s*对应)",
+        '“品牌印象”/“商品卖点”',
+        text,
+    )
+    return text
+
+
+def content_formula_label(level, value, explicit_label=None):
+    """Resolve a YunTu formula ID to its semantic category label."""
+    labels = (
+        CONTENT_FORMULA_PRIMARY_LABELS
+        if level == "primary"
+        else CONTENT_FORMULA_SECONDARY_LABELS
+    )
+    raw_value = value
+    if isinstance(value, dict):
+        raw_value = value.get("value") or value.get("id")
+        explicit_label = explicit_label or value.get("label")
+    identifier = _text(raw_value)
+    if identifier in labels:
+        return labels[identifier]
+    label = _text(explicit_label)
+    return label if label and not label.isdigit() else ""
+
+
+def _formula_value_and_label(value):
+    if isinstance(value, dict):
+        return _text(value.get("value") or value.get("id")), _text(value.get("label"))
+    return _text(value), ""
 
 
 def _safe_relative_frame_path(value):
@@ -283,6 +373,9 @@ def _script_insights(analysis, material_ids):
             raise YuntuPresentationError("script insight is invalid")
         title = _text(item.get("title"))
         summary = _text(item.get("summary"))
+        if "公式" in title or "公式" in summary:
+            title = _normalize_script_formula_text(title)
+            summary = _normalize_script_formula_text(summary)
         evidence = deepcopy(item.get("evidence", []))
         ids = [str(value) for value in item.get("material_ids", []) if _text(value)]
         if not title or not summary or not ids or not set(ids).issubset(allowed):
@@ -354,10 +447,13 @@ def _formula_hierarchy(materials):
         for item in labels:
             if not isinstance(item, dict):
                 continue
-            primary_id = _text(item.get("level_1_label") or item.get("level1_label"))
+            primary_id, primary_explicit_label = _formula_value_and_label(
+                item.get("level_1_label") or item.get("level1_label")
+            )
             if not primary_id:
                 continue
-            primary_entry = primary.setdefault(primary_id, {"id": primary_id, "label": primary_id, "count": 0, "materialIds": []})
+            primary_label = content_formula_label("primary", primary_id, primary_explicit_label) or primary_id
+            primary_entry = primary.setdefault(primary_id, {"id": primary_id, "label": primary_label, "count": 0, "materialIds": []})
             if primary_id not in seen_primary:
                 primary_entry["count"] += 1
                 if material_id and material_id not in primary_entry["materialIds"]:
@@ -368,11 +464,12 @@ def _formula_hierarchy(materials):
                 values = [values]
             children = secondary.setdefault(primary_id, {})
             for value in values:
-                secondary_id = _text(value)
+                secondary_id, secondary_explicit_label = _formula_value_and_label(value)
                 if not secondary_id:
                     continue
                 pair = (primary_id, secondary_id)
-                child = children.setdefault(secondary_id, {"id": secondary_id, "label": secondary_id, "count": 0, "materialIds": [], "detailLabels": []})
+                secondary_label = content_formula_label("secondary", secondary_id, secondary_explicit_label) or secondary_id
+                child = children.setdefault(secondary_id, {"id": secondary_id, "label": secondary_label, "count": 0, "materialIds": [], "detailLabels": []})
                 if pair in seen_secondary:
                     continue
                 child["count"] += 1

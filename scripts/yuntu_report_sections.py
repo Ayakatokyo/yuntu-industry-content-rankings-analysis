@@ -2,6 +2,8 @@
 
 import json
 
+from yuntu_presentation import content_formula_label
+
 
 def _format_chapter01_exposure(value, *, signed=False):
     if not isinstance(value, (int, float)) or isinstance(value, bool):
@@ -158,25 +160,22 @@ def _script_formula_detail_tokens(item):
 
 
 def _script_formula_display_label(item, secondary):
-    """Use secondary formula content as the human-readable primary chart label."""
+    """Return the semantic YunTu primary formula category for a chart label."""
     if not isinstance(item, dict):
         return "未命名公式"
-    children = secondary.get(str(item.get("id")), []) if isinstance(secondary, dict) else []
-    labels = []
-    for child in children:
-        if not isinstance(child, dict):
-            continue
-        child_tokens = _script_formula_detail_tokens(child)
-        if not child_tokens:
-            child_label = str(child.get("label") or "").strip()
-            child_tokens = [child_label] if child_label and not child_label.isdigit() else []
-        for value in child_tokens:
-            if value and value not in labels:
-                labels.append(value)
-    if labels:
-        return "、".join(labels)
-    primary_label = str(item.get("displayLabel") or item.get("label") or "").strip()
-    return primary_label if primary_label and not primary_label.isdigit() else "内容公式不可用"
+    identifier = str(item.get("id") or "").strip()
+    label = content_formula_label("primary", identifier, item.get("label"))
+    if label:
+        return label
+    fallback = str(item.get("displayLabel") or item.get("label") or "").strip()
+    return fallback if fallback and not fallback.isdigit() else "内容公式不可用"
+
+
+def _script_formula_semantic_label(item):
+    if not isinstance(item, dict):
+        return ""
+    identifier = str(item.get("id") or "").strip()
+    return content_formula_label("secondary", identifier, item.get("label"))
 
 
 def render_script_insights(*, script_facts=None, script_insights=None, script_dashboard=None, esc=str):
@@ -195,6 +194,20 @@ def render_script_insights(*, script_facts=None, script_insights=None, script_da
     formula_dimension = dimensions.get("contentFormula", {}) if isinstance(dimensions.get("contentFormula"), dict) else {}
     primary = formula_dimension.get("primary", []) if isinstance(formula_dimension.get("primary"), list) else []
     secondary = formula_dimension.get("secondary", {}) if isinstance(formula_dimension.get("secondary"), dict) else {}
+    formula_secondary = {}
+    for primary_id, raw_children in secondary.items():
+        children = []
+        if not isinstance(raw_children, list):
+            continue
+        for raw_child in raw_children:
+            if not isinstance(raw_child, dict):
+                continue
+            child = dict(raw_child)
+            semantic_label = _script_formula_semantic_label(child)
+            if semantic_label:
+                child["label"] = semantic_label
+            children.append(child)
+        formula_secondary[str(primary_id)] = children
     formula_primary = []
     for raw_item in primary:
         if not isinstance(raw_item, dict):
@@ -202,7 +215,7 @@ def render_script_insights(*, script_facts=None, script_insights=None, script_da
         item = dict(raw_item)
         item["displayLabel"] = _script_formula_display_label(item, secondary)
         formula_primary.append(item)
-    formula_data = {"primary": formula_primary, "secondary": secondary}
+    formula_data = {"primary": formula_primary, "secondary": formula_secondary}
     maximum = max([item.get("count", 0) for item in formula_primary] or [1])
     formula_columns = "".join(
         '<button class="script-formula-primary-column" type="button" data-script-formula-primary data-primary-id="' + esc(item.get("id")) + '" aria-controls="script-formula-view" aria-label="查看' + esc(item.get("displayLabel")) + '的二级内容公式占比"><span class="script-formula-column-plot"><i style="height:' + str(round(float(item.get("count", 0)) / maximum * 100, 2)) + '%"></i></span><strong class="script-formula-display-label">' + esc(item.get("displayLabel")) + '</strong><small>' + esc(item.get("count", 0)) + ' 个素材</small></button>'
@@ -258,8 +271,7 @@ def render_script_insights(*, script_facts=None, script_insights=None, script_da
     selling_points = [item for item in selling_points[:4] if isinstance(item, dict)]
     selling_markup = "".join('<div class="keyword-selling-card"><b>' + esc(str(index + 1) + '｜' + str(item.get("title") or item.get("label") or "卖点")) + '</b><p>' + esc(str(item.get("description") or (str(item.get("count", 0)) + " 个素材覆盖"))) + '</p></div>' for index, item in enumerate(selling_points)) or '<p class="muted data-note">暂无可用卖点，数据不足以判断。</p>'
     triad_markup = '<div class="keyword-cloud-panel" id="keyword-cloud-panel"><section class="script-keyword-triad"><div class="keyword-cloud-layout script-keyword-triad-grid"><article class="keyword-cloud-conclusion script-keyword-conclusion"><small class="keyword-cloud-kicker script-keyword-kicker">一句话结论</small><h3>' + esc(conclusion_text) + '</h3><p>' + esc(summary_text) + '</p></article><article class="keyword-cloud-summary script-keyword-cloud-panel"><small class="keyword-cloud-kicker script-keyword-kicker">高频关键词云</small><div class="keyword-cloud-words">' + keyword_markup + '</div></article><article class="keyword-cloud-selling script-keyword-selling-panel"><small class="keyword-cloud-kicker script-keyword-kicker">从关键词云提炼的卖点</small><div class="script-selling-points">' + selling_markup + '</div></article></div></section></div>'
-    timestamp_note = "" if any(item.get("script_segments") for item in script_facts.get("materials", []) if isinstance(item, dict)) else '<p class="data-note">未提供脚本时间段，暂不输出帧-话术对应关系。</p>'
-    dashboard_markup = '<div class="raw-fact-card dashboard-data-card script-dashboard" id="script-dashboard">' + formula_markup + timestamp_note + '</div>'
+    dashboard_markup = '<div class="raw-fact-card dashboard-data-card script-dashboard" id="script-dashboard">' + formula_markup + '</div>'
     return '<div class="script-insights-sections">' + ai_markup + triad_markup + dashboard_markup + '</div>'
 
 

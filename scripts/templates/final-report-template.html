@@ -1199,9 +1199,7 @@
       }
 
       function scriptFormulaSecondaryLabel(item) {
-        var details = scriptFormulaDetailLabels(item);
-        if (details.length) return details.join('、');
-        var label = String(item && item.label || '').trim();
+        var label = String(item && (item.label || item.displayLabel) || '').trim();
         return label && !/^\d+$/.test(label) ? label : '二级内容公式不可用';
       }
 

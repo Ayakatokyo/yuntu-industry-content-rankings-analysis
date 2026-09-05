@@ -184,9 +184,11 @@ class YuntuReportTests(unittest.TestCase):
             esc=lambda value: str(value),
         )
 
-        self.assertLess(rendered.index('class="script-ai-insights"'), rendered.index('class="script-keyword-triad"'))
+        self.assertLess(rendered.index('class="script-ai-insights script-ai-insights-layout"'), rendered.index('class="script-keyword-triad"'))
         self.assertLess(rendered.index('class="script-keyword-triad"'), rendered.index('class="script-formula-dimension"'))
-        self.assertEqual(rendered.count('script-ai-insight-card'), 2)
+        self.assertEqual(rendered.count('script-insight-dimension-block'), 2)
+        self.assertNotIn('chapter02-dimension-', rendered)
+        self.assertNotIn('script-ai-insight-card', rendered)
         self.assertIn("一二级内容公式", rendered)
         self.assertIn("脚本文案", rendered)
         self.assertNotIn("可测试改写方向", rendered)
@@ -217,7 +219,7 @@ class YuntuReportTests(unittest.TestCase):
             esc=lambda value: str(value),
         )
 
-        self.assertIn('class="insight-layout script-ai-insights-grid"', rendered)
+        self.assertIn('class="script-ai-insights script-ai-insights-layout"', rendered)
         self.assertIn('class="keyword-cloud-layout script-keyword-triad-grid"', rendered)
         self.assertIn('class="keyword-cloud-conclusion script-keyword-conclusion"', rendered)
         self.assertIn('class="keyword-cloud-summary script-keyword-cloud-panel"', rendered)
@@ -227,6 +229,92 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('id="script-formula-body"', rendered)
         self.assertIn('class="script-formula-dashboard"', rendered)
         self.assertIn('class="data-dashboard"', rendered)
+
+    def test_chapter03_script_insights_use_dimension_blocks_without_card_or_evidence(self):
+        rendered = render_script_insights(
+            script_facts={
+                "coverage": {"total": 2, "script": 2, "rate": 1.0},
+                "materials": [
+                    {"material_id": "101", "script_text": "先讲场景。", "script_segments": []},
+                    {"material_id": "102", "script_text": "再讲卖点。", "script_segments": []},
+                ],
+            },
+            script_insights=[
+                {"title": "一二级内容公式：场景承接产品证明", "summary": "公式分析。", "material_ids": ["101"], "evidence": ["script:101:formula"]},
+                {"title": "脚本文案：用品质承接场景", "summary": "文案分析。", "material_ids": ["102"], "evidence": ["script:102:text"]},
+            ],
+            script_dashboard={"dimensions": {"contentFormula": {"primary": [], "secondary": {}}}},
+            esc=lambda value: str(value),
+        )
+
+        self.assertEqual(rendered.count('class="script-insight-dimension-block"'), 2)
+        self.assertNotIn("script-ai-insight-card", rendered)
+        self.assertNotIn("script-ai-evidence", rendered)
+        self.assertNotIn("证据：", rendered)
+        self.assertNotIn("script:101:formula", rendered)
+        self.assertIn("一二级内容公式</strong><span>：场景承接产品证明", rendered)
+        self.assertIn("脚本文案</strong><span>：用品质承接场景", rendered)
+
+    def test_script_formula_summary_only_keeps_chart_and_uses_concrete_formula_names(self):
+        rendered = render_script_insights(
+            script_facts={
+                "coverage": {"total": 3, "script": 3, "rate": 1.0},
+                "materials": [
+                    {"material_id": "101", "script_text": "文案一", "script_segments": []},
+                    {"material_id": "102", "script_text": "文案二", "script_segments": []},
+                    {"material_id": "103", "script_text": "文案三", "script_segments": []},
+                ],
+            },
+            script_insights=[],
+            script_dashboard={
+                "dimensions": {
+                    "contentFormula": {
+                        "primary": [{"id": "10", "label": "10", "count": 3}],
+                        "secondary": {"10": [
+                            {"id": "40", "label": "40", "count": 3, "detailLabels": ["小蓝瓶"]},
+                            {"id": "55", "label": "55", "count": 2, "detailLabels": ["胡军"]},
+                            {"id": "39", "label": "39", "count": 1, "detailLabels": []},
+                        ]},
+                    }
+                }
+            },
+            esc=lambda value: str(value),
+        )
+
+        self.assertNotIn("一二级内容公式明细", rendered)
+        self.assertNotIn("script-formula-summary-row", rendered)
+        self.assertIn('class="script-formula-display-label">小蓝瓶、胡军</strong>', rendered)
+        self.assertIn('"displayLabel": "小蓝瓶、胡军"', rendered)
+
+    def test_script_formula_names_use_explicit_empty_state_instead_of_numeric_ids(self):
+        rendered = render_script_insights(
+            script_facts={
+                "coverage": {"total": 1, "script": 1, "rate": 1.0},
+                "materials": [{"material_id": "101", "script_text": "文案", "script_segments": []}],
+            },
+            script_insights=[],
+            script_dashboard={
+                "dimensions": {
+                    "contentFormula": {
+                        "primary": [{"id": "10", "label": "10", "count": 1}],
+                        "secondary": {"10": [{"id": "40", "label": "40", "count": 1, "detailLabels": []}]},
+                    }
+                }
+            },
+            esc=lambda value: str(value),
+        )
+
+        self.assertIn('class="script-formula-display-label">内容公式不可用</strong>', rendered)
+        self.assertNotIn('class="script-formula-display-label">10</strong>', rendered)
+
+    def test_formula_drilldown_has_qianchuan_pie_contract(self):
+        template = (ROOT / "scripts" / "templates" / "final-report-template.html").read_text(encoding="utf-8")
+
+        self.assertIn("renderScriptFormulaPie", template)
+        self.assertIn("script-formula-pie", template)
+        self.assertIn("script-formula-pie-legend", template)
+        self.assertIn("conic-gradient", template)
+        self.assertIn("占比", template)
 
     def test_chapter03_keeps_only_two_ai_dimensions_and_uses_keyword_cloud_projection(self):
         rendered = render_script_insights(
@@ -256,14 +344,17 @@ class YuntuReportTests(unittest.TestCase):
 
         self.assertNotIn("AI 二次分析", rendered)
         self.assertNotIn("关键词洞察", rendered)
-        self.assertEqual(rendered.count("script-ai-insight-card"), 2)
+        self.assertEqual(rendered.count('class="script-insight-dimension-block"'), 2)
+        self.assertNotIn("script-ai-insight-card", rendered)
         self.assertIn("脚本以鲜炖品质承接日常使用场景。", rendered)
         self.assertIn("关键词集中在产品品质表达，下一轮可比较品质信息与场景信息的前置顺序。", rendered)
         self.assertIn("鲜炖品质", rendered)
-        self.assertIn("一二级内容公式：场景承接产品证明", rendered)
+        self.assertIn("一二级内容公式</strong><span>：场景承接产品证明", rendered)
         self.assertIn("商品卖点", rendered)
         self.assertIn("2 个素材", rendered)
-        self.assertIn("二级标签：品质证明（小蓝瓶）", rendered)
+        self.assertNotIn("一二级内容公式明细", rendered)
+        self.assertNotIn("script-formula-summary-row", rendered)
+        self.assertIn("小蓝瓶", rendered)
 
         card = rendered.split('class="raw-fact-card dashboard-data-card script-dashboard"', 1)[1]
         self.assertLess(card.index("收起脚本汇总数据"), card.index("一二级内容公式"))
@@ -311,10 +402,10 @@ class YuntuReportTests(unittest.TestCase):
             esc=lambda value: str(value),
         )
 
-        self.assertIn('<div class="insight-layout">', rendered)
+        self.assertIn('<div class="script-insights-sections">', rendered)
         self.assertIn('id="script-primary"', rendered)
-        self.assertIn('class="insight-stack"', rendered)
-        self.assertIn('class="insight-card insight-card-primary script-ai-insight-card"', rendered)
+        self.assertIn('class="script-ai-insights script-ai-insights-layout"', rendered)
+        self.assertNotIn('class="insight-card insight-card-primary script-ai-insight-card"', rendered)
         self.assertIn('id="keyword-cloud-panel"', rendered)
         self.assertIn('class="keyword-cloud-words"', rendered)
         self.assertIn('class="keyword-selling-card"', rendered)
@@ -326,10 +417,11 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("data-script-formula-primary", template)
         self.assertIn("aria-controls", template)
         self.assertIn("aria-live", template)
-        self.assertIn("返回一级标签总览", template)
+        self.assertIn("返回一级公式总览", template)
         self.assertIn("matchMedia", template)
         self.assertIn("prefers-reduced-motion", template)
         self.assertIn("__scriptFormulaActiveButton", template)
+        self.assertIn("二级内容公式不可用", template)
 
     def test_chapter03_css_defines_qianchuan_layout_breakpoints(self):
         css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
@@ -338,9 +430,10 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", css)
         self.assertIn("@media (max-width: 759px)", css)
         self.assertIn("@media (max-width: 960px)", css)
-        formula_rule = css.split(".unified-yuntu .script-formula-overview", 1)[1].split("}", 1)[0]
-        self.assertIn("display: grid;", formula_rule)
-        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));", formula_rule)
+        self.assertIn("display: grid;", css)
+        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));", css)
+        self.assertIn(".unified-yuntu .script-ai-insights-layout", css)
+        self.assertIn(".unified-yuntu .script-insight-dimension-block", css)
         self.assertNotIn("border-left: 3px", css)
 
     def test_render_report_creates_sibling_zip_with_final_report_directory(self):

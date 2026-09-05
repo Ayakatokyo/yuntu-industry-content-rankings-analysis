@@ -1181,6 +1181,84 @@
         return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       }
 
+      function scriptFormulaDetailLabels(item) {
+        var raw = Array.isArray(item && item.detailLabels) ? item.detailLabels : [];
+        var labels = [];
+        raw.forEach(function (value) {
+          String(value || '').replace(/，/g, '、').split('、').forEach(function (label) {
+            label = label.trim();
+            if (label && labels.indexOf(label) < 0) labels.push(label);
+          });
+        });
+        return labels;
+      }
+
+      function scriptFormulaDisplayLabel(item) {
+        var label = String(item && (item.displayLabel || item.label) || '').trim();
+        return label && !/^\d+$/.test(label) ? label : '内容公式不可用';
+      }
+
+      function scriptFormulaSecondaryLabel(item) {
+        var details = scriptFormulaDetailLabels(item);
+        if (details.length) return details.join('、');
+        var label = String(item && item.label || '').trim();
+        return label && !/^\d+$/.test(label) ? label : '二级内容公式不可用';
+      }
+
+      function renderScriptFormulaPie(children, primaryItem) {
+        var colors = ['#9b6a37', '#d79a4b', '#6f7f5f', '#a14f38', '#6d5d4d', '#c7a36a', '#7d8f9a', '#b77d54'];
+        var total = children.reduce(function (sum, item) { return sum + Number(item.count || 0); }, 0) || 1;
+        var cursor = 0;
+        var slices = children.map(function (item, index) {
+          var count = Number(item.count || 0);
+          var share = count / total;
+          var slice = {
+            label: scriptFormulaSecondaryLabel(item),
+            count: count,
+            share: Number((share * 100).toFixed(1)),
+            start: cursor * 360,
+            end: (cursor + share) * 360,
+            color: colors[index % colors.length]
+          };
+          cursor += share;
+          return slice;
+        });
+        var layout = document.createElement('div');
+        layout.className = 'script-formula-pie-layout pie-layout';
+        var pie = document.createElement('div');
+        pie.className = 'pie-chart script-formula-pie';
+        pie.setAttribute('data-pie-slices', JSON.stringify(slices));
+        pie.setAttribute('role', 'img');
+        pie.setAttribute('aria-label', scriptFormulaDisplayLabel(primaryItem) + '二级内容公式占比饼图');
+        pie.style.background = 'conic-gradient(' + slices.map(function (slice) {
+          return slice.color + ' ' + slice.start.toFixed(4) + 'deg ' + slice.end.toFixed(4) + 'deg';
+        }).join(', ') + ')';
+        var tooltip = document.createElement('div');
+        tooltip.className = 'chart-tooltip';
+        tooltip.setAttribute('role', 'tooltip');
+        pie.append(tooltip);
+        var legend = document.createElement('ul');
+        legend.className = 'pie-legend script-formula-pie-legend';
+        slices.forEach(function (slice) {
+          var item = document.createElement('li');
+          item.className = 'legend-item';
+          item.title = slice.label + '：' + slice.count + ' 个素材，占比 ' + slice.share + '%';
+          var name = document.createElement('span');
+          name.className = 'legend-label';
+          var swatch = document.createElement('i');
+          swatch.className = 'legend-swatch';
+          swatch.style.background = slice.color;
+          name.append(swatch, document.createTextNode(slice.label));
+          var value = document.createElement('span');
+          value.className = 'legend-share';
+          value.textContent = slice.count + ' 个素材 · ' + slice.share + '%';
+          item.append(name, value);
+          legend.append(item);
+        });
+        layout.append(pie, legend);
+        return layout;
+      }
+
       function renderScriptFormulaDrill(dashboard, primaryItem) {
         var view = dashboard.querySelector('[data-script-formula-view]');
         if (!view) return;
@@ -1188,45 +1266,35 @@
         var children = Array.isArray(secondary[primaryItem.id]) ? secondary[primaryItem.id] : [];
         var wrapper = document.createElement('div');
         wrapper.className = 'script-formula-drill';
-        var primary = document.createElement('div');
+        var primary = document.createElement('section');
         primary.className = 'script-formula-drill-primary';
         var back = document.createElement('button');
         back.type = 'button';
         back.className = 'script-formula-back';
-        back.textContent = '返回一级标签总览';
+        back.textContent = '返回一级公式总览';
         back.addEventListener('click', function () { renderScriptFormulaOverview(dashboard, primaryItem.id); });
         var title = document.createElement('strong');
-        title.textContent = '一级标签 ' + primaryItem.label;
+        title.textContent = scriptFormulaDisplayLabel(primaryItem);
         var count = document.createElement('span');
         count.className = 'script-dashboard-hint';
         count.textContent = primaryItem.count + ' 个素材';
         var bar = document.createElement('span');
         bar.className = 'script-formula-drill-primary-bar';
         primary.append(back, title, count, bar);
-        var list = document.createElement('div');
-        list.className = 'script-formula-secondary-list';
+        var chart = document.createElement('section');
+        chart.className = 'script-formula-drill-chart';
+        var heading = document.createElement('h4');
+        heading.textContent = '二级内容公式占比';
+        chart.append(heading);
         if (!children.length) {
           var empty = document.createElement('p');
           empty.className = 'data-note';
-          empty.textContent = '该一级标签暂无二级标签，数据不足以判断。';
-          list.append(empty);
+          empty.textContent = '该一级公式暂无二级内容公式，数据不足以判断。';
+          chart.append(empty);
         } else {
-          var heading = document.createElement('h4');
-          heading.textContent = '二级标签分布';
-          list.append(heading);
-          children.forEach(function (item) {
-            var row = document.createElement('div');
-            row.className = 'script-formula-secondary-item';
-            var label = document.createElement('span');
-            var detailLabels = Array.isArray(item.detailLabels) && item.detailLabels.length ? '（' + item.detailLabels.join('、') + '）' : '';
-            label.textContent = '二级标签 ' + item.label + detailLabels;
-            var value = document.createElement('b');
-            value.textContent = item.count + ' 个素材';
-            row.append(label, value);
-            list.append(row);
-          });
+          chart.append(renderScriptFormulaPie(children, primaryItem));
         }
-        wrapper.append(primary, list);
+        wrapper.append(primary, chart);
         wrapper.setAttribute('aria-live', 'polite');
         if (!scriptFormulaPrefersReducedMotion()) {
           wrapper.classList.add('is-entering');
@@ -1258,14 +1326,16 @@
             button.setAttribute('data-script-formula-primary', '');
             button.setAttribute('data-primary-id', item.id);
             button.setAttribute('aria-controls', 'script-formula-view');
-            button.setAttribute('aria-label', '查看一级标签 ' + item.label + ' 的二级标签分布');
+            var displayLabel = scriptFormulaDisplayLabel(item);
+            button.setAttribute('aria-label', '查看' + displayLabel + '的二级内容公式占比');
             var plot = document.createElement('span');
             plot.className = 'script-formula-column-plot';
             var bar = document.createElement('i');
             bar.style.height = (Number(item.count || 0) / maximum * 100).toFixed(2) + '%';
             plot.append(bar);
             var label = document.createElement('strong');
-            label.textContent = item.label;
+            label.className = 'script-formula-display-label';
+            label.textContent = displayLabel;
             var count = document.createElement('small');
             count.textContent = item.count + ' 个素材';
             button.append(plot, label, count);

@@ -259,6 +259,32 @@ class YuntuHighlightTests(unittest.TestCase):
         self.assertEqual(result["101"][0]["relative_path"], "highlights/101/01-000s.jpg")
         self.assertEqual(result["101"][0]["frame_source"], "reused_local_extracted_frame")
 
+    def test_standard_highlights_retains_downloaded_video_and_records_it_in_manifest(self):
+        highlights = load_module()
+
+        def downloader(_url, destination):
+            Path(destination).write_bytes(b"retained-video")
+
+        def batch_extractor(_video_path, requests, *, ffmpeg_bin=None):
+            for request in requests:
+                Path(request["destination"]).write_bytes(b"\xff\xd8frame\xff\xd9")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            highlights.generate_standard_highlights(
+                [{"material_id": "101", "video_url": "https://video.example/101.mp4", "trend_series": []}],
+                root,
+                downloader=downloader,
+                batch_extractor=batch_extractor,
+            )
+            manifest = json.loads((root / "highlights-manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual((root / "video-assets" / "101.mp4").read_bytes(), b"retained-video")
+            self.assertEqual(manifest["materials"][0]["video"], {
+                "available": True,
+                "relative_path": "video-assets/101.mp4",
+                "size_bytes": 14,
+            })
+
     def test_single_material_standard_highlights_reuses_complete_manifest(self):
         highlights = load_module()
         detail = {

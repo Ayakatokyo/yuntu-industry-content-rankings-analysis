@@ -10,6 +10,7 @@ from pathlib import Path
 from string import Template
 
 from rpa_io import write_json_atomically
+from yuntu_highlights import find_local_video_asset
 from yuntu_presentation import build_yuntu_presentation, _chapter05_script_projection
 from yuntu_highlight_export import export_highlight_workbook, match_brands_from_title
 from yuntu_report_sections import (
@@ -1445,6 +1446,67 @@ def _copy_highlight_assets(fact_pack, output_dir, source_root=None):
         shutil.copy2(source_path, target_path)
 
 
+def _copy_report_video_assets(fact_pack, output_dir, source_root=None):
+    """Materialize only safe, persisted video files into the portable report."""
+    output_dir = Path(output_dir)
+    source_root = Path(source_root) if source_root is not None else output_dir.parent
+    source_root = source_root.resolve()
+    assets = {}
+    for fact in fact_pack.get("materialFacts", []) if isinstance(fact_pack, dict) else []:
+        if not isinstance(fact, dict):
+            continue
+        material_id = str(fact.get("material_id") or "")
+        local_video = fact.get("localVideo") if isinstance(fact.get("localVideo"), dict) else {}
+        relative_path = str(local_video.get("relative_path") or "").replace("\\", "/")
+        if not local_video.get("available") and re.fullmatch(r"[A-Za-z0-9_-]+", material_id):
+            # Reports generated before video facts existed can still use retained assets.
+            fallback_path = find_local_video_asset(source_root, material_id)
+            if fallback_path is not None:
+                local_video = {"available": True}
+                relative_path = fallback_path.relative_to(source_root).as_posix()
+        if not local_video.get("available") or not re.fullmatch(r"[A-Za-z0-9_-]+", material_id):
+            assets[material_id] = {"available": False, "reason": "本批次未保存可交付的本地视频"}
+            continue
+        candidate = source_root / relative_path
+        try:
+            candidate.resolve().relative_to(source_root)
+        except ValueError:
+            assets[material_id] = {"available": False, "reason": "本地视频路径无效"}
+            continue
+        if (
+            not relative_path
+            or Path(relative_path).is_absolute()
+            or ".." in Path(relative_path).parts
+            or candidate.is_symlink()
+            or not candidate.is_file()
+            or candidate.stat().st_size <= 0
+        ):
+            assets[material_id] = {"available": False, "reason": "本地视频文件不可用"}
+            continue
+        target = output_dir / "assets" / "videos" / f"{material_id}.mp4"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(candidate, target)
+        if target.is_symlink() or not target.is_file() or target.stat().st_size <= 0:
+            raise YuntuReportError(f"report video asset is invalid: {material_id}")
+        assets[material_id] = {
+            "available": True,
+            "src": f"assets/videos/{material_id}.mp4",
+            "sizeBytes": target.stat().st_size,
+        }
+    return assets
+
+
+def _validate_report_video_assets(video_assets, output_dir):
+    output_dir = Path(output_dir)
+    for material_id, asset in video_assets.items():
+        if not isinstance(asset, dict) or asset.get("available") is not True:
+            continue
+        source = str(asset.get("src") or "")
+        path = output_dir / source
+        if not source.startswith("assets/videos/") or path.is_symlink() or not path.is_file() or path.stat().st_size <= 0:
+            raise YuntuReportError(f"report video asset is missing: {material_id}")
+
+
 def _generic_text(value):
     return str(value or "")
 
@@ -1701,6 +1763,9 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None, highli
     style += """
 .material-deep-layout.side-tabs{display:grid;grid-template-columns:190px minmax(0,1fr);gap:18px;align-items:stretch}.material-deep-tab-list{position:sticky;top:18px;align-self:stretch;display:flex;flex-direction:column;gap:9px;max-height:calc(100vh - 36px);overflow-y:auto;border-right:1px solid var(--line);padding:0 14px 0 0}.material-deep-tab{width:100%;min-height:0;border:1px solid var(--line);border-radius:8px;background:#fff8ec;color:var(--ink);padding:8px 9px;text-align:left;font-size:12px;line-height:1.35;white-space:normal}.material-deep-tab[aria-selected=\"true\"]{border-color:#2c1810;border-left-color:#2c1810;background:#2c1810;color:#fff}.material-deep-panels{min-width:0;padding:0}.material-deep-panel.material-card{margin:0;padding:22px;border:1px solid var(--line);border-radius:24px;background:#fffdf9;box-shadow:0 16px 40px rgba(65,34,16,.1)}.material-deep-header.material-head{display:block;border:0;padding:0}.material-deep-header.material-head span{display:block;margin:0 0 14px;color:var(--accent-dark);font-size:12px;font-weight:800;letter-spacing:.14em}.material-deep-header.material-head h3{margin:0 0 10px;font-size:24px;line-height:1.35}.material-deep-id{margin:0;color:var(--muted);font-size:14px}.material-deep-metrics{margin:14px 0 0}.deep-visual-strip{--visual-height:560px;margin:18px 0}.deep-frame-grid.fixed-six{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:12px;height:var(--visual-height);margin:0}.deep-frame-card{display:grid;grid-template-rows:minmax(0,1fr) auto;overflow:hidden;border:1px solid var(--line);border-radius:18px;background:#f4e3cd}.deep-frame-card .highlight-frame-button{display:block;width:100%;min-width:0;min-height:0;padding:0;border:0;border-radius:0;background:transparent}.deep-frame-card img{width:100%;height:100%;min-height:0;aspect-ratio:auto;object-fit:contain;background:#efe6d9;border-radius:0}.deep-frame-card figcaption{margin:0;padding:10px 12px;color:var(--muted);font-size:13px;line-height:1.45}.deep-frame-coverage{margin:10px 0 0;color:var(--muted);font-size:13px}.deep-frame-observations,.deep-visual-summary{margin-top:18px;padding:17px;border:1px solid var(--line);border-radius:18px;background:#f7ead8}.deep-frame-observations h4,.deep-visual-summary h4,.second-level-section>h4{margin:0 0 10px;font-size:16px}.second-level-section{margin-top:18px}.second-level-timeline.raw-fact-card{padding:17px;border:1px solid var(--line);border-radius:18px;background:#fff}.collapsible-head{margin-bottom:12px}.collapsible-toggle{display:flex;align-items:center;justify-content:center;width:100%;border:1px solid var(--line);border-radius:12px;background:#f7ead8;color:var(--ink);padding:12px 14px;cursor:pointer;font:inherit;text-align:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.52)}.collapsible-toggle:hover{border-color:rgba(82,45,24,.24);background:#fff1dc}.collapsible-toggle-action{color:#2c1810;font-size:16px;font-weight:800;line-height:1.35;white-space:nowrap}.collapsible-body{display:grid;gap:12px}.collapsible-body[hidden]{display:none}.collapsible-body-title{display:block;margin-bottom:2px;color:var(--ink);font-size:16px;font-weight:800;line-height:1.35}.second-level-switcher.metric-switch{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:0}.second-level-switcher button{border-radius:8px;background:#fff8ec;color:var(--ink);font-size:12px;font-weight:800}.second-level-switcher button[aria-pressed=\"true\"]{border-color:#2c1810;background:#2c1810;color:#fff}.second-level-chart-mount{min-height:320px}.second-level-chart-mount svg,.timeline-chart{display:block;width:100%;height:320px;border:1px solid rgba(82,45,24,.1);border-radius:14px;background:#fff8ec}.second-level-axis,.second-level-grid-line{stroke:rgba(82,45,24,.16);stroke-width:1}.second-level-grid-line{stroke-dasharray:3 4}.second-level-line.timeline-line{fill:none;stroke:#9b6a37;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.second-level-point.timeline-point-dot{fill:#9b6a37;stroke:#fff8ec;stroke-width:2}.second-level-point-hitbox{cursor:default}.second-level-tooltip{opacity:0;pointer-events:none;transition:opacity .12s ease}.second-level-point-hitbox:hover .second-level-tooltip,.second-level-point-hitbox:focus .second-level-tooltip{opacity:1}.second-level-tooltip rect{fill:rgba(255,255,255,.96);stroke:rgba(82,45,24,.16)}.second-level-tooltip-title{fill:#2a170f;font-size:12px;font-weight:800}.second-level-tooltip-value{fill:#806758;font-size:12px}.second-level-range.high{fill:rgba(215,154,75,.18)}.second-level-range.loss{fill:rgba(161,79,56,.16)}.second-level-range-control{display:grid;grid-template-columns:max-content minmax(0,1fr);align-items:center;gap:10px;margin-top:0;color:var(--muted);font-size:13px}.second-level-range-control input{width:100%;height:8px;accent-color:#9b6a37;cursor:pointer}.second-level-peak-note{margin:0;color:var(--ink);font-weight:800}.second-level-observations{margin-top:14px}.audience-dashboard{display:grid;gap:12px}.audience-topn-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#fbf0df;color:var(--muted);font-size:13px}.audience-topn-controls label{display:flex;align-items:center;gap:6px;color:var(--ink);font-weight:700}.audience-topn-controls input[type=\"number\"]{width:84px;border:1px solid var(--line);border-radius:5px;padding:6px 8px;background:#fff}.audience-topn-controls input[type=\"range\"]{flex:1;min-width:180px;accent-color:#9b6a37}.audience-topn-controls [data-audience-topn-label]{font-weight:700;color:var(--accent-dark)}.highlight-dashboard-tabs{display:flex;flex-wrap:wrap;gap:8px;border-bottom:0;margin-top:16px;padding:0}.highlight-dashboard-tabs button{position:relative;flex:0 0 auto;min-height:40px;border:1px solid var(--line);border-radius:999px;background:#f7ead8;color:var(--muted);padding:8px 12px;cursor:pointer;white-space:nowrap}.highlight-dashboard-tabs button:hover{color:var(--accent-dark);border-color:var(--accent-dark)}.highlight-dashboard-tabs button[aria-selected=\"true\"]{border-color:var(--accent-dark);background:#2c1810;color:#fff;font-weight:800}.highlight-dashboard-tabs button[aria-selected=\"true\"]::after{display:none}.highlight-dashboard-tabs button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}.highlight-dashboard-panels{padding-top:18px}.highlight-category-panel{margin-top:0;padding-top:0;border-top:0}.highlight-category-panel[hidden]{display:none!important}.highlight-category-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px}.highlight-category-head h3{margin:0}.highlight-category-count{color:var(--muted);font-size:.78rem;font-weight:800}.highlight-analysis-pair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-bottom:18px}.highlight-summary,.highlight-directions{margin:0;border:1px solid var(--line);border-radius:8px;background:#f7ead8;padding:14px}.highlight-summary li{margin:6px 0}.highlight-directions{display:grid;grid-template-columns:1fr;gap:10px}.highlight-direction{padding:0;border:0;background:transparent}.highlight-frame-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:0}.highlight-frame-card{margin:0;min-width:0;display:grid;gap:8px}.highlight-frame-card figure{margin:0}.highlight-frame-card .highlight-frame-button{display:block;width:100%;border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:4px;cursor:zoom-in}.highlight-frame-card .highlight-frame-button:hover{border-color:var(--accent-dark)}.highlight-frame-card img{display:block;width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:3px}.highlight-frame-meta{display:grid;gap:4px;color:var(--muted);font-size:.75rem;line-height:1.4}.highlight-frame-meta small{font-size:.72rem;font-weight:800;color:var(--accent-dark)}.highlight-frame-meta span{font-variant-numeric:tabular-nums}.highlight-source-link{border:0;background:transparent;color:var(--accent-dark);padding:0;text-align:left;font:inherit;cursor:pointer}.highlight-source-link:hover{text-decoration:underline}.highlight-pagination{display:flex;justify-content:center;align-items:center;gap:10px;margin-top:14px}.highlight-pagination button{min-height:34px;border:1px solid var(--line);border-radius:999px;background:#fff8ec;color:var(--ink);padding:6px 12px;cursor:pointer}.highlight-pagination button[disabled]{opacity:.45;cursor:not-allowed}.highlight-pagination [data-highlight-page-status]{min-width:64px;text-align:center;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}@media(max-width:700px){.highlight-analysis-pair{grid-template-columns:1fr}.highlight-frame-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.highlight-dashboard-tabs button{padding-inline:10px}.audience-topn-controls{align-items:stretch}.audience-topn-controls input[type=\"range\"]{min-width:0;width:100%}}@media(max-width:560px){.deep-frame-grid.fixed-six{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(4,minmax(0,1fr));height:auto}.highlight-frame-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.highlight-pagination{flex-wrap:wrap}}
     """
+    style += """
+.deep-visual-layout{display:grid;grid-template-columns:minmax(220px,.78fr) minmax(0,1.42fr);gap:16px;align-items:stretch}.material-video-panel{display:flex;flex-direction:column;min-width:0;margin:18px 0;padding:12px;border:1px solid var(--line);border-radius:18px;background:#f4e3cd}.material-video-label{margin:0 0 8px;color:var(--ink);font-size:13px;font-weight:800}.material-video{display:block;width:100%;min-height:0;aspect-ratio:9/16;object-fit:contain;background:#1d120c}.material-video-panel.is-unavailable{justify-content:center;min-height:260px}.material-video-panel.is-unavailable .data-note{margin:0;color:var(--muted)}.deep-visual-layout .deep-visual-strip{margin:18px 0}.deep-visual-layout .deep-frame-grid.fixed-six{height:var(--visual-height)}@media(max-width:900px){.deep-visual-layout{grid-template-columns:1fr}.material-video-panel{max-width:360px;margin:18px auto 0}.deep-visual-layout .deep-visual-strip{margin-top:0}}@media(max-width:560px){.deep-visual-layout .deep-frame-grid.fixed-six{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(3,minmax(0,1fr));height:auto}.deep-frame-card{min-height:220px}}
+"""
     style += '.highlight-export-toolbar{display:flex;justify-content:flex-end;margin:0 0 12px}.highlight-export-button{display:inline-flex;align-items:center;min-height:36px;border:1px solid var(--accent-dark);border-radius:999px;background:#2c1810;color:#fff8ec;padding:7px 14px;text-decoration:none;font-size:.8125rem;font-weight:800}.highlight-export-button:hover{background:var(--accent-dark)}.highlight-brand-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.highlight-brand-tabs button{position:relative;min-height:40px;border:1px solid var(--line);border-radius:999px;background:#f7ead8;color:var(--muted);padding:8px 14px;cursor:pointer;white-space:nowrap}.highlight-brand-tabs button[aria-selected="true"]{border-color:var(--accent-dark);background:#2c1810;color:#fff;font-weight:800}.highlight-brand-panel[hidden]{display:none!important}.highlight-insight{margin:0 0 10px;padding:0;border-bottom:0}.highlight-insight:last-child{margin-bottom:0}.highlight-insight h5{margin:0 0 4px;font-size:.82rem}.highlight-insight p{margin:0;color:var(--muted);font-size:.82rem;line-height:1.55}'
     filters = fact_pack.get("filters", {}) if isinstance(fact_pack, dict) else {}
     industry = str(filters.get("industry") or "食品饮料")
@@ -1760,7 +1825,14 @@ def render_report(
         analysis_json=analysis_json,
         fact_pack=fact_pack,
     )
-    presentation = build_yuntu_presentation(analysis, fact_pack)
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    report_video_assets = _copy_report_video_assets(
+        fact_pack, output, highlight_asset_root
+    )
+    presentation = build_yuntu_presentation(
+        analysis, fact_pack, report_video_assets=report_video_assets
+    )
     data = {"status": "complete", "analysis": analysis, "presentation": presentation}
     if analysis_provenance is not None:
         data["analysisProvenance"] = analysis_provenance
@@ -1771,8 +1843,6 @@ def render_report(
         data["chapter02Facts"] = fact_pack["chapter02Facts"]
     audience_dashboard = fact_pack.get("audienceDashboard") if isinstance(fact_pack, dict) else None
     markdown = _render_markdown(analysis, audience_dashboard, fact_pack)
-    output = Path(output_dir)
-    output.mkdir(parents=True, exist_ok=True)
     _copy_highlight_assets(fact_pack, output, highlight_asset_root)
     export_path = export_highlight_workbook(
         fact_pack,
@@ -1794,5 +1864,6 @@ def render_report(
     write_json_atomically(data, output / "final-report-data.json")
     (output / "final-report.md").write_text(markdown, encoding="utf-8")
     (output / "final-report.html").write_text(rendered_html, encoding="utf-8")
+    _validate_report_video_assets(report_video_assets, output)
     _archive_report_directory(output)
     return 0

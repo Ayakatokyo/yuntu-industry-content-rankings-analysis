@@ -1311,7 +1311,7 @@ def _project_second_level(metrics):
     return {"metricOrder": list(SECOND_LEVEL_METRIC_ORDER), "metrics": projected}
 
 
-def _project_chapter05(analysis, fact_pack):
+def _project_chapter05(analysis, fact_pack, *, report_video_assets=None):
     facts = {
         _text(fact.get("material_id")): fact
         for fact in fact_pack.get("materialFacts", []) if isinstance(fact, dict) and _text(fact.get("material_id"))
@@ -1329,6 +1329,7 @@ def _project_chapter05(analysis, fact_pack):
         }
     if selected_ids and set(dives_by_id) != set(selected_ids):
         raise YuntuPresentationError("material deep dives must cover selected materials")
+    report_video_assets = report_video_assets if isinstance(report_video_assets, dict) else {}
     tabs, panels = [], []
     for material_id in selected_ids:
         fact = facts.get(material_id)
@@ -1378,6 +1379,10 @@ def _project_chapter05(analysis, fact_pack):
             "peopleTags": deepcopy(fact.get("people_tags", [])),
             "materialTags": deepcopy(fact.get("material_tags", [])),
             "listDataAvailability": deepcopy(fact.get("listDataAvailability", {})),
+            "video": deepcopy(report_video_assets.get(material_id, {
+                "available": False,
+                "reason": "本批次未保存可交付的本地视频",
+            })),
             "frames": frames,
             "frameFailures": frame_failures,
             "frameObservations": [observations_by_ref[frame["frameRef"]] for frame in frames],
@@ -1454,14 +1459,16 @@ def validate_yuntu_presentation(payload):
     return payload
 
 
-def build_yuntu_presentation(analysis, fact_pack, *, report_meta=None):
+def build_yuntu_presentation(analysis, fact_pack, *, report_meta=None, report_video_assets=None):
     if not isinstance(analysis, dict) or not isinstance(fact_pack, dict):
         raise YuntuPresentationError("analysis and fact pack must be objects")
     chapter01 = _project_chapter01(analysis, fact_pack)
     scopes, chapter02, chapter02_interactions = _project_chapter02(analysis, fact_pack)
     chapter03 = _project_chapter03(analysis, fact_pack)
     chapter04 = _project_chapter04(analysis, fact_pack)
-    chapter05, chapter05_interactions = _project_chapter05(analysis, fact_pack)
+    chapter05, chapter05_interactions = _project_chapter05(
+        analysis, fact_pack, report_video_assets=report_video_assets
+    )
     payload = {
         "presentationSchemaVersion": PRESENTATION_SCHEMA_VERSION,
         "report": _report_metadata(fact_pack, report_meta),

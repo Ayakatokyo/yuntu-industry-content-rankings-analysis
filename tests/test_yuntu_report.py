@@ -645,6 +645,62 @@ class YuntuReportTests(unittest.TestCase):
             )
             self.assertIn("final-report/highlight-frames.xlsx", archive_names)
 
+    def test_render_report_places_local_video_left_of_six_highlight_frames_and_archives_it(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["materialFacts"][0]["localVideo"] = {
+            "available": True,
+            "relative_path": "video-assets/101.mp4",
+            "size_bytes": 14,
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for fact in fact_pack["materialFacts"]:
+                for frame in fact["highlightFrames"]:
+                    image = root / frame["relative_path"]
+                    image.parent.mkdir(parents=True, exist_ok=True)
+                    image.write_bytes(b"fake-jpeg")
+            source_video = root / "video-assets" / "101.mp4"
+            source_video.parent.mkdir(parents=True, exist_ok=True)
+            source_video.write_bytes(b"local-video-bytes")
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.deep_dive_analysis(), ensure_ascii=False), encoding="utf-8")
+
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
+
+            html = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+            presentation = json.loads((root / "final-report" / "presentation-report.json").read_text(encoding="utf-8"))
+            with zipfile.ZipFile(root / "final-report.zip") as archive:
+                archive_names = set(archive.namelist())
+
+        self.assertIn('class="deep-visual-layout"', html)
+        self.assertIn('<video class="material-video" controls preload="metadata"', html)
+        self.assertIn('src="assets/videos/101.mp4"', html)
+        self.assertIn('class="deep-frame-grid fixed-six"', html)
+        self.assertEqual(presentation["chapters"]["chapter05"]["panels"][0]["video"]["src"], "assets/videos/101.mp4")
+        self.assertIn("final-report/assets/videos/101.mp4", archive_names)
+
+    def test_report_maps_legacy_working_video_when_fact_pack_has_no_video_descriptor(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "working-videos" / "101.mp4"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"legacy-video")
+
+            assets = report._copy_report_video_assets(
+                {"materialFacts": [{"material_id": "101"}]},
+                root / "final-report",
+                root,
+            )
+
+            self.assertEqual(assets["101"]["src"], "assets/videos/101.mp4")
+            self.assertEqual(
+                (root / "final-report" / "assets" / "videos" / "101.mp4").read_bytes(),
+                b"legacy-video",
+            )
+
 
     def test_unused_markdown_value_helper_is_removed(self):
         report = load_module()

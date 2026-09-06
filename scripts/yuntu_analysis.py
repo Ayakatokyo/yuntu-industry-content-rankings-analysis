@@ -16,6 +16,7 @@ from yuntu_highlights import (
     details_missing_standard_highlights,
     generate_standard_highlights_for_detail,
     load_highlights_manifest,
+    load_video_asset_records,
     write_highlights_manifest,
 )
 from yuntu_highlight_export import match_brands_from_title
@@ -1679,9 +1680,13 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
         )
     if details:
         write_highlights_manifest(root, highlights)
+    video_assets = load_video_asset_records(
+        root, [fact["material_id"] for fact in material_facts]
+    )
     for fact in material_facts:
         frames = highlights.get(str(fact["material_id"]), [])
         fact["highlightFrames"] = frames
+        fact["localVideo"] = video_assets[str(fact["material_id"])]
         fact["highlightFrameAvailability"] = _highlight_frame_availability(
             frames, requested=True
         )

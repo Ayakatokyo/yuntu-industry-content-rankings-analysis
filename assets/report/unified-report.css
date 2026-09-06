@@ -1090,6 +1090,26 @@ body.unified-report {
   margin-bottom: 10px;
 }
 
+.unified-yuntu .deep-visual-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, .78fr) minmax(0, 1.42fr);
+  gap: 16px;
+}
+
+.unified-yuntu .material-video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  background: #1d120c;
+  object-fit: contain;
+}
+
+@media (max-width: 900px) {
+  .unified-yuntu .deep-visual-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 .unified-yuntu .highlight-selection-hint {
   margin: 0 auto 0 0;
   color: var(--unified-muted);

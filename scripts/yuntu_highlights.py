@@ -471,6 +471,39 @@ def _highlight_filename(index, candidate):
     return f"{index:02d}-{candidate['second']:03d}s.jpg"
 
 
+def find_local_video_asset(root, material_id):
+    """Return the canonical video asset, accepting the historical working-videos path."""
+    root = Path(root)
+    for relative_path in (
+        Path("video-assets") / f"{material_id}.mp4",
+        Path("working-videos") / f"{material_id}.mp4",
+    ):
+        path = root / relative_path
+        if path.is_file() and not path.is_symlink() and path.stat().st_size > 0:
+            return path
+    return None
+
+
+def _video_asset_record(root, material_id):
+    path = find_local_video_asset(root, material_id)
+    if path is None:
+        return {"available": False, "failure_reason": "missing_local_video"}
+    return {
+        "available": True,
+        "relative_path": path.relative_to(root).as_posix(),
+        "size_bytes": path.stat().st_size,
+    }
+
+
+def load_video_asset_records(output_dir, material_ids):
+    """Expose persisted video records for report facts without retaining signed URLs."""
+    root = Path(output_dir)
+    return {
+        str(material_id): _video_asset_record(root, str(material_id))
+        for material_id in material_ids
+    }
+
+
 def _reused_frame_record(candidate, *, material_id, root, index):
     target = root / "highlights" / material_id / _highlight_filename(index, candidate)
     if not target.is_file() or target.stat().st_size == 0:
@@ -555,40 +588,42 @@ def _material_frames(
 
     material_root = root / "highlights" / material_id
     try:
-        with tempfile.TemporaryDirectory(prefix="yuntu-highlight-") as temporary_directory:
-            video_path = Path(temporary_directory) / "source-video"
+        video_path = find_local_video_asset(root, material_id)
+        if video_path is None:
+            video_path = root / "video-assets" / f"{material_id}.mp4"
+            video_path.parent.mkdir(parents=True, exist_ok=True)
             downloader(video_url, video_path)
-            material_root.mkdir(parents=True, exist_ok=True)
-            requests = [
-                {
-                    "second": candidate["second"],
-                    "destination": material_root / _highlight_filename(index, candidate),
-                }
-                for index, candidate in enumerate(candidates, start=1)
-            ]
-            try:
-                (batch_extractor or extract_frames_batch)(
-                    video_path, requests, ffmpeg_bin=ffmpeg_bin
-                )
-            except Exception:
-                return _extract_frames_individually(
-                    video_path,
-                    candidates,
-                    root,
-                    material_id,
-                    material_root,
-                    frame_extractor,
-                    ffmpeg_bin,
-                )
-            return [
-                _frame_record(
-                    candidate,
-                    material_id=material_id,
-                    available=True,
-                    relative_path=str(request["destination"].relative_to(root)),
-                )
-                for candidate, request in zip(candidates, requests)
-            ]
+        material_root.mkdir(parents=True, exist_ok=True)
+        requests = [
+            {
+                "second": candidate["second"],
+                "destination": material_root / _highlight_filename(index, candidate),
+            }
+            for index, candidate in enumerate(candidates, start=1)
+        ]
+        try:
+            (batch_extractor or extract_frames_batch)(
+                video_path, requests, ffmpeg_bin=ffmpeg_bin
+            )
+        except Exception:
+            return _extract_frames_individually(
+                video_path,
+                candidates,
+                root,
+                material_id,
+                material_root,
+                frame_extractor,
+                ffmpeg_bin,
+            )
+        return [
+            _frame_record(
+                candidate,
+                material_id=material_id,
+                available=True,
+                relative_path=str(request["destination"].relative_to(root)),
+            )
+            for candidate, request in zip(candidates, requests)
+        ]
     except Exception:
         return _failed_frames_with_local_reuse(
             candidates,
@@ -622,12 +657,16 @@ def load_highlights_manifest(output_dir):
 def write_highlights_manifest(output_dir, frames_by_material):
     """Atomically publish complete frame records from the scheduler thread."""
     materials = [
-        {"material_id": material_id, "frames": frames}
+        {
+            "material_id": material_id,
+            "frames": frames,
+            "video": _video_asset_record(Path(output_dir), material_id),
+        }
         for material_id, frames in sorted(frames_by_material.items())
     ]
     _write_json_atomically(
         {
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "standard": "cover_plus_click_top5",
             "materials": materials,
         },
@@ -745,10 +784,11 @@ def generate_highlights(
                 "material_id": material_id,
                 "video_url": detail.get("video_url") if isinstance(detail.get("video_url"), str) else "",
                 "frames": frames,
+                "video": _video_asset_record(root, material_id),
             }
         )
     _write_json_atomically(
-        {"schemaVersion": 1, "materials": materials}, root / "highlights-manifest.json"
+        {"schemaVersion": 3, "materials": materials}, root / "highlights-manifest.json"
     )
     return results
 

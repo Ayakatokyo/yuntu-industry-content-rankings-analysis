@@ -676,8 +676,13 @@ class YuntuReportTests(unittest.TestCase):
 
         self.assertIn('class="deep-visual-layout"', html)
         self.assertIn('<video class="material-video" controls preload="metadata"', html)
+        self.assertNotIn('material-video-panel', html)
+        self.assertNotIn('原视频播放', html)
         self.assertIn('src="assets/videos/101.mp4"', html)
         self.assertIn('class="deep-frame-grid fixed-six"', html)
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+        self.assertIn("aspect-ratio: 9 / 16;", css)
+        self.assertIn("grid-template-columns: minmax(260px, 0.8fr) minmax(300px, 1fr);", css)
         self.assertEqual(presentation["chapters"]["chapter05"]["panels"][0]["video"]["src"], "assets/videos/101.mp4")
         self.assertIn("final-report/assets/videos/101.mp4", archive_names)
 

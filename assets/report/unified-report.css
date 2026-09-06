@@ -1092,21 +1092,53 @@ body.unified-report {
 
 .unified-yuntu .deep-visual-layout {
   display: grid;
-  grid-template-columns: minmax(220px, .78fr) minmax(0, 1.42fr);
+  grid-template-columns: minmax(260px, 0.8fr) minmax(300px, 1fr);
   gap: 16px;
+  align-items: stretch;
 }
 
-.unified-yuntu .material-video {
+.unified-yuntu .deep-visual-layout > .material-video {
   display: block;
   width: 100%;
   aspect-ratio: 9 / 16;
   background: #1d120c;
+  object-fit: contain;
+  align-self: center;
+}
+
+.unified-yuntu .deep-visual-layout > .material-video-unavailable {
+  align-self: center;
+  margin: 0;
+}
+
+.unified-yuntu .deep-visual-layout .deep-visual-strip {
+  min-width: 0;
+  margin: 0;
+}
+
+.unified-yuntu .deep-frame-grid.fixed-six {
+  grid-template-rows: repeat(2, minmax(0, auto));
+  height: auto;
+}
+
+.unified-yuntu .deep-frame-card {
+  grid-template-rows: auto auto;
+  overflow: visible;
+}
+
+.unified-yuntu .deep-frame-card img {
+  height: auto;
+  aspect-ratio: 9 / 16;
   object-fit: contain;
 }
 
 @media (max-width: 900px) {
   .unified-yuntu .deep-visual-layout {
     grid-template-columns: 1fr;
+  }
+
+  .unified-yuntu .deep-visual-layout > .material-video {
+    width: min(100%, 640px);
   }
 }
 

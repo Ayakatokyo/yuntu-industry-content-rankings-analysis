@@ -613,7 +613,7 @@ class YuntuReportTests(unittest.TestCase):
 
         self.assertEqual(names, expected)
 
-    def test_render_report_keeps_external_excel_link_without_writing_excel(self):
+    def test_render_report_places_highlight_workbook_in_report_directory_and_zip(self):
         report = load_module()
         fact_pack = self.deep_dive_fact_pack()
 
@@ -630,19 +630,21 @@ class YuntuReportTests(unittest.TestCase):
                 analysis_json=analysis_path,
                 output_dir=output_dir,
                 fact_pack=fact_pack,
-                highlight_export_href="../exports/highlight-frames.xlsx",
             )
 
+            workbook_path = output_dir / "highlight-frames.xlsx"
             rendered = (output_dir / "final-report.html").read_text(encoding="utf-8")
             with zipfile.ZipFile(root / "final-report.zip") as archive:
-                names = archive.namelist()
+                archive_names = archive.namelist()
+            self.assertEqual(status, 0)
+            self.assertTrue(workbook_path.is_file())
+            self.assertGreater(workbook_path.stat().st_size, 0)
+            self.assertIn(
+                'href="highlight-frames.xlsx" download>导出高光帧资产（Excel）</a>',
+                rendered,
+            )
+            self.assertIn("final-report/highlight-frames.xlsx", archive_names)
 
-        self.assertEqual(status, 0)
-        self.assertFalse((output_dir / "highlight-frames.xlsx").exists())
-        self.assertIn('<div class="highlight-export-toolbar"', rendered)
-        self.assertIn('href="../exports/highlight-frames.xlsx"', rendered)
-        self.assertIn('download>导出高光帧资产（Excel）</a>', rendered)
-        self.assertFalse(any(name.endswith("/highlight-frames.xlsx") for name in names))
 
     def test_unused_markdown_value_helper_is_removed(self):
         report = load_module()
@@ -2766,8 +2768,8 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("1 / 1", rendered)
         highlight_header = '<header class="section-header highlight-section-header">'
         self.assertIn(highlight_header, rendered)
-        self.assertNotIn('<div class="highlight-export-toolbar"', rendered)
-        self.assertNotIn("highlight-frames.xlsx", rendered)
+        self.assertIn('<div class="highlight-export-toolbar"', rendered)
+        self.assertIn('href="highlight-frames.xlsx" download>', rendered)
         self.assertLess(
             rendered.index('class="highlight-analysis-pair"'),
             rendered.index('class="highlight-frame-grid"'),

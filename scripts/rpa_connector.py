@@ -59,12 +59,6 @@ try:
 except ImportError:
     render_report = None
 
-try:
-    from yuntu_highlight_export import export_highlight_workbook
-except ImportError:
-    export_highlight_workbook = None
-
-
 LIST_FUNCTION_CODE = "rpa.conn.juliang.yt.industry.content.rankings.list"
 DETAIL_FUNCTION_CODE = "rpa.conn.juliang.yt.industry.content.rankings.detail"
 PLATFORM = "RPA_JULIANG_YT_ACCOUNT_PASSWORD"
@@ -595,18 +589,7 @@ def _parser():
     report_parser.add_argument("--fact-pack-json")
     report_parser.add_argument("--analysis-provenance")
     report_parser.add_argument("--highlight-asset-root")
-    report_parser.add_argument(
-        "--highlight-export-href",
-        help="Relative or absolute href for the standalone Chapter 04 Excel workbook",
-    )
     report_parser.add_argument("--allow-programmatic-fallback", action="store_true")
-    export_parser = commands.add_parser(
-        "export-highlight-workbook", help="Export Chapter 04 highlight frames as a standalone XLSX"
-    )
-    export_parser.add_argument("--fact-pack-json", required=True)
-    export_parser.add_argument("--presentation-json", required=True)
-    export_parser.add_argument("--asset-root", required=True)
-    export_parser.add_argument("--output", required=True)
     retry_parser = commands.add_parser(
         "retry-failed", help="Retry rejected detail fetches from an existing batch"
     )
@@ -681,52 +664,6 @@ def _list_params_from_args(args):
         }.items()
         if value is not None
     }
-
-
-def _read_json_object(path, label):
-    try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RpaConnectorError(f"无法读取{label}：{path}：{exc}") from exc
-    if not isinstance(value, dict):
-        raise RpaConnectorError(f"{label}必须是 JSON 对象：{path}")
-    return value
-
-
-def _cmd_export_highlight_workbook(args):
-    if export_highlight_workbook is None:
-        raise RpaConnectorError("高光帧 Excel 导出支持不可用")
-    fact_pack = _read_json_object(args.fact_pack_json, "事实包")
-    presentation = _read_json_object(args.presentation_json, "Presentation")
-    chapters = presentation.get("chapters")
-    chapter04 = chapters.get("chapter04") if isinstance(chapters, dict) else None
-    if not isinstance(chapter04, dict):
-        raise RpaConnectorError("Presentation 缺少 chapters.chapter04")
-    output_path = Path(args.output).resolve()
-    asset_root = Path(args.asset_root).resolve()
-    report_root = asset_root.parent if asset_root.name == "assets" else None
-    if report_root is not None:
-        try:
-            output_path.relative_to(report_root)
-        except ValueError:
-            pass
-        else:
-            raise RpaConnectorError(
-                "独立 Excel 不得写入 final-report 目录，请使用同批次 exports/ 目录"
-            )
-    try:
-        exported = export_highlight_workbook(
-            fact_pack,
-            chapter04,
-            output_path,
-            asset_root=asset_root,
-        )
-    except Exception as exc:
-        raise RpaConnectorError(f"高光帧 Excel 导出失败：{exc}") from exc
-    if exported is None or not Path(exported).is_file() or Path(exported).stat().st_size <= 0:
-        raise RpaConnectorError("没有可导出的高光帧或工作簿未生成")
-    print(Path(exported).resolve())
-    return 0
 
 
 def main(argv=None):
@@ -811,10 +748,7 @@ def main(argv=None):
                 fact_pack=fact_pack,
                 analysis_provenance=provenance,
                 highlight_asset_root=args.highlight_asset_root or fact_pack_path.parent.parent,
-                highlight_export_href=args.highlight_export_href,
             )
-        if args.command == "export-highlight-workbook":
-            return _cmd_export_highlight_workbook(args)
         if args.command == "retry-failed":
             status = retry_failed_batch_analysis(
                 args.shop_id,

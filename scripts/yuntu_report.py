@@ -11,7 +11,7 @@ from string import Template
 
 from rpa_io import write_json_atomically
 from yuntu_presentation import build_yuntu_presentation, _chapter05_script_projection
-from yuntu_highlight_export import match_brands_from_title
+from yuntu_highlight_export import export_highlight_workbook, match_brands_from_title
 from yuntu_report_sections import (
     _chapter01_baseline_metric_value,
     _chapter01_current_metric_value,
@@ -1449,7 +1449,7 @@ def _generic_text(value):
     return str(value or "")
 
 
-def _render_html(analysis, material_frames, fact_pack, presentation=None, highlight_export_href=None):
+def _render_html(analysis, material_frames, fact_pack, presentation=None, highlight_workbook_href=None):
     def esc(value):
         return html.escape(str(value))
 
@@ -1476,10 +1476,10 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None, highli
         return f'<span class="source-label">来源：{esc(text)}</span>'
 
     highlight_export = ""
-    if highlight_export_href:
+    if highlight_workbook_href:
         highlight_export = (
             '<div class="highlight-export-toolbar"><a class="highlight-export-button" href="'
-            + html.escape(str(highlight_export_href), quote=True)
+            + html.escape(str(highlight_workbook_href), quote=True)
             + '" download>导出高光帧资产（Excel）</a></div>'
         )
 
@@ -1754,7 +1754,6 @@ def render_report(
     fact_pack=None,
     analysis_provenance=None,
     highlight_asset_root=None,
-    highlight_export_href=None,
 ):
     fact_pack = fact_pack or {}
     analysis = validate_analysis_input(
@@ -1775,12 +1774,21 @@ def render_report(
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     _copy_highlight_assets(fact_pack, output, highlight_asset_root)
+    export_path = export_highlight_workbook(
+        fact_pack,
+        (presentation or {}).get("chapters", {}).get("chapter04", {})
+        if isinstance(presentation, dict)
+        else {},
+        output / "highlight-frames.xlsx",
+        # Read the copied assets so the workbook embeds the same files shipped in the report.
+        asset_root=output,
+    )
     rendered_html = _render_html(
         analysis,
         _material_frames(fact_pack),
         fact_pack,
         presentation,
-        highlight_export_href=highlight_export_href,
+        highlight_workbook_href=export_path.name if export_path else None,
     )
     write_json_atomically(presentation, output / "presentation-report.json")
     write_json_atomically(data, output / "final-report-data.json")

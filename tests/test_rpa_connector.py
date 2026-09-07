@@ -47,6 +47,18 @@ class RecordingSession:
         return self.response
 
 
+class SequencedSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.posts = []
+
+    def post(self, url, **kwargs):
+        self.posts.append((url, kwargs))
+        if not self.responses:
+            raise AssertionError("unexpected gateway request")
+        return self.responses.pop(0)
+
+
 class RaisingSession:
     def __init__(self, error):
         self.error = error
@@ -68,6 +80,14 @@ class RpaConnectorTest(unittest.TestCase):
             "YUCE_AUTHORIZATION": "authorization-token",
             "YUCE_SESSION_ID": "agent-session-123",
         }
+
+    def completed_task_session(self, task_group_id):
+        return SequencedSession(
+            [
+                FakeResponse({"success": True, "data": {"task_group_id": task_group_id}}),
+                FakeResponse({"success": True, "data": {"status": "completed", "payload": []}}),
+            ]
+        )
 
     def test_runtime_config_accepts_explicit_cookie_session_without_agent_session_id(self):
         connector = self.connector()
@@ -123,7 +143,7 @@ class RpaConnectorTest(unittest.TestCase):
             status = connector.fetch_batch_analysis(
                 "shop-42",
                 {"industry": "食品饮料"},
-                {"date_range_type": "LAST_7_DAYS"},
+                {"date_type": "LAST_7_DAYS"},
                 target_top_n=5,
                 output_dir=directory,
             )
@@ -176,6 +196,23 @@ class RpaConnectorTest(unittest.TestCase):
         invoke_list.assert_called_once_with("shop-42", {"page": 1})
         invoke_detail.assert_called_once_with("shop-42", {"material_id": "101"})
 
+    def test_batch_invoker_keeps_selection_group_local_to_the_batch(self):
+        connector = self.connector()
+        with mock.patch.object(connector, "invoke_detail", return_value={"kind": "detail"}) as invoke_detail:
+            connector._batch_invoker().invoke_detail(
+                "shop-42",
+                {
+                    "material_id": "101",
+                    "date_type": "LAST_7_DAYS",
+                    "selectionGroupId": "brand-a:feed",
+                    "brandId": "brand-a",
+                },
+            )
+
+        invoke_detail.assert_called_once_with(
+            "shop-42", {"material_id": "101", "date_type": "LAST_7_DAYS"}
+        )
+
     def test_main_dispatches_explicit_unresolved_retry(self):
         connector = self.connector()
         with mock.patch.object(
@@ -202,7 +239,7 @@ class RpaConnectorTest(unittest.TestCase):
         )
         self.assertEqual(
             connector.DETAIL_FUNCTION_CODE,
-            "rpa.conn.juliang.yt.industry.content.rankings.detail",
+            "rpa.conn.juliang.yt.industry.content.rankings.details",
         )
         self.assertEqual(connector.PLATFORM, "RPA_JULIANG_YT_ACCOUNT_PASSWORD")
         self.assertEqual(connector.DATA_SOURCE_TYPE, "rpa")
@@ -315,29 +352,72 @@ class RpaConnectorTest(unittest.TestCase):
             connector.validate_detail_business_params(
                 {
                     "material_id": "764",
-                    "date_range_type": "CUSTOM",
+                    "date_type": "CUSTOM",
                     "custom_start_date": "20260701",
                     "custom_end_date": "2026-07-02",
                 }
             ),
             {
                 "material_id": "764",
-                "date_range_type": "CUSTOM",
+                "date_type": "CUSTOM",
                 "custom_start_date": "20260701",
                 "custom_end_date": "2026-07-02",
             },
         )
         invalid_cases = (
-            ({"material_id": "not-an-id", "date_range_type": "LAST_7_DAYS"}, "material_id"),
-            ({"material_id": "764", "date_range_type": "LAST_90_DAYS"}, "date_range_type"),
-            ({"material_id": "764", "date_range_type": "CUSTOM"}, "CUSTOM requires"),
-            ({"material_id": "764", "date_range_type": "LAST_7_DAYS", "custom_start_date": "20260701"}, "CUSTOM"),
-            ({"material_id": "764", "date_range_type": "CUSTOM", "custom_start_date": "20260702", "custom_end_date": "20260701"}, "earlier"),
+            ({"material_id": "not-an-id", "date_type": "LAST_7_DAYS"}, "material_id"),
+            ({"material_id": "764", "date_type": "LAST_90_DAYS"}, "date_type"),
+            ({"material_id": "764", "date_type": "CUSTOM"}, "CUSTOM requires"),
+            ({"material_id": "764", "date_type": "LAST_7_DAYS", "custom_start_date": "20260701"}, "CUSTOM"),
+            ({"material_id": "764", "date_type": "CUSTOM", "custom_start_date": "20260702", "custom_end_date": "20260701"}, "earlier"),
+            ({"material_id": "764", "date_range_type": "LAST_7_DAYS"}, "unexpected"),
         )
         for raw_params, message in invalid_cases:
             with self.subTest(raw_params=raw_params):
                 with self.assertRaisesRegex(connector.RpaConnectorError, message):
                     connector.validate_detail_business_params(raw_params)
+
+    def test_detail_invocation_uses_the_new_code_and_fetch_task_protocol(self):
+        connector = self.connector()
+        session = SequencedSession(
+            [
+                FakeResponse({"success": True, "data": {"task_group_id": "task-123"}}),
+                FakeResponse({"success": True, "data": {"status": "completed", "files": []}}),
+            ]
+        )
+        with mock.patch.object(connector.time, "sleep") as sleep:
+            result = connector.invoke_detail(
+                shop_id="shop-42",
+                business_params={"material_id": "764", "date_type": "LAST_7_DAYS"},
+                environ=self.runtime_environment(),
+                session=session,
+            )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["task_group_id"], "task-123")
+        self.assertEqual(sleep.call_args.args, (10,))
+        submit_url, submit_options = session.posts[0]
+        self.assertEqual(submit_url, "https://gateway.example/adg/v1/agent/fetch/tasks")
+        self.assertEqual(
+            submit_options["json"],
+            {
+                "authorization": "authorization-token",
+                "agent_session_id": "agent-session-123",
+                "data_source_type": "rpa",
+                "platform": "RPA_JULIANG_YT_ACCOUNT_PASSWORD",
+                "function_code": "rpa.conn.juliang.yt.industry.content.rankings.details",
+                "business_params": {"material_id": "764", "date_type": "LAST_7_DAYS"},
+                "shop_id": "shop-42",
+            },
+        )
+        self.assertEqual(
+            session.posts[1][0],
+            "https://gateway.example/adg/v1/agent/fetch/tasks/status",
+        )
+        self.assertEqual(
+            session.posts[1][1]["json"],
+            {"authorization": "authorization-token", "task_group_id": "task-123"},
+        )
 
     def test_list_accounts_uses_a_fixed_platform_payload(self):
         connector = self.connector()
@@ -376,30 +456,31 @@ class RpaConnectorTest(unittest.TestCase):
 
     def test_separate_list_and_detail_invocations_use_fixed_payloads(self):
         connector = self.connector()
-        list_session = RecordingSession(FakeResponse({"success": True, "data": {}}))
-        detail_session = RecordingSession(FakeResponse({"success": True, "data": {}}))
+        list_session = self.completed_task_session("list-task")
+        detail_session = self.completed_task_session("detail-task")
         environment = self.runtime_environment()
 
-        connector.invoke_list(
-            shop_id=" shop-42 ",
-            business_params={"industry": "食品饮料"},
-            environ=environment,
-            session=list_session,
-        )
-        connector.invoke_detail(
-            shop_id=" shop-42 ",
-            business_params={"material_id": "764", "date_range_type": "LAST_7_DAYS"},
-            environ=environment,
-            session=detail_session,
-        )
+        with mock.patch.object(connector.time, "sleep"):
+            connector.invoke_list(
+                shop_id=" shop-42 ",
+                business_params={"industry": "食品饮料"},
+                environ=environment,
+                session=list_session,
+            )
+            connector.invoke_detail(
+                shop_id=" shop-42 ",
+                business_params={"material_id": "764", "date_type": "LAST_7_DAYS"},
+                environ=environment,
+                session=detail_session,
+            )
 
         for session, function_code, params in (
             (list_session, connector.LIST_FUNCTION_CODE, {"industry": "食品饮料"}),
-            (detail_session, connector.DETAIL_FUNCTION_CODE, {"material_id": "764", "date_range_type": "LAST_7_DAYS"}),
+            (detail_session, connector.DETAIL_FUNCTION_CODE, {"material_id": "764", "date_type": "LAST_7_DAYS"}),
         ):
-            self.assertEqual(len(session.posts), 1)
+            self.assertEqual(len(session.posts), 2)
             url, options = session.posts[0]
-            self.assertEqual(url, "https://gateway.example/adg/v1/agent/invoke")
+            self.assertEqual(url, "https://gateway.example/adg/v1/agent/fetch/tasks")
             self.assertEqual(
                 options,
                 {
@@ -414,8 +495,12 @@ class RpaConnectorTest(unittest.TestCase):
                     },
                     "headers": {"Content-Type": "application/json"},
                     "cookies": {"YCSESSIONID": "authorization-token"},
-                    "timeout": 300,
+                    "timeout": 30,
                 },
+            )
+            self.assertEqual(
+                session.posts[1][0],
+                "https://gateway.example/adg/v1/agent/fetch/tasks/status",
             )
 
     def test_rebound_exported_metadata_cannot_change_gateway_payloads(self):
@@ -426,8 +511,8 @@ class RpaConnectorTest(unittest.TestCase):
             "PLATFORM": connector.PLATFORM,
             "DATA_SOURCE_TYPE": connector.DATA_SOURCE_TYPE,
         }
-        list_session = RecordingSession(FakeResponse({"success": True, "data": {}}))
-        detail_session = RecordingSession(FakeResponse({"success": True, "data": {}}))
+        list_session = self.completed_task_session("list-task")
+        detail_session = self.completed_task_session("detail-task")
         accounts_session = RecordingSession(FakeResponse({"success": True, "data": []}))
         try:
             connector.LIST_FUNCTION_CODE = "rpa.conn.attacker.list"
@@ -435,15 +520,16 @@ class RpaConnectorTest(unittest.TestCase):
             connector.PLATFORM = "ATTACKER_PLATFORM"
             connector.DATA_SOURCE_TYPE = "attacker"
 
-            connector.invoke_list(
-                "shop-42", {}, environ=self.runtime_environment(), session=list_session
-            )
-            connector.invoke_detail(
-                "shop-42",
-                {"material_id": "764", "date_range_type": "LAST_7_DAYS"},
-                environ=self.runtime_environment(),
-                session=detail_session,
-            )
+            with mock.patch.object(connector.time, "sleep"):
+                connector.invoke_list(
+                    "shop-42", {}, environ=self.runtime_environment(), session=list_session
+                )
+                connector.invoke_detail(
+                    "shop-42",
+                    {"material_id": "764", "date_type": "LAST_7_DAYS"},
+                    environ=self.runtime_environment(),
+                    session=detail_session,
+                )
             connector.list_accounts(
                 environ=self.runtime_environment(), session=accounts_session
             )
@@ -457,7 +543,7 @@ class RpaConnectorTest(unittest.TestCase):
         )
         self.assertEqual(
             detail_session.posts[0][1]["json"]["function_code"],
-            "rpa.conn.juliang.yt.industry.content.rankings.detail",
+            "rpa.conn.juliang.yt.industry.content.rankings.details",
         )
         self.assertEqual(
             list_session.posts[0][1]["json"]["platform"],
@@ -481,14 +567,15 @@ class RpaConnectorTest(unittest.TestCase):
             connector.FUNCTION_CODES_BY_OPERATION["list"] = malicious_code
         else:
             setattr(connector, "FUNCTION_CODES_BY_OPERATION", {"list": malicious_code})
-        session = RecordingSession(FakeResponse({"success": True, "data": {}}))
+        session = self.completed_task_session("list-task")
 
-        connector.invoke_list(
-            shop_id="shop-42",
-            business_params={},
-            environ=self.runtime_environment(),
-            session=session,
-        )
+        with mock.patch.object(connector.time, "sleep"):
+            connector.invoke_list(
+                shop_id="shop-42",
+                business_params={},
+                environ=self.runtime_environment(),
+                session=session,
+            )
 
         self.assertEqual(
             session.posts[0][1]["json"]["function_code"],
@@ -518,7 +605,7 @@ class RpaConnectorTest(unittest.TestCase):
         ):
             with self.subTest(session=type(session).__name__), tempfile.TemporaryDirectory() as temporary_directory:
                 output = Path(temporary_directory) / "result.json"
-                with self.assertRaisesRegex(connector.RpaConnectorError, "fetch RPA list|unsuccessful") as context:
+                with self.assertRaisesRegex(connector.RpaConnectorError, "submit RPA list|unsuccessful") as context:
                     connector.invoke_list(
                         shop_id="shop-42",
                         business_params={},

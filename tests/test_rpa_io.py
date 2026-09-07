@@ -40,6 +40,20 @@ class FakeSession:
 
 
 class RpaIoTests(unittest.TestCase):
+    def test_unpack_gateway_result_accepts_completed_async_task_files(self):
+        io = load_module()
+
+        unpacked = io.unpack_gateway_result(
+            {
+                "task_group_id": "task-123",
+                "status": "completed",
+                "files": [{"fileUrl": "https://download.example/detail.csv"}],
+            }
+        )
+
+        self.assertEqual(unpacked.kind, "files")
+        self.assertEqual(unpacked.file_url, "https://download.example/detail.csv")
+
     def test_unpack_gateway_result_accepts_files_envelope(self):
         io = load_module()
         result = {

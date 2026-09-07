@@ -98,11 +98,33 @@ def _file_url_from_envelope(result):
     return file_url.strip()
 
 
+def _file_url_from_completed_task(result):
+    if result.get("status") not in {"completed", "partial_success"}:
+        raise RpaIoError("RPA async task did not complete successfully")
+    files = result.get("files")
+    if not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict):
+        raise RpaIoError("RPA async task must contain exactly one fileUrl")
+    file_url = files[0].get("fileUrl")
+    if not isinstance(file_url, str) or not file_url.strip():
+        raise RpaIoError("RPA async task fileUrl is missing")
+    return file_url.strip()
+
+
 def unpack_gateway_result(result):
     if isinstance(result, list):
         return GatewayResult(kind="records", records=result)
     if not isinstance(result, dict):
         raise RpaIoError("RPA gateway result must be a list or object")
+
+    if "status" in result and ("files" in result or "payload" in result):
+        if result.get("status") not in {"completed", "partial_success"}:
+            raise RpaIoError("RPA async task did not complete successfully")
+        if "files" in result:
+            return GatewayResult(kind="files", file_url=_file_url_from_completed_task(result))
+        payload = result.get("payload")
+        if isinstance(payload, dict):
+            payload = [payload]
+        return GatewayResult(kind="records", records=_records_from_payload(payload))
 
     data = result.get("data")
     if isinstance(data, dict) and data.get("result_type") == "files":

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
@@ -60,11 +61,15 @@ except ImportError:
     render_report = None
 
 LIST_FUNCTION_CODE = "rpa.conn.juliang.yt.industry.content.rankings.list"
-DETAIL_FUNCTION_CODE = "rpa.conn.juliang.yt.industry.content.rankings.detail"
+DETAIL_FUNCTION_CODE = "rpa.conn.juliang.yt.industry.content.rankings.details"
 PLATFORM = "RPA_JULIANG_YT_ACCOUNT_PASSWORD"
 DATA_SOURCE_TYPE = "rpa"
 HEADERS = {"Content-Type": "application/json"}
-RPA_REQUEST_TIMEOUT_SECONDS = 300
+HTTP_REQUEST_TIMEOUT_SECONDS = 30
+POLL_INTERVAL_SECONDS = 10
+POLL_TIMEOUT_SECONDS = 3600
+RUNNING_TASK_STATUSES = {"pending", "running"}
+SUCCESS_TASK_STATUSES = {"completed", "partial_success"}
 REQUIRED_ENVIRONMENT = (
     "ENV_BACKEND_HOST",
     "YUCE_AUTHORIZATION",
@@ -115,7 +120,7 @@ LIST_FIELDS = {
 }
 DETAIL_FIELDS = {
     "material_id",
-    "date_range_type",
+    "date_type",
     "custom_start_date",
     "custom_end_date",
 }
@@ -126,7 +131,7 @@ BUSINESS_PARAMS_SCHEMA = {
     "title": "云图行业内容榜单分析",
     "list_fields": sorted(LIST_FIELDS),
     "detail_date_fields": [
-        "date_range_type",
+        "date_type",
         "custom_start_date",
         "custom_end_date",
     ],
@@ -331,16 +336,16 @@ def validate_detail_business_params(raw_params):
     material_id = raw_params.get("material_id")
     if not isinstance(material_id, str) or not material_id.isdigit():
         raise RpaConnectorError("material_id must contain digits only")
-    date_range_type = raw_params.get("date_range_type")
-    if date_range_type not in DATE_RANGE_TYPES:
+    date_type = raw_params.get("date_type")
+    if date_type not in DATE_RANGE_TYPES:
         raise RpaConnectorError(
-            "date_range_type must be one of: " + ", ".join(sorted(DATE_RANGE_TYPES))
+            "date_type must be one of: " + ", ".join(sorted(DATE_RANGE_TYPES))
         )
 
-    params = {"material_id": material_id, "date_range_type": date_range_type}
+    params = {"material_id": material_id, "date_type": date_type}
     start_date = raw_params.get("custom_start_date")
     end_date = raw_params.get("custom_end_date")
-    if date_range_type == "CUSTOM":
+    if date_type == "CUSTOM":
         if not start_date or not end_date:
             raise RpaConnectorError("CUSTOM requires custom_start_date and custom_end_date")
         start = _parse_date(start_date, "custom_start_date")
@@ -384,6 +389,25 @@ def _require_successful_result(result):
     return result
 
 
+def _operation_function_code(operation):
+    # Keep the gateway route closed over the two supported operations.  Public
+    # constants are display metadata and must not become caller-controlled code.
+    if operation == "list":
+        return "rpa.conn.juliang.yt.industry.content.rankings.list"
+    if operation == "detail":
+        return "rpa.conn.juliang.yt.industry.content.rankings.details"
+    raise RpaConnectorError("operation must be list or detail")
+
+
+def _response_data(response, action):
+    _raise_for_status(response, action)
+    result = _require_successful_result(_response_json(response, action))
+    data = result.get("data")
+    if not isinstance(data, dict):
+        raise RpaConnectorError(f"gateway {action} response is missing an object data field")
+    return data
+
+
 def list_accounts(environ=None, session=None):
     session = _default_session() if session is None else session
     api_base, authorization, _session_id, cookies = runtime_config(environ)
@@ -406,20 +430,15 @@ def list_accounts(environ=None, session=None):
     return _require_successful_result(_response_json(response, "list RPA accounts"))
 
 
-def _invoke(operation, shop_id, business_params, environ=None, session=None):
-    if operation == "list":
-        function_code = "rpa.conn.juliang.yt.industry.content.rankings.list"
-    elif operation == "detail":
-        function_code = "rpa.conn.juliang.yt.industry.content.rankings.detail"
-    else:
-        raise RpaConnectorError("operation must be list or detail")
+def submit_fetch_task(operation, shop_id, business_params, *, environ=None, session=None):
+    function_code = _operation_function_code(operation)
     if not isinstance(shop_id, str) or not shop_id.strip():
         raise RpaConnectorError("shop_id is required")
     session = _default_session() if session is None else session
     api_base, authorization, session_id, cookies = runtime_config(environ)
     try:
         response = session.post(
-            f"{api_base}/adg/v1/agent/invoke",
+            f"{api_base}/adg/v1/agent/fetch/tasks",
             json={
                 "authorization": authorization,
                 "agent_session_id": session_id,
@@ -431,15 +450,93 @@ def _invoke(operation, shop_id, business_params, environ=None, session=None):
             },
             headers=HEADERS,
             cookies=cookies,
-            timeout=RPA_REQUEST_TIMEOUT_SECONDS,
+            timeout=HTTP_REQUEST_TIMEOUT_SECONDS,
         )
     except Exception as exc:
         raise RpaConnectorError(
-            f"unable to fetch RPA {operation}: transport request failed"
+            f"unable to submit RPA {operation}: transport request failed"
         ) from exc
-    _raise_for_status(response, f"fetch RPA {operation}")
-    return _require_successful_result(
-        _response_json(response, f"fetch RPA {operation}")
+    data = _response_data(response, f"submit RPA {operation}")
+    task_group_id = data.get("task_group_id")
+    if not isinstance(task_group_id, str) or not task_group_id.strip():
+        raise RpaConnectorError(f"submit RPA {operation} response is missing task_group_id")
+    return task_group_id.strip()
+
+
+def query_fetch_task(
+    task_group_id,
+    *,
+    environ=None,
+    session=None,
+    request_timeout_seconds=HTTP_REQUEST_TIMEOUT_SECONDS,
+):
+    if not isinstance(task_group_id, str) or not task_group_id.strip():
+        raise RpaConnectorError("task_group_id is required")
+    if request_timeout_seconds <= 0:
+        raise RpaConnectorError("request_timeout_seconds must be positive")
+    session = _default_session() if session is None else session
+    api_base, authorization, _session_id, cookies = runtime_config(environ)
+    try:
+        response = session.post(
+            f"{api_base}/adg/v1/agent/fetch/tasks/status",
+            json={"authorization": authorization, "task_group_id": task_group_id},
+            headers=HEADERS,
+            cookies=cookies,
+            timeout=request_timeout_seconds,
+        )
+    except Exception as exc:
+        raise RpaConnectorError(
+            "unable to query RPA task status: transport request failed"
+        ) from exc
+    return _response_data(response, "query RPA task status")
+
+
+def wait_fetch_task(
+    task_group_id,
+    *,
+    environ=None,
+    session=None,
+    timeout_seconds=POLL_TIMEOUT_SECONDS,
+    poll_interval_seconds=POLL_INTERVAL_SECONDS,
+):
+    if timeout_seconds <= 0 or poll_interval_seconds <= 0:
+        raise RpaConnectorError("task polling timeout and interval must be positive")
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RpaConnectorError(f"poll timeout: {task_group_id}")
+        time.sleep(min(poll_interval_seconds, remaining))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RpaConnectorError(f"poll timeout: {task_group_id}")
+        result = query_fetch_task(
+            task_group_id,
+            environ=environ,
+            session=session,
+            request_timeout_seconds=min(HTTP_REQUEST_TIMEOUT_SECONDS, remaining),
+        )
+        status = result.get("status")
+        if status in SUCCESS_TASK_STATUSES:
+            return {**result, "task_group_id": task_group_id}
+        if status == "failed":
+            raise RpaConnectorError(f"RPA task failed: {task_group_id}")
+        if status not in RUNNING_TASK_STATUSES:
+            raise RpaConnectorError(f"RPA task returned unknown status {status!r}: {task_group_id}")
+
+
+def _invoke(operation, shop_id, business_params, environ=None, session=None):
+    task_group_id = submit_fetch_task(
+        operation,
+        shop_id,
+        business_params,
+        environ=environ,
+        session=session,
+    )
+    return wait_fetch_task(
+        task_group_id,
+        environ=environ,
+        session=session,
     )
 
 
@@ -457,7 +554,7 @@ def invoke_detail(shop_id, business_params, environ=None, session=None):
     return _invoke(
         "detail",
         shop_id,
-        business_params,
+        validate_detail_business_params(business_params),
         environ=environ,
         session=session,
     )
@@ -478,9 +575,18 @@ def _validate_detail_date_params(raw_params):
 
 
 def _batch_invoker():
+    def detail_params(params):
+        return {name: params[name] for name in DETAIL_FIELDS if name in params}
+
     return ConnectorInvoker(
         lambda sid, params: invoke_list(sid, params),
-        lambda sid, params: invoke_detail(sid, params),
+        # Selection groups are list-derived local scheduling context.  The
+        # details connector contract accepts only the four DETAIL_FIELDS.
+        lambda sid, params: invoke_detail(sid, detail_params(params)),
+        submit_detail=lambda sid, params: submit_fetch_task(
+            "detail", sid, validate_detail_business_params(detail_params(params))
+        ),
+        wait_detail=lambda task_group_id: wait_fetch_task(task_group_id),
     )
 
 
@@ -636,13 +742,13 @@ def _parser():
 def _cmd_self_test():
     if LIST_FUNCTION_CODE != "rpa.conn.juliang.yt.industry.content.rankings.list":
         raise RpaConnectorError("unexpected list function code")
-    if DETAIL_FUNCTION_CODE != "rpa.conn.juliang.yt.industry.content.rankings.detail":
+    if DETAIL_FUNCTION_CODE != "rpa.conn.juliang.yt.industry.content.rankings.details":
         raise RpaConnectorError("unexpected detail function code")
     if PLATFORM != "RPA_JULIANG_YT_ACCOUNT_PASSWORD" or DATA_SOURCE_TYPE != "rpa":
         raise RpaConnectorError("unexpected fixed gateway metadata")
     validate_list_business_params({})
     validate_detail_business_params(
-        {"material_id": "1", "date_range_type": "LAST_7_DAYS"}
+        {"material_id": "1", "date_type": "LAST_7_DAYS"}
     )
     print("self-test passed")
 
@@ -768,7 +874,7 @@ def main(argv=None):
             args.shop_id,
             _list_params_from_args(args),
             {
-                "date_range_type": args.detail_date_range_type,
+                "date_type": args.detail_date_range_type,
                 "custom_start_date": args.detail_custom_start_date,
                 "custom_end_date": args.detail_custom_end_date,
             },

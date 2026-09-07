@@ -16,7 +16,7 @@ metadata:
 
 ## 采集
 
-先读 `references/platforms/juliang-yt.md`、`references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_list.md` 和 `references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_detail.md`。固定连接器为 `rpa.conn.juliang.yt.industry.content.rankings.list` 与 `rpa.conn.juliang.yt.industry.content.rankings.detail`；仅使用平台运行时注入的 `ENV_BACKEND_HOST`、`YUCE_AUTHORIZATION`、`YUCE_SESSION_ID`（或 `YCSESSIONID`），凭证只留在环境变量。未知 `shop_id` 先 `list-accounts`；404 查基路径，504 为网关超时，保留批次后用 `status` 排查。
+先读 `references/platforms/juliang-yt.md`、`references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_list.md` 和 `references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_details.md`。固定连接器为 `rpa.conn.juliang.yt.industry.content.rankings.list` 与 `rpa.conn.juliang.yt.industry.content.rankings.details`；仅使用平台运行时注入的 `ENV_BACKEND_HOST`、`YUCE_AUTHORIZATION`、`YUCE_SESSION_ID`（或 `YCSESSIONID`），凭证只留在环境变量。MCP 知识库地址不是 `ENV_BACKEND_HOST`。未知 `shop_id` 先 `list-accounts`；404 查基路径，504 为网关超时，保留批次后用 `status` 排查。
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py list-accounts
@@ -28,9 +28,9 @@ python <skill-root>/scripts/rpa_connector.py status --output-dir "RPA数据汇�
 
 自定义范围时，两组日期类型都改 `CUSTOM` 并传 `--custom-start-date`、`--custom-end-date`、`--detail-custom-start-date`、`--detail-custom-end-date`；列表筛选还可传 `--ages`、`--genders`、`--crowd-groups`、`--brand-scope-type`、`--brands`、`--ranking-limit-type`。`--top-n` 仅兼容旧列表参数，不控制品牌分析范围。
 
-固定顺序：三次列表（query、previous_period、industry）→ 选择唯一数字型 `material_id` → 详情 → 规范化 → 事实包 → 当前对话模型洞察 → 报告。RPA 优先 `files-envelope`/CSV：先落盘 `raw-csv/list.csv`、`raw-csv/details/<material_id>.csv`，再生成 `normalized/list-records.json`、`normalized/detail-records/<material_id>.json`；CSV 为主路径，兼容旧 `list-response.json`、`details/<material_id>.json`、`manifest.json`。
+固定顺序：三次列表（query、previous_period、industry）→ 验证 `list_context` 并选择唯一数字型 `material_id` → 详情 → 规范化 → 事实包 → 当前对话模型洞察 → 报告。RPA 优先 `files-envelope`/CSV：先落盘 `raw-csv/list.csv`、`raw-csv/details/<material_id>.csv`，再生成 `normalized/list-records.json`、`normalized/detail-records/<material_id>.json`；CSV 为主路径，兼容旧 `list-response.json`、`details/<material_id>.json`、`manifest.json`。
 
-`fetch` 是长任务，以异步方式观察，单次最多等待 300 秒。`run-summary.json` 保存参数指纹；`batch-manifest.json` 保存 `rankingRuns`、`list_context`、候选与 `unresolvedMaterials`。已落盘详情不重复提交；`status --output-dir` 同时核对摘要、manifest、规范化列表和详情。列表请求失败写清单并非零退出且不发详情；详情请求失败继续处理其余素材，最终非零但保留成功文件。仅在用户确认可能重复请求后运行：
+`fetch` 通过异步任务协议观察，单个远端任务最多轮询 3600 秒。`run-summary.json` 保存参数指纹和 `taskRuns` 汇总投影；`batch-manifest.json` 在提交后立即保存 `task_group_id`，并记录 `unresolvedMaterials`。同一输出目录恢复时只轮询已登记任务，不重复提交。`status --output-dir` 同时核对摘要、manifest、规范化列表和详情。列表请求失败写清单并非零退出且不发详情；详情请求失败继续处理其余素材，最终非零但保留成功文件。仅在用户确认可能重复请求后运行：
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py retry-failed --shop-id "<shop_id>" --output-dir "RPA数据汇总/yuntu-rankings-analysis"

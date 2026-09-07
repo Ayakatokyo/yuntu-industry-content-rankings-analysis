@@ -121,7 +121,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
         skill = self.read_skill()
         for connector in (
             "rpa.conn.juliang.yt.industry.content.rankings.list",
-            "rpa.conn.juliang.yt.industry.content.rankings.detail",
+            "rpa.conn.juliang.yt.industry.content.rankings.details",
         ):
             self.assertIn(connector, skill)
         for environment_variable in (
@@ -191,7 +191,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
         for phrase in (
             "长任务",
             "异步",
-            "300 秒",
+            "3600 秒",
             "unresolvedMaterials",
             "retry-unresolved",
             "不重复提交",
@@ -237,7 +237,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
             skill,
         )
         self.assertIn(
-            "references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_detail.md",
+            "references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_details.md",
             skill,
         )
 

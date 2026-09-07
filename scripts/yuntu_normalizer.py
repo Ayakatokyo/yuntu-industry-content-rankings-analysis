@@ -342,6 +342,58 @@ def _flat_point(raw, prefix):
     return point or None
 
 
+def _detail_material_identity(raw, core_data, fallback):
+    """Reject conflicting root/core identities before choosing a detail row."""
+    values = []
+    for value in (
+        raw.get("materialId"), raw.get("material_id"), raw.get("coreData.materialId"),
+        raw.get("core_data.material_id"), core_data.get("objectId"),
+        core_data.get("materialId"),
+    ):
+        if value not in (None, ""):
+            values.append(_require_material_id(value))
+    if len(set(values)) > 1:
+        raise YuntuNormalizeError("detail root materialId conflicts with coreData objectId")
+    return values[0] if values else _require_material_id(fallback)
+
+
+def _canonical_period_date(value):
+    text = _text(value).replace("-", "")
+    return text if len(text) == 8 and text.isdigit() else ""
+
+
+def _verify_detail_context(*, date_type, start_date, end_date, expected_context):
+    if not expected_context:
+        return {"valid": True, "mode": "not_requested", "issues": []}
+    expected_type = _text(
+        expected_context.get("date_type") or expected_context.get("date_range_type")
+    )
+    if not expected_type:
+        return {"valid": True, "mode": "not_requested", "issues": []}
+    issues = []
+    if _text(date_type) != expected_type:
+        issues.append("date_type")
+    if expected_type == "CUSTOM":
+        if _canonical_period_date(start_date) != _canonical_period_date(
+            expected_context.get("custom_start_date")
+        ):
+            issues.append("custom_start_date")
+        if _canonical_period_date(end_date) != _canonical_period_date(
+            expected_context.get("custom_end_date")
+        ):
+            issues.append("custom_end_date")
+        mode = "custom_dates"
+    else:
+        # Relative periods are connector-defined.  A directory name or local
+        # clock must never be promoted into an asserted server date range.
+        mode = "relative_type_only"
+    if issues:
+        raise YuntuNormalizeError(
+            "detail response period does not match request: " + ", ".join(issues)
+        )
+    return {"valid": True, "mode": mode, "issues": []}
+
+
 def _flat_detail_trends(raw):
     """Convert secondTrend.<name>.* CSV columns to the legacy trend shape."""
     prefix = "secondTrend."
@@ -369,24 +421,101 @@ def _flat_detail_trends(raw):
 
 
 def _flat_content_formula(raw):
-    """Keep flat formula paths while exposing stable labels/detail keys."""
+    """Preserve formula source domains from flat CSV columns."""
     prefix = "contentFormula."
     values = {}
+    sources = {"title": {}, "visual": {}, "script": {}}
+    source_names = {"视频标题": "title", "视频画面": "visual", "视频脚本": "script"}
     for key, value in raw.items():
         if not key.startswith(prefix):
             continue
         path = key[len(prefix):]
-        if path == "视频脚本.text":
-            continue
         if value in (None, "", []):
             continue
         if path.endswith(".labels") or path == "labels":
             values["labels"] = value
-        elif ".detail." in path:
-            values["detail." + path.split(".detail.", 1)[1]] = value
         else:
-            values[path] = value
+            source_name, separator, source_path = path.partition(".")
+            target = source_names.get(source_name)
+            if target and separator:
+                sources[target][source_path] = value
+            else:
+                values[path] = value
+    normalized_sources = {
+        name: source for name, source in sources.items() if source
+    }
+    if normalized_sources:
+        values["sources"] = normalized_sources
     return values or None
+
+
+def _nested_detail_trends(raw):
+    second_trend = raw.get("secondTrend")
+    if not isinstance(second_trend, dict):
+        return []
+    trends = []
+    for name, value in second_trend.items():
+        if not isinstance(value, dict):
+            continue
+        trends.append(
+            {
+                "trendName": value.get("trendName") or name,
+                "trendType": value.get("trendType") or value.get("trend_type"),
+                "tendList": value.get("tendList") or value.get("tend_list") or [],
+                "highPoint": value.get("highPoint"),
+                "lossPoint": value.get("lossPoint"),
+            }
+        )
+    return trends
+
+
+def _nested_content_formula(value):
+    if not isinstance(value, dict):
+        return value
+    formula = value.get("本视频内容公式")
+    labels = formula.get("labels") if isinstance(formula, dict) else value.get("labels")
+    result = {"labels": labels} if labels is not None else {}
+    sources = {}
+    for raw_name, source_name in (("视频标题", "title"), ("视频画面", "visual"), ("视频脚本", "script")):
+        source = value.get(raw_name)
+        if not isinstance(source, dict):
+            continue
+        normalized = {}
+        if source.get("text") not in (None, ""):
+            normalized["text"] = source.get("text")
+        if isinstance(source.get("detail"), dict):
+            normalized["detail"] = source["detail"]
+        if normalized:
+            sources[source_name] = normalized
+    if sources:
+        result["sources"] = sources
+    return result or None
+
+
+def _nested_core_metrics(core_data):
+    if not isinstance(core_data, dict):
+        return {}
+    excluded = {
+        "objectId", "materialId", "title", "videoDuration", "videoDurationType",
+        "dateType", "customStartDate", "customEndDate", "videoUrl",
+    }
+    return {
+        name: parsed
+        for name, value in core_data.items()
+        if name not in excluded and (parsed := _number(value)) is not None
+    }
+
+
+def _normalized_creative_breakdown(value):
+    if not isinstance(value, dict):
+        return value
+    tags = []
+    for raw_value in value.values():
+        for item in raw_value if isinstance(raw_value, list) else [raw_value]:
+            for tag in re.split(r"[、，,；;\\n]+", _text(item)):
+                if tag and tag not in tags:
+                    tags.append(tag)
+    return {"raw": value, "tags": tags}
 
 
 def _flat_creative_breakdown(raw):
@@ -431,6 +560,7 @@ def normalize_detail_records(
     source_path,
     source_hash=None,
     expected_selection_group=None,
+    expected_context=None,
 ):
     if isinstance(raw_records, list) and raw_records:
         raw = raw_records[0]
@@ -442,22 +572,29 @@ def normalize_detail_records(
         raise YuntuNormalizeError("detail record must be an object")
 
     expected_material_id = _require_material_id(material_id)
-    actual_material_id = _require_material_id(
-        raw.get("materialId")
-        or raw.get("material_id")
-        or raw.get("coreData.materialId")
-        or raw.get("core_data.material_id")
-        or material_id
-    )
+    core_data = raw.get("coreData") if isinstance(raw.get("coreData"), dict) else {}
+    actual_material_id = _detail_material_identity(raw, core_data, material_id)
     if actual_material_id != expected_material_id:
         raise YuntuNormalizeError("detail material_id does not match selected material")
 
+    new_detail_schema = any(
+        isinstance(raw.get(key), dict)
+        for key in ("coreData", "audiencePortrait", "secondTrend")
+    )
     selection_group = _selection_group(raw)
     if expected_selection_group is not None:
         expected_id = _text(expected_selection_group.get("id"))
         if expected_id and expected_id != "default":
             if selection_group["id"] == "default":
-                raise YuntuNormalizeError("detail response is missing selection group echo")
+                if not new_detail_schema:
+                    raise YuntuNormalizeError("detail response is missing selection group echo")
+                # The new details connector only receives material/date fields.
+                # Keep the grouping chosen from the verified list response rather
+                # than requiring an echo that is not part of its contract.
+                selection_group = {
+                    key: _text(expected_selection_group.get(key))
+                    for key in selection_group
+                }
             if selection_group["id"] != expected_id:
                 raise YuntuNormalizeError("detail selection group does not match selected material")
             selection_group = {
@@ -465,6 +602,7 @@ def normalize_detail_records(
                 for key in selection_group
             }
 
+    nested_schema = new_detail_schema
     trend_series = []
     high_points = []
     loss_points = []
@@ -473,7 +611,10 @@ def normalize_detail_records(
         for key in raw
     )
     flat_trends = _flat_detail_trends(raw) if flat_schema else []
-    trends_value = raw.get("trends") if "trends" in raw else (flat_trends if flat_schema else None)
+    nested_trends = _nested_detail_trends(raw) if nested_schema else []
+    trends_value = raw.get("trends") if "trends" in raw else (
+        flat_trends if flat_schema else (nested_trends if nested_schema else None)
+    )
     trends = trends_value
     if not isinstance(trends_value, list):
         trends = []
@@ -502,37 +643,60 @@ def normalize_detail_records(
                 }
             )
     flat_script_text = raw.get("contentFormula.视频脚本.text")
-    script_text_value = raw.get("scriptText") or raw.get("script_text") or flat_script_text
+    nested_formula = _nested_content_formula(raw.get("contentFormula")) if nested_schema else None
+    nested_script = (
+        nested_formula.get("sources", {}).get("script", {}).get("text")
+        if isinstance(nested_formula, dict)
+        else None
+    )
+    script_text_value = raw.get("scriptText") or raw.get("script_text") or flat_script_text or nested_script
     content_formula = raw.get("contentFormula") or raw.get("content_formula")
-    if content_formula is None and flat_schema:
+    if nested_schema:
+        content_formula = nested_formula
+    elif content_formula is None and flat_schema:
         content_formula = _flat_content_formula(raw)
     if not isinstance(content_formula, (str, dict, list)):
         content_formula = None
     creative_breakdown = raw.get("creativeBreakdown") or raw.get("creative_breakdown")
-    if creative_breakdown is None and flat_schema:
+    if nested_schema:
+        creative_breakdown = _normalized_creative_breakdown(creative_breakdown)
+    elif creative_breakdown is None and flat_schema:
         creative_breakdown = _flat_creative_breakdown(raw)
     script_segments, script_segments_availability = _script_segments(
         raw.get("scriptSegments") or raw.get("script_segments")
     )
-    date_type = _flat_detail_value(raw, "dateType") or raw.get("dateRangeType") or raw.get("date_range_type")
-    start_date = _flat_detail_value(raw, "customStartDate") or raw.get("startDate") or raw.get("start_date")
-    end_date = _flat_detail_value(raw, "customEndDate") or raw.get("endDate") or raw.get("end_date")
-    video_duration = _flat_detail_value(raw, "videoDuration") or raw.get("videoDuration") or raw.get("video_duration")
-    core_metrics = _flat_core_metrics(raw) if flat_schema else {}
-    title = _flat_detail_value(raw, "title") or raw.get("title")
-    video_url = _flat_detail_value(raw, "videoUrl") or raw.get("videoUrl") or raw.get("video_url")
+    date_type = _flat_detail_value(raw, "dateType") or raw.get("dateType") or raw.get("dateRangeType") or raw.get("date_range_type") or core_data.get("dateType")
+    start_date = _flat_detail_value(raw, "customStartDate") or raw.get("customStartDate") or raw.get("startDate") or raw.get("start_date") or core_data.get("customStartDate")
+    end_date = _flat_detail_value(raw, "customEndDate") or raw.get("customEndDate") or raw.get("endDate") or raw.get("end_date") or core_data.get("customEndDate")
+    video_duration = _flat_detail_value(raw, "videoDuration") or raw.get("videoDuration") or raw.get("video_duration") or core_data.get("videoDuration")
+    core_metrics = _flat_core_metrics(raw) if flat_schema else _nested_core_metrics(core_data)
+    title = _flat_detail_value(raw, "title") or raw.get("title") or core_data.get("title")
+    video_url = _flat_detail_value(raw, "videoUrl") or raw.get("videoUrl") or raw.get("video_url") or core_data.get("videoUrl")
+    audience_portrait = raw.get("audiencePortrait") if isinstance(raw.get("audiencePortrait"), dict) else {}
     source_hashes = {"detail": _text(source_hash)} if source_hash else {}
+    period_verification = _verify_detail_context(
+        date_type=date_type,
+        start_date=start_date,
+        end_date=end_date,
+        expected_context=expected_context,
+    )
     return {
         "material_id": expected_material_id,
-        "source_schema": "flat_detail_csv" if flat_schema else "legacy_detail",
+        "normalization_version": 2 if flat_schema or nested_schema else 1,
+        "source_schema": "flat_detail_csv" if flat_schema else ("new_nested_detail" if nested_schema else "legacy_detail"),
         "date_range": {
             "type": _text(date_type),
             "start_date": _text(start_date),
             "end_date": _text(end_date),
         },
+        "period_verification": period_verification,
         "title": _text(title),
         "video_url": _text(video_url),
         "video_duration": _number(video_duration),
+        "core_data": core_data,
+        "audience_portrait": audience_portrait,
+        "business_date": _text(raw.get("bizDate") or raw.get("business_date")),
+        "account_id": _text(raw.get("accountId") or raw.get("account_id")),
         "selection_group": selection_group,
         "script_text": _text(script_text_value),
         "content_formula": content_formula,
@@ -556,6 +720,7 @@ def normalize_detail_records(
             "script_text": _availability(script_text_value, has_values=bool(_text(script_text_value))),
             "content_formula": _availability(content_formula, has_values=content_formula is not None),
             "creative_breakdown": _availability(creative_breakdown, has_values=creative_breakdown is not None),
+            "audience_portrait": _availability(audience_portrait, has_values=bool(audience_portrait)),
             "script_segments": script_segments_availability,
         },
         "source_paths": {"detail": source_path},

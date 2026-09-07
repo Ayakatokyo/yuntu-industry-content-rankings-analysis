@@ -17,6 +17,55 @@ def load_module():
 
 
 class YuntuNormalizerTests(unittest.TestCase):
+    def test_normalize_detail_records_preserves_new_nested_connector_sections(self):
+        normalizer = load_module()
+        raw = {
+            "materialId": "101",
+            "dateType": "LAST_7_DAYS",
+            "videoUrl": "https://video.example/101.mp4",
+            "coreData": {
+                "objectId": "101",
+                "title": "新连接器嵌套素材",
+                "videoDuration": 12,
+                "convertCnt": "17",
+                "orderCnt": "3",
+            },
+            "audiencePortrait": {"八大人群": ["新锐白领"], "年龄特征": ["24-30"], "性别特征": ["女"]},
+            "secondTrend": {
+                "点击指数": {
+                    "trendType": 3,
+                    "tendList": [{"x": 0, "y": 0}, {"x": 1, "y": 0.4}],
+                    "highPoint": {"start_point": "1", "end_point": "2"},
+                    "lossPoint": {"start_point": "0", "end_point": "1", "loss_percent": 0.2},
+                }
+            },
+            "contentFormula": {
+                "本视频内容公式": {"labels": [{"level_1_label": 10, "level_2_labels": [40]}]},
+                "视频标题": {"text": "标题词", "detail": {"40": ["标题词"]}},
+                "视频画面": {"text": "画面词", "detail": {"40": ["画面词"]}},
+                "视频脚本": {"text": "脚本词", "detail": {"40": ["脚本词"]}},
+            },
+            "creativeBreakdown": {"使用场景": ["早餐"], "营销活动": []},
+            "bizDate": "20260907",
+            "accountId": "account-1",
+        }
+
+        record = normalizer.normalize_detail_records(
+            raw, material_id="101", source_path="raw-json/details/101.json"
+        )
+
+        self.assertEqual(record["normalization_version"], 2)
+        self.assertEqual(record["source_schema"], "new_nested_detail")
+        self.assertEqual(record["title"], "新连接器嵌套素材")
+        self.assertEqual(record["metrics"]["convertCnt"], 17)
+        self.assertEqual(record["audience_portrait"]["八大人群"], ["新锐白领"])
+        self.assertEqual(record["trend_series"][0]["trend_name"], "点击指数")
+        self.assertEqual(record["script_text"], "脚本词")
+        self.assertEqual(record["content_formula"]["sources"]["script"]["detail"], {"40": ["脚本词"]})
+        self.assertEqual(record["creative_breakdown"]["raw"]["使用场景"], ["早餐"])
+        self.assertEqual(record["business_date"], "20260907")
+        self.assertEqual(record["account_id"], "account-1")
+
     def test_normalize_list_records_preserves_material_identity_and_business_date(self):
         normalizer = load_module()
         record = normalizer.normalize_list_records(
@@ -330,7 +379,10 @@ class YuntuNormalizerTests(unittest.TestCase):
         self.assertEqual(record["high_points"][0]["trend_name"], "点赞指数")
         self.assertEqual(record["script_text"], "前3秒提出使用场景，再展示商品卖点。")
         self.assertEqual(record["content_formula"]["labels"], ["痛点引入", "场景演示"])
-        self.assertEqual(record["content_formula"]["detail.商品卖点"], "低糖、便携")
+        self.assertEqual(
+            record["content_formula"]["sources"]["script"]["text"],
+            "前3秒提出使用场景，再展示商品卖点。",
+        )
         self.assertEqual(record["creative_breakdown"]["raw"]["素材形式"], "口播、产品展示")
         self.assertEqual(record["creative_breakdown"]["tags"], ["口播", "产品展示", "早餐", "通勤"])
         self.assertEqual(record["metrics"]["convertCnt"], 17)
@@ -352,6 +404,34 @@ class YuntuNormalizerTests(unittest.TestCase):
 
         self.assertEqual(record["source_paths"]["detail"], "raw-csv/details/101.csv")
         self.assertEqual(record["source_hashes"]["detail"], expected_hash)
+
+    def test_normalize_detail_rejects_conflicting_root_and_core_material_ids(self):
+        normalizer = load_module()
+
+        with self.assertRaisesRegex(normalizer.YuntuNormalizeError, "conflicts"):
+            normalizer.normalize_detail_records(
+                {"materialId": "101", "coreData": {"objectId": "202"}},
+                material_id="101",
+                source_path="raw-json/details/101.json",
+            )
+
+    def test_normalize_detail_verifies_new_connector_period_without_inventing_dates(self):
+        normalizer = load_module()
+        record = normalizer.normalize_detail_records(
+            {"materialId": "101", "dateType": "LAST_7_DAYS", "trends": []},
+            material_id="101",
+            source_path="raw-json/details/101.json",
+            expected_context={"date_type": "LAST_7_DAYS"},
+        )
+
+        self.assertEqual(record["period_verification"]["mode"], "relative_type_only")
+        with self.assertRaisesRegex(normalizer.YuntuNormalizeError, "period"):
+            normalizer.normalize_detail_records(
+                {"materialId": "101", "dateType": "LAST_30_DAYS", "trends": []},
+                material_id="101",
+                source_path="raw-json/details/101.json",
+                expected_context={"date_type": "LAST_7_DAYS"},
+            )
 
 
 if __name__ == "__main__":

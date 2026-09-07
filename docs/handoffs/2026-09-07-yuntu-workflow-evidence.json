@@ -1,0 +1,141 @@
+{
+  "scope": "read-only local artifact snapshot; not a clean performance benchmark",
+  "root": "RPA数据汇总/yuntu-rankings-analysis-20260810-20260820-top12",
+  "evidence": {
+    "run-summary.json": {
+      "sha256": "cfcac9abcad7c3e46f32510de91e776cd44a76af2d1344ea5df144cde3f38843",
+      "status": "success",
+      "stageCounts": {
+        "candidateCount": 24,
+        "detailSubmittedCount": 12,
+        "detailRecordsPersistedCount": 12,
+        "selectedCount": 12,
+        "rejectedCount": 0,
+        "cancelledCount": 12,
+        "unresolvedCount": 0
+      },
+      "selectedCount": null,
+      "timingsSec": null
+    },
+    "batch-manifest.json": {
+      "sha256": "492c216f0f660247496fc7fa049aefe5c0b71b118601ef1be0cb1c39ce31315e",
+      "status": "success",
+      "stageCounts": null,
+      "selectedCount": 5,
+      "timingsSec": {
+        "totalSec": 738.67756
+      }
+    },
+    "selectedDetails": [
+      {
+        "materialId": "7655594573390397466",
+        "dateRange": {
+          "type": "LAST_7_DAYS",
+          "start_date": "",
+          "end_date": ""
+        },
+        "postprocessStatus": "latest_csv_refresh",
+        "sourcePaths": {
+          "detail": "raw-csv/latest-details/industry_content_rankings_details_7655594573390397466.csv"
+        }
+      },
+      {
+        "materialId": "7675632234864607232",
+        "dateRange": {
+          "type": "LAST_7_DAYS",
+          "start_date": "",
+          "end_date": ""
+        },
+        "postprocessStatus": "latest_csv_refresh",
+        "sourcePaths": {
+          "detail": "raw-csv/latest-details/industry_content_rankings_details_7675632234864607232.csv"
+        }
+      },
+      {
+        "materialId": "7676833114073907209",
+        "dateRange": {
+          "type": "LAST_7_DAYS",
+          "start_date": "",
+          "end_date": ""
+        },
+        "postprocessStatus": "latest_csv_refresh",
+        "sourcePaths": {
+          "detail": "raw-csv/latest-details/industry_content_rankings_details_7676833114073907209.csv"
+        }
+      },
+      {
+        "materialId": "7637892510163533850",
+        "dateRange": {
+          "type": "LAST_7_DAYS",
+          "start_date": "",
+          "end_date": ""
+        },
+        "postprocessStatus": "latest_csv_refresh",
+        "sourcePaths": {
+          "detail": "raw-csv/latest-details/industry_content_rankings_details_7637892510163533850.csv"
+        }
+      },
+      {
+        "materialId": "7659409261740343346",
+        "dateRange": {
+          "type": "LAST_7_DAYS",
+          "start_date": "",
+          "end_date": ""
+        },
+        "postprocessStatus": "latest_csv_refresh",
+        "sourcePaths": {
+          "detail": "raw-csv/latest-details/industry_content_rankings_details_7659409261740343346(1).csv"
+        }
+      }
+    ],
+    "units": [
+      {
+        "unit": "ranking_brand",
+        "actualBytes": 2798429,
+        "hashMatches": true,
+        "recordArrays": []
+      },
+      {
+        "unit": "audience_marketing",
+        "actualBytes": 1271276,
+        "hashMatches": true,
+        "recordArrays": []
+      },
+      {
+        "unit": "script_insights",
+        "actualBytes": 26229,
+        "hashMatches": true,
+        "recordArrays": []
+      },
+      {
+        "unit": "highlight",
+        "actualBytes": 15030,
+        "hashMatches": true,
+        "recordArrays": [
+          [
+            "visualAssets",
+            29
+          ],
+          [
+            "dataLimitations",
+            0
+          ]
+        ]
+      },
+      {
+        "unit": "material_deep_dive",
+        "actualBytes": 67477,
+        "hashMatches": true,
+        "recordArrays": [
+          [
+            "materialFacts",
+            5
+          ]
+        ]
+      }
+    ],
+    "totalUnitBytes": 4178441,
+    "topTwoFraction": 0.9739768971250282,
+    "normalizedDetailFiles": 17
+  }
+}

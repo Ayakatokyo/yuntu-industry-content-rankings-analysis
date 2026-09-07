@@ -58,6 +58,26 @@ class FakeDownloader:
         return target
 
 
+class RecoveringDetailInvoker(FakeInvoker):
+    def __init__(self, detail_result):
+        super().__init__(None, [])
+        self.detail_result = detail_result
+        self.submissions = []
+        self.waits = []
+
+    @property
+    def supports_detail_task_recovery(self):
+        return True
+
+    def submit_detail(self, shop_id, detail_params):
+        self.submissions.append((shop_id, dict(detail_params)))
+        return "task-new"
+
+    def wait_detail(self, task_group_id):
+        self.waits.append(task_group_id)
+        return self.detail_result
+
+
 class ConcurrentInvoker:
     def __init__(self, material_ids, detail_handler):
         self.material_ids = material_ids
@@ -215,6 +235,100 @@ def detail_result(material_id):
 
 
 class YuntuBatchTests(unittest.TestCase):
+    def test_fetch_batch_resumes_a_persisted_detail_task_without_resubmitting(self):
+        batch = load_batch()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            detail_params = {"date_type": "LAST_7_DAYS"}
+            contract = batch.run_state.collection_contract(
+                shop_id="shop-42", list_params={}, detail_date_params=detail_params,
+                target_top_n=1, candidate_top_n=1,
+            )
+            batch.run_state.save_run_state(
+                batch.run_state.new_collection_summary(contract), root / "run-summary.json"
+            )
+            (root / "raw-csv").mkdir()
+            (root / "raw-csv" / "list.csv").write_text("material_id,title\n101,素材\n", encoding="utf-8")
+            (root / "batch-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 4,
+                        "filters": {}, "detailDateRange": detail_params,
+                        "targetTopN": 1, "candidateTopN": 1,
+                        "rankingRuns": {}, "taskRuns": {
+                            "detail:101": {
+                                "operation": "detail",
+                                "functionCode": "rpa.conn.juliang.yt.industry.content.rankings.details",
+                                "businessParams": {"material_id": "101", **detail_params},
+                                "attempts": [{
+                                    "attempt": 1, "taskGroupId": "task-existing",
+                                    "requestStatus": "submitted", "remoteStatus": "pending",
+                                    "artifactStatus": "pending", "errors": [], "artifactPaths": [],
+                                }],
+                            }
+                        },
+                        "submittedMaterials": [{"rank": 1, "material_id": "101"}],
+                        "selectedMaterials": [], "rejectedMaterials": [],
+                        "unresolvedMaterials": [], "cancelledMaterials": [],
+                    }, ensure_ascii=False
+                ), encoding="utf-8"
+            )
+            invoker = RecoveringDetailInvoker(
+                {"status": "completed", "task_group_id": "task-existing", "payload": [
+                    {"materialId": "101", "dateType": "LAST_7_DAYS", "trends": []}
+                ]}
+            )
+
+            status = batch.fetch_batch(
+                shop_id="shop-42", list_params={}, detail_date_params=detail_params,
+                target_top_n=1, candidate_top_n=1, output_dir=root, invoker=invoker,
+            )
+            manifest = json.loads((root / "batch-manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertEqual(invoker.submissions, [])
+        self.assertEqual(invoker.waits, ["task-existing"])
+        attempt = manifest["taskRuns"]["detail:101"]["attempts"][0]
+        self.assertEqual(attempt["artifactStatus"], "normalized")
+        self.assertEqual(attempt["remoteStatus"], "completed")
+
+    def test_new_detail_result_uses_local_selection_group_without_remote_echo(self):
+        batch = load_batch()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            summary = {"artifacts": {}}
+            item = {
+                "rank": 1,
+                "material_id": "101",
+                "selectionGroupId": "brand-a:feed",
+                "selectionGroup": {
+                    "id": "brand-a:feed",
+                    "brand_id": "brand-a",
+                    "brand_name": "品牌 A",
+                    "touchpoint_code": "feed",
+                    "touchpoint_name": "信息流",
+                },
+            }
+            detail, manifest_entry = batch._persist_detail(
+                root=root,
+                summary=summary,
+                item=item,
+                gateway_result={
+                    "status": "completed",
+                    "payload": {
+                        "materialId": "101",
+                        "dateType": "LAST_7_DAYS",
+                        "coreData": {"objectId": "101", "title": "新详情"},
+                        "secondTrend": {},
+                    },
+                },
+                downloader=FakeDownloader({}),
+                detail_fetch_sec=0.1,
+            )
+
+        self.assertEqual(detail["selection_group"]["id"], "brand-a:feed")
+        self.assertEqual(manifest_entry["material_id"], "101")
+
     def test_retry_batch_does_not_assign_an_unused_rank_local(self):
         batch = load_batch()
         source = inspect.getsource(batch._retry_batch_items)

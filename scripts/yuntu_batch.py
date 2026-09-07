@@ -40,15 +40,36 @@ SELECTION_GROUP_FIELDS = {
 
 
 class ConnectorInvoker:
-    def __init__(self, invoke_list, invoke_detail):
+    def __init__(self, invoke_list, invoke_detail, *, submit_detail=None, wait_detail=None):
         self._invoke_list = invoke_list
         self._invoke_detail = invoke_detail
+        self._submit_detail = submit_detail
+        self._wait_detail = wait_detail
 
     def invoke_list(self, shop_id, list_params):
         return self._invoke_list(shop_id, list_params)
 
     def invoke_detail(self, shop_id, detail_params):
         return self._invoke_detail(shop_id, detail_params)
+
+    @property
+    def supports_detail_task_recovery(self):
+        return callable(self._submit_detail) and callable(self._wait_detail)
+
+    def submit_detail(self, shop_id, detail_params):
+        if not self.supports_detail_task_recovery:
+            raise YuntuBatchError("detail task submission recovery is unavailable")
+        return self._submit_detail(shop_id, detail_params)
+
+    def wait_detail(self, task_group_id):
+        if not self.supports_detail_task_recovery:
+            raise YuntuBatchError("detail task status recovery is unavailable")
+        return self._wait_detail(task_group_id)
+
+
+def _supports_detail_task_recovery(invoker):
+    """Keep lightweight test/legacy invokers on the synchronous adapter path."""
+    return bool(getattr(invoker, "supports_detail_task_recovery", False))
 
 
 def _parse_period_date(value):
@@ -246,12 +267,13 @@ def _new_manifest(
     summary,
 ):
     return {
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "runId": summary["runId"],
         "parameterFingerprint": summary["parameterFingerprint"],
         "collectionContract": summary["collectionContract"],
         "status": "running",
         "rankingRuns": {},
+        "taskRuns": {},
         "filters": list_params,
         "detailDateRange": detail_date_params,
         "targetTopN": target_top_n,
@@ -303,7 +325,7 @@ def _open_or_new_manifest(
         )
     manifest.update(
         {
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "runId": summary["runId"],
             "parameterFingerprint": summary["parameterFingerprint"],
             "collectionContract": summary["collectionContract"],
@@ -312,6 +334,7 @@ def _open_or_new_manifest(
     )
     for key in (
         "rankingRuns",
+        "taskRuns",
         "candidateMaterials",
         "selectionGroups",
         "submittedMaterials",
@@ -324,6 +347,8 @@ def _open_or_new_manifest(
     manifest.setdefault("timingsSec", {})
     if not isinstance(manifest.get("rankingRuns"), dict):
         manifest["rankingRuns"] = {}
+    if not isinstance(manifest.get("taskRuns"), dict):
+        manifest["taskRuns"] = {}
     return manifest
 
 
@@ -389,6 +414,15 @@ def _mark_unresolved_submissions(manifest, candidates):
         item = candidate_by_id.get(material_id)
         if item is None or material_id in terminal_ids:
             continue
+        task_run = manifest.get("taskRuns", {}).get(f"detail:{material_id}")
+        attempts = task_run.get("attempts", []) if isinstance(task_run, dict) else []
+        active_attempt = attempts[-1] if attempts and isinstance(attempts[-1], dict) else {}
+        if active_attempt.get("taskGroupId") and active_attempt.get("remoteStatus") in {
+            "pending", "running", "submitted"
+        }:
+            # A persisted task ID is recoverable.  fetch_batch will poll it
+            # below; it must not become an explicit re-submit candidate.
+            continue
         unresolved.append(
             {
                 **_manifest_material(item),
@@ -397,6 +431,80 @@ def _mark_unresolved_submissions(manifest, candidates):
         )
         terminal_ids.add(material_id)
     manifest["unresolvedMaterials"] = unresolved
+
+
+def _task_run(manifest, *, item, detail_date_params):
+    """Return the v4 detail task ledger entry owned by the manifest."""
+    material_id = item["material_id"]
+    task_runs = manifest.setdefault("taskRuns", {})
+    return task_runs.setdefault(
+        f"detail:{material_id}",
+        {
+            "operation": "detail",
+            "functionCode": "rpa.conn.juliang.yt.industry.content.rankings.details",
+            "businessParams": {
+                "material_id": material_id,
+                **detail_date_params,
+            },
+            "attempts": [],
+        },
+    )
+
+
+def _active_detail_task_attempt(manifest, material_id):
+    task_run = manifest.get("taskRuns", {}).get(f"detail:{material_id}")
+    attempts = task_run.get("attempts", []) if isinstance(task_run, dict) else []
+    if not attempts or not isinstance(attempts[-1], dict):
+        return None
+    attempt = attempts[-1]
+    if (
+        isinstance(attempt.get("taskGroupId"), str)
+        and attempt["taskGroupId"]
+        and attempt.get("remoteStatus") in {"pending", "running", "submitted"}
+    ):
+        return attempt
+    return None
+
+
+def _now_iso():
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _submit_detail_task(*, manifest, item, shop_id, detail_date_params, invoker):
+    """Submit once. The caller checkpoints before and after this side effect."""
+    task_run = _task_run(manifest, item=item, detail_date_params=detail_date_params)
+    attempt = {
+        "attempt": len(task_run["attempts"]) + 1,
+        "requestStatus": "submitting",
+        "remoteStatus": "submitted",
+        "artifactStatus": "pending",
+        "submittedAt": _now_iso(),
+        "lastObservedAt": _now_iso(),
+        "errors": [],
+        "artifactPaths": [],
+    }
+    task_run["attempts"].append(attempt)
+    return attempt
+
+
+def _wait_detail_task_result(*, item, task_group_id, invoker):
+    started = time.monotonic()
+    try:
+        return {
+            "item": item,
+            "result": invoker.wait_detail(task_group_id),
+            "started": started,
+            "taskGroupId": task_group_id,
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "item": item,
+            "result": None,
+            "started": started,
+            "taskGroupId": task_group_id,
+            "error": exc,
+        }
 
 
 def _has_existing_collection_artifacts(root):
@@ -761,7 +869,10 @@ def _invoke_detail_result(*, item, shop_id, detail_date_params, invoker):
         return {"item": item, "result": None, "started": started, "error": exc}
 
 
-def _persist_detail(*, root, summary, item, gateway_result, downloader, detail_fetch_sec):
+def _persist_detail(
+    *, root, summary, item, gateway_result, downloader, detail_fetch_sec,
+    expected_context=None,
+):
     """Normalize a successful detail response and build its durable manifest entry."""
     material_id = item["material_id"]
     raw_detail, detail_source = _materialize_records(
@@ -776,6 +887,14 @@ def _persist_detail(*, root, summary, item, gateway_result, downloader, detail_f
         source_path=_relative(root, detail_source),
         source_hash=file_sha256(detail_source),
         expected_selection_group=_expected_selection_group(item),
+        # Only new requests carry date_type. Historical test fixtures and
+        # read-only legacy batches retain date_range_type without being
+        # reinterpreted under the new connector contract.
+        expected_context=(
+            expected_context
+            if isinstance(expected_context, dict) and "date_type" in expected_context
+            else None
+        ),
     )
     detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
     write_json_atomically(detail_record, detail_output)
@@ -1203,6 +1322,7 @@ def fetch_batch(
             for item in manifest["selectedMaterials"]
         )
         _sync_stage_counts(summary, manifest, root)
+        summary["taskRuns"] = manifest.get("taskRuns", {})
         write_json_atomically(manifest, manifest_path)
         _save_summary(root, summary)
 
@@ -1231,6 +1351,27 @@ def fetch_batch(
         for detail in details_missing_standard_highlights(restored_details, root):
             submit_highlight(highlight_executor, detail)
 
+        # A previously submitted asynchronous task is resumed by polling the
+        # persisted ID.  It is never submitted again merely because this
+        # process was interrupted after the gateway accepted it.
+        if _supports_detail_task_recovery(invoker):
+            candidate_by_id = {item["material_id"]: item for item in candidates}
+            for material_id, item in candidate_by_id.items():
+                attempt = _active_detail_task_attempt(manifest, material_id)
+                if attempt is None:
+                    continue
+                attempt["lastObservedAt"] = _now_iso()
+                pending_details[
+                    detail_executor.submit(
+                        _wait_detail_task_result,
+                        item=item,
+                        task_group_id=attempt["taskGroupId"],
+                        invoker=invoker,
+                    )
+                ] = material_id
+            if pending_details:
+                checkpoint()
+
         while True:
             if not pending_details and not pending_highlights:
                 wave, next_index = _next_detail_wave(
@@ -1247,13 +1388,64 @@ def fetch_batch(
                     break
                 for item in wave:
                     manifest["submittedMaterials"].append(_manifest_material(item))
-                    future = detail_executor.submit(
-                        _invoke_detail_result,
-                        item=item,
-                        shop_id=shop_id,
-                        detail_date_params=detail_date_params,
-                        invoker=invoker,
-                    )
+                    if _supports_detail_task_recovery(invoker):
+                        attempt = _submit_detail_task(
+                            manifest=manifest,
+                            item=item,
+                            shop_id=shop_id,
+                            detail_date_params=detail_date_params,
+                            invoker=invoker,
+                        )
+                        # Persist the intent before submitting; if submission
+                        # itself is ambiguous, it remains visible for manual
+                        # resolution and is not silently retried.
+                        checkpoint()
+                        try:
+                            task_group_id = invoker.submit_detail(
+                                shop_id, _detail_request(item, detail_date_params)
+                            )
+                            attempt.update(
+                                {
+                                    "taskGroupId": task_group_id,
+                                    "requestStatus": "submitted",
+                                    "remoteStatus": "pending",
+                                    "lastObservedAt": _now_iso(),
+                                }
+                            )
+                            checkpoint()
+                            future = detail_executor.submit(
+                                _wait_detail_task_result,
+                                item=item,
+                                task_group_id=task_group_id,
+                                invoker=invoker,
+                            )
+                        except Exception as exc:
+                            attempt.update(
+                                {
+                                    "requestStatus": "submit_unknown",
+                                    "remoteStatus": "submitted",
+                                    "lastObservedAt": _now_iso(),
+                                    "errors": [str(exc)],
+                                }
+                            )
+                            unresolved_ids.add(item["material_id"])
+                            manifest["unresolvedMaterials"].append(
+                                {
+                                    **_manifest_material(item),
+                                    "reason": "submit_unknown",
+                                    "error": str(exc),
+                                }
+                            )
+                            checkpoint()
+                            continue
+                    else:
+                        future = detail_executor.submit(
+                            _invoke_detail_result,
+                            item=item,
+                            shop_id=shop_id,
+                            detail_date_params=detail_date_params,
+                            invoker=invoker,
+                        )
                     pending_details[future] = item["material_id"]
                 checkpoint()
 
@@ -1267,9 +1459,43 @@ def fetch_batch(
                     pending_details.pop(future)
                     item = result["item"]
                     material_id = item["material_id"]
+                    task_attempt = _active_detail_task_attempt(manifest, material_id)
                     try:
                         if result["error"] is not None:
+                            if task_attempt is not None:
+                                task_attempt.update(
+                                    {
+                                        "lastObservedAt": _now_iso(),
+                                        "errors": task_attempt.get("errors", []) + [str(result["error"])],
+                                    }
+                                )
+                                # A poll timeout or transport failure does not
+                                # establish a remote failure. Keep the task ID
+                                # resumable instead of issuing another detail
+                                # request on the next process invocation.
+                                if "RPA task failed" not in str(result["error"]):
+                                    unresolved_ids.add(material_id)
+                                    if not any(
+                                        item.get("material_id") == material_id
+                                        for item in manifest["unresolvedMaterials"]
+                                        if isinstance(item, dict)
+                                    ):
+                                        manifest["unresolvedMaterials"].append(
+                                            {
+                                                **_manifest_material(item),
+                                                "reason": "poll_unconfirmed",
+                                                "error": str(result["error"]),
+                                            }
+                                        )
+                                    continue
                             raise result["error"]
+                        if task_attempt is not None:
+                            task_attempt.update(
+                                {
+                                    "remoteStatus": result["result"].get("status", "completed"),
+                                    "lastObservedAt": _now_iso(),
+                                }
+                            )
                         detail_record, selected_entry = _persist_detail(
                             root=root,
                             summary=summary,
@@ -1277,7 +1503,19 @@ def fetch_batch(
                             gateway_result=result["result"],
                             downloader=downloader,
                             detail_fetch_sec=_elapsed(result["started"]),
+                            expected_context=detail_date_params,
                         )
+                        if task_attempt is not None:
+                            task_attempt.update(
+                                {
+                                    "artifactStatus": "normalized",
+                                    "artifactPaths": [
+                                        selected_entry["rawDetailPath"],
+                                        selected_entry["detailRecordPath"],
+                                    ],
+                                    "lastObservedAt": _now_iso(),
+                                }
+                            )
                         selected_entry["postprocessStatus"] = "pending"
                         manifest["selectedMaterials"].append(selected_entry)
                         selected_ids.add(material_id)
@@ -1287,6 +1525,16 @@ def fetch_batch(
                         submit_highlight(highlight_executor, detail_record)
                     except Exception as exc:
                         rejected_ids.add(material_id)
+                        if task_attempt is not None:
+                            task_attempt.update(
+                                {
+                                    "remoteStatus": "failed"
+                                    if "RPA task failed" in str(exc)
+                                    else task_attempt.get("remoteStatus", "submitted"),
+                                    "artifactStatus": "failed",
+                                    "lastObservedAt": _now_iso(),
+                                }
+                            )
                         manifest["rejectedMaterials"].append(
                             {
                                 **_manifest_material(item),
@@ -1451,6 +1699,7 @@ def _retry_batch_items(*, shop_id, output_dir, invoker, item_key, downloader=Non
                 ),
                 downloader=downloader,
                 detail_fetch_sec=_elapsed(detail_started),
+                expected_context=detail_date_params,
             )
             if material_id not in selected_ids:
                 manifest.setdefault("selectedMaterials", []).append(selected_entry)

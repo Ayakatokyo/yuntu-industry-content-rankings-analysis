@@ -54,7 +54,7 @@ class YuntuNormalizerTests(unittest.TestCase):
             raw, material_id="101", source_path="raw-json/details/101.json"
         )
 
-        self.assertEqual(record["normalization_version"], 2)
+        self.assertEqual(record["normalization_version"], 3)
         self.assertEqual(record["source_schema"], "new_nested_detail")
         self.assertEqual(record["title"], "新连接器嵌套素材")
         self.assertEqual(record["metrics"]["convertCnt"], 17)
@@ -65,6 +65,49 @@ class YuntuNormalizerTests(unittest.TestCase):
         self.assertEqual(record["creative_breakdown"]["raw"]["使用场景"], ["早餐"])
         self.assertEqual(record["business_date"], "20260907")
         self.assertEqual(record["account_id"], "account-1")
+
+    def test_normalize_detail_records_maps_connector_aliases_to_canonical_facts(self):
+        normalizer = load_module()
+        raw = {
+            "materialId": "101",
+            "coreData": {"objectId": "101"},
+            "secondTrend": {
+                "likeIndex": {"tendList": [{"x": 0, "y": 0.1}], "trendType": 1},
+                "lossIndex": {"tendList": [{"x": 0, "y": 0.2}], "trendType": 2},
+                "clickIndex": {"tendList": [{"x": 0, "y": 0.3}], "trendType": 3},
+                "interactIndex": {"tendList": [{"x": 0, "y": 0.4}], "trendType": 4},
+                "commentIndex": {"tendList": [{"x": 0, "y": 0.5}], "trendType": 5},
+            },
+            "contentFormula": {
+                "videoContentFormula": {"labels": [{"level_1_label": 10}]},
+                "videoTitle": {"text": "标题"},
+                "videoVisual": {"text": "画面"},
+                "videoScript": {"text": "仅此脚本应成为脚本事实"},
+            },
+            "creativeBreakdown": {"marketingCampaigns": ["周年庆"], "presentationForm": ["真人口播"]},
+        }
+
+        record = normalizer.normalize_detail_records(
+            raw, material_id="101", source_path="raw-csv/details/101.csv"
+        )
+
+        self.assertEqual(
+            [item["trend_name"] for item in record["trend_series"]],
+            ["点赞指数", "流失指数", "点击指数", "互动指数", "评论指数"],
+        )
+        self.assertEqual(record["script_text"], "仅此脚本应成为脚本事实")
+        self.assertEqual(record["content_formula"]["sources"]["script"]["text"], "仅此脚本应成为脚本事实")
+        self.assertEqual(record["creative_breakdown"]["tags"], ["周年庆", "真人口播"])
+
+    def test_normalize_detail_records_marks_parser_failure_explicitly(self):
+        normalizer = load_module()
+        record = normalizer.normalize_detail_records(
+            {"materialId": "101", "secondTrend": "{'clickIndex': invalid}", "__parse_failed_fields__": ["secondTrend"]},
+            material_id="101",
+            source_path="raw-csv/details/101.csv",
+        )
+
+        self.assertEqual(record["data_availability"]["trends"]["missing_reason"], "parse_failed")
 
     def test_normalize_list_records_preserves_material_identity_and_business_date(self):
         normalizer = load_module()

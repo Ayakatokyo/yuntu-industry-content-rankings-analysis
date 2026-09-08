@@ -1779,7 +1779,7 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
             limit=len(ai_brand_records) or 1,
         )
     fact_pack = {
-        "schemaVersion": 7 if has_period_contract else 6,
+        "schemaVersion": 8 if has_period_contract else 7,
         "filters": manifest.get("filters", {}),
         "selectedMaterials": selected,
         "rejectedMaterials": rejected,

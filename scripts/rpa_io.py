@@ -35,14 +35,39 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
-def _decode_json_cell(value):
+def _decode_structure(value):
+    """Recursively decode structured descendants while preserving text values."""
+    parse_failed = False
+    if isinstance(value, dict):
+        decoded = {}
+        for key, item in value.items():
+            decoded_item, item_failed = decode_structured_cell(item)
+            decoded[key] = decoded_item
+            parse_failed = parse_failed or item_failed
+        return decoded, parse_failed
+    if isinstance(value, list):
+        decoded = []
+        for item in value:
+            decoded_item, item_failed = decode_structured_cell(item)
+            decoded.append(decoded_item)
+            parse_failed = parse_failed or item_failed
+        return decoded, parse_failed
+    return value, False
+
+
+def decode_structured_cell(value):
+    """Decode JSON/Python container cells without executing source text.
+
+    The boolean signals that source looked structured but could not be parsed.
+    Callers preserve the original text and carry that state into availability.
+    """
     if not isinstance(value, str):
-        return value
+        return value, False
     text = value.strip()
     if not text:
-        return ""
+        return "", False
     if text[0] not in "[{":
-        return value
+        return value, False
     for decoder, errors in (
         (json.loads, (json.JSONDecodeError,)),
         (ast.literal_eval, (ValueError, SyntaxError)),
@@ -52,8 +77,8 @@ def _decode_json_cell(value):
         except errors:
             continue
         if isinstance(decoded, (dict, list)):
-            return decoded
-    return value
+            return _decode_structure(decoded)
+    return value, True
 
 
 def _clean_csv_value(value):
@@ -246,9 +271,16 @@ def parse_csv_records(path):
             continue
         if _is_csv_padding_row(cleaned_row):
             continue
-        records.append(
-            {key: _decode_json_cell(value) for key, value in cleaned_row.items()}
-        )
+        record = {}
+        parse_failed_fields = []
+        for key, value in cleaned_row.items():
+            decoded, parse_failed = decode_structured_cell(value)
+            record[key] = decoded
+            if parse_failed:
+                parse_failed_fields.append(key)
+        if parse_failed_fields:
+            record["__parse_failed_fields__"] = parse_failed_fields
+        records.append(record)
     if not records:
         raise RpaIoError(f"RPA CSV {source} has no records")
     return records

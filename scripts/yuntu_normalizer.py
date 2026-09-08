@@ -20,6 +20,14 @@ METRIC_FIELDS = (
     "component_click_rate",
 )
 
+SECOND_TREND_ALIASES = {
+    "likeIndex": "点赞指数",
+    "lossIndex": "流失指数",
+    "clickIndex": "点击指数",
+    "interactIndex": "互动指数",
+    "commentIndex": "评论指数",
+}
+
 
 def _text(value):
     if value is None:
@@ -143,9 +151,17 @@ def _availability(value, *, has_values):
     return {"available": False, "missing_reason": "no_usable_values"}
 
 
-def _detail_availability(trends, trend_series, high_points, loss_points):
+def _availability_with_parse_state(value, *, has_values, parse_failed):
+    if parse_failed:
+        return {"available": False, "missing_reason": "parse_failed"}
+    return _availability(value, has_values=has_values)
+
+
+def _detail_availability(trends, trend_series, high_points, loss_points, *, parse_failed=False):
     return {
-        "trends": _availability(trends, has_values=bool(trend_series)),
+        "trends": _availability_with_parse_state(
+            trends, has_values=bool(trend_series), parse_failed=parse_failed
+        ),
         "high_points": _availability(trends, has_values=bool(high_points)),
         "loss_points": _availability(trends, has_values=bool(loss_points)),
     }
@@ -459,7 +475,7 @@ def _nested_detail_trends(raw):
             continue
         trends.append(
             {
-                "trendName": value.get("trendName") or name,
+                "trendName": value.get("trendName") or SECOND_TREND_ALIASES.get(name) or name,
                 "trendType": value.get("trendType") or value.get("trend_type"),
                 "tendList": value.get("tendList") or value.get("tend_list") or [],
                 "highPoint": value.get("highPoint"),
@@ -472,11 +488,15 @@ def _nested_detail_trends(raw):
 def _nested_content_formula(value):
     if not isinstance(value, dict):
         return value
-    formula = value.get("本视频内容公式")
+    formula = value.get("本视频内容公式") or value.get("videoContentFormula")
     labels = formula.get("labels") if isinstance(formula, dict) else value.get("labels")
     result = {"labels": labels} if labels is not None else {}
     sources = {}
-    for raw_name, source_name in (("视频标题", "title"), ("视频画面", "visual"), ("视频脚本", "script")):
+    for raw_name, source_name in (
+        ("视频标题", "title"), ("videoTitle", "title"),
+        ("视频画面", "visual"), ("videoVisual", "visual"),
+        ("视频脚本", "script"), ("videoScript", "script"),
+    ):
         source = value.get(raw_name)
         if not isinstance(source, dict):
             continue
@@ -570,6 +590,10 @@ def normalize_detail_records(
         raise YuntuNormalizeError("detail records must contain one detail object")
     if not isinstance(raw, dict):
         raise YuntuNormalizeError("detail record must be an object")
+
+    parse_failed_fields = raw.get("__parse_failed_fields__", [])
+    if not isinstance(parse_failed_fields, list):
+        parse_failed_fields = []
 
     expected_material_id = _require_material_id(material_id)
     core_data = raw.get("coreData") if isinstance(raw.get("coreData"), dict) else {}
@@ -682,7 +706,7 @@ def normalize_detail_records(
     )
     return {
         "material_id": expected_material_id,
-        "normalization_version": 2 if flat_schema or nested_schema else 1,
+        "normalization_version": 3 if flat_schema or nested_schema else 1,
         "source_schema": "flat_detail_csv" if flat_schema else ("new_nested_detail" if nested_schema else "legacy_detail"),
         "date_range": {
             "type": _text(date_type),
@@ -712,14 +736,24 @@ def normalize_detail_records(
                 trend_series,
                 high_points,
                 loss_points,
+                parse_failed="secondTrend" in parse_failed_fields or "trends" in parse_failed_fields,
             ),
             "selection_group": {
                 "available": selection_group["id"] != "default",
                 "missing_reason": "" if selection_group["id"] != "default" else "source_empty",
             },
-            "script_text": _availability(script_text_value, has_values=bool(_text(script_text_value))),
-            "content_formula": _availability(content_formula, has_values=content_formula is not None),
-            "creative_breakdown": _availability(creative_breakdown, has_values=creative_breakdown is not None),
+            "script_text": _availability_with_parse_state(
+                script_text_value, has_values=bool(_text(script_text_value)),
+                parse_failed="scriptText" in parse_failed_fields or "script_text" in parse_failed_fields,
+            ),
+            "content_formula": _availability_with_parse_state(
+                content_formula, has_values=content_formula is not None,
+                parse_failed="contentFormula" in parse_failed_fields or "content_formula" in parse_failed_fields,
+            ),
+            "creative_breakdown": _availability_with_parse_state(
+                creative_breakdown, has_values=creative_breakdown is not None,
+                parse_failed="creativeBreakdown" in parse_failed_fields or "creative_breakdown" in parse_failed_fields,
+            ),
             "audience_portrait": _availability(audience_portrait, has_values=bool(audience_portrait)),
             "script_segments": script_segments_availability,
         },

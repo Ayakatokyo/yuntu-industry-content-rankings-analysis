@@ -22,6 +22,29 @@ def load_module():
 
 
 class YuntuAnalysisTests(unittest.TestCase):
+    def test_second_level_breakdown_uses_canonical_trend_names_and_script_coverage(self):
+        analysis = load_module()
+        detail = {
+            "trend_series": [
+                {"trend_name": "点赞指数", "series": [{"second": 0, "value": 0.1}]},
+                {"trend_name": "流失指数", "series": [{"second": 0, "value": 0.2}]},
+                {"trend_name": "点击指数", "series": [{"second": 0, "value": 0.3}]},
+                {"trend_name": "互动指数", "series": [{"second": 0, "value": 0.4}]},
+                {"trend_name": "评论指数", "series": [{"second": 0, "value": 0.5}]},
+            ],
+            "high_points": [],
+            "loss_points": [],
+        }
+        breakdown = analysis._second_level_breakdown(detail)
+        facts = analysis.build_script_facts(
+            [{"material_id": "101", "script_text": "", "content_formula": {"sources": {"title": {"text": "标题不计入脚本"}}}, "creative_breakdown": {"tags": ["标签不计入脚本"]}}],
+            [{"material_id": "101", "rank": 1}],
+        )
+
+        self.assertTrue(all(metric["available"] for metric in breakdown["metrics"]))
+        self.assertEqual(facts["coverage"], {"total": 1, "script": 0, "rate": 0})
+        self.assertEqual(facts["keywordCloud"]["keywords"], [])
+
     def test_material_deep_dive_input_contains_script_facts_and_evidence_allowlist(self):
         analysis = load_module()
         fact_pack = {
@@ -591,7 +614,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             prompt = (root / "diagnostic-analysis" / "yuntu-analysis-prompt.md").read_text(encoding="utf-8")
 
         self.assertEqual(status, 0)
-        self.assertEqual(data["schemaVersion"], 6)
+        self.assertEqual(data["schemaVersion"], 7)
         self.assertEqual(data["candidatePool"]["count"], 4)
         self.assertEqual(data["candidatePool"]["metrics"]["ctr"]["median"], 0.25)
         self.assertEqual(data["industryTop1000Facts"]["sample_count"], 4)

@@ -293,6 +293,18 @@ class RpaIoTests(unittest.TestCase):
             records = io.parse_csv_records(source)
 
             self.assertEqual(records[0]["object_index"], "{'ctr': invalid}")
+            self.assertEqual(records[0]["__parse_failed_fields__"], ["object_index"])
+
+    def test_structured_cell_decoder_recursively_decodes_python_literal_structures(self):
+        io = load_module()
+        decoded, parse_failed = io.decode_structured_cell(
+            "{'clickIndex': '[{\"x\": 0, \"y\": 1}]'}"
+        )
+
+        self.assertEqual(
+            decoded, {"clickIndex": [{"x": 0, "y": 1}]}
+        )
+        self.assertFalse(parse_failed)
 
     def test_parse_csv_records_rejects_bad_headers_and_empty_files(self):
         io = load_module()

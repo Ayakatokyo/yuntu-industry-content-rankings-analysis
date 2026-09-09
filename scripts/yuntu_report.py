@@ -1091,14 +1091,15 @@ def _validate_highlight_classification_groups(groups, known_refs, *, mode):
             raise YuntuReportError(f"{mode} groups require frame_refs")
         if not set(refs).issubset(known_refs):
             raise YuntuReportError(f"{mode} frame reference is invalid")
+        if mode == "batchClassification":
+            actual_refs.extend(refs)
+            continue
         patterns = group.get("common_patterns")
         directions = group.get("derivative_directions")
         if not isinstance(patterns, list) or not all(isinstance(item, dict) for item in patterns):
             raise YuntuReportError(f"{mode} common_patterns must be structured objects")
         if not isinstance(directions, list) or len(patterns) != len(directions):
             raise YuntuReportError(f"{mode} common_patterns and derivative_directions must have matching counts")
-        if mode == "batchClassification" and len(patterns) != 3:
-            raise YuntuReportError(f"{mode} common_patterns and derivative_directions must contain exactly 3 paired items")
         for pattern, direction in zip(patterns, directions):
             for item, label in ((pattern, "common pattern"), (direction, "derivative direction")):
                 if not all(isinstance(item.get(key), str) and item[key].strip() for key in ("title", "body")):
@@ -1108,13 +1109,6 @@ def _validate_highlight_classification_groups(groups, known_refs, *, mode):
                     raise YuntuReportError(f"{mode} {label} frame references are invalid")
                 _validate_deep_dive_text(item["title"], f"{mode} {label} title")
                 _validate_deep_dive_text(item["body"], f"{mode} {label} body")
-        if mode == "batchClassification":
-            pattern_text = [(item.get("title", "").strip(), item.get("body", "").strip()) for item in patterns]
-            direction_text = [(item.get("title", "").strip(), item.get("body", "").strip()) for item in directions]
-            if len(set(pattern_text)) != len(pattern_text):
-                raise YuntuReportError(f"{mode} common_patterns must contain distinct insights")
-            if len(set(direction_text)) != len(direction_text):
-                raise YuntuReportError(f"{mode} derivative_directions must contain distinct directions")
         actual_refs.extend(refs)
     if len(actual_refs) != len(set(actual_refs)) or set(actual_refs) != known_refs:
         raise YuntuReportError(f"{mode} must classify each successful frame exactly once")

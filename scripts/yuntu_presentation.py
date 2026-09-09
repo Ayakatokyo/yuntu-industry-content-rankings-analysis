@@ -1123,7 +1123,7 @@ def _classification_mode_categories(classification, available, brand, brand_orde
     reason = _text(classification.get("missing_reason")) if isinstance(classification, dict) else ""
     mode = {
         "id": "batch",
-        "label": "本批次标准",
+        "label": "本批次视觉主题",
         "available": status == "complete",
         "reason": reason,
         "rule": _text(classification.get("rule")) if isinstance(classification, dict) else "",
@@ -1155,20 +1155,12 @@ def _classification_mode_categories(classification, available, brand, brand_orde
             "id": category_id,
             "label": _text(group.get("label")) or category_id,
             "rule": _text(group.get("rule")) or mode["rule"],
-            "commonConclusion": [],
-            "derivativeDirections": [],
             "frames": [],
         })
-        target["commonConclusion"].extend(deepcopy(group.get("common_patterns", [])))
-        target["derivativeDirections"].extend(deepcopy(group.get("derivative_directions", [])))
         for ref in refs:
             frame_card = _frame_card(available[ref])
             frame_card["brand"] = "、".join(match_brands_from_title(frame_card.get("title"), brand_order)) or "其他品牌"
             target["frames"].append(frame_card)
-        ref_set = set(refs)
-        for item in target["commonConclusion"] + target["derivativeDirections"]:
-            if isinstance(item, dict):
-                item["frame_refs"] = [ref for ref in item.get("frame_refs", refs) if ref in ref_set] or refs
     if set(covered_refs) != scope_refs or len(covered_refs) != len(scope_refs):
         raise YuntuPresentationError("batch highlight frame coverage is invalid")
     mode["categories"] = list(merged.values())

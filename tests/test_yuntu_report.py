@@ -1285,19 +1285,19 @@ class YuntuReportTests(unittest.TestCase):
             with self.assertRaisesRegex(report.YuntuReportError, "batchClassification.*exactly once"):
                 report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
 
-    def test_validate_dual_highlight_classification_requires_exactly_three_pairs(self):
+    def test_validate_dual_highlight_classification_accepts_batch_groups_without_legacy_insights(self):
         report = load_module()
         analysis = self.deep_dive_analysis()
         analysis["highlightDashboard"] = self.dual_classification_dashboard()
-        analysis["highlightDashboard"]["batchClassification"]["groups"][0]["common_patterns"] = analysis["highlightDashboard"]["batchClassification"]["groups"][0]["common_patterns"][:2]
-        analysis["highlightDashboard"]["batchClassification"]["groups"][0]["derivative_directions"] = analysis["highlightDashboard"]["batchClassification"]["groups"][0]["derivative_directions"][:2]
+        for group in analysis["highlightDashboard"]["batchClassification"]["groups"]:
+            group.pop("common_patterns")
+            group.pop("derivative_directions")
         fact_pack = self.deep_dive_fact_pack()
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "analysis.json"
             path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(report.YuntuReportError, "batchClassification.*exactly 3"):
-                report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+            report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
 
     def test_validate_batch_highlight_taxonomy_requires_semantic_categories_and_two_groups(self):
         report = load_module()
@@ -1376,9 +1376,14 @@ class YuntuReportTests(unittest.TestCase):
 
         self.assertIn('data-highlight-classification-tab', rendered)
         self.assertIn('>标准分类<', rendered)
-        self.assertIn('>本批次标准<', rendered)
+        self.assertIn('>本批次视觉主题<', rendered)
         self.assertIn("主体协同 · 2 帧", rendered)
-        self.assertIn("分类规则：按主体协同关系与信息焦点对本批次画面分组。", rendered)
+        batch_start = rendered.index('id="highlight-all-brands-mode-batch-panel"')
+        batch_end = rendered.find('<section class="highlight-brand-panel"', batch_start)
+        batch_panel = rendered[batch_start:batch_end]
+        self.assertNotIn("共性洞察", batch_panel)
+        self.assertNotIn("裂变方向", batch_panel)
+        self.assertNotIn("分类规则：按主体协同关系与信息焦点对本批次画面分组。", batch_panel)
 
     def test_renders_batch_classification_distribution_chart(self):
         report = load_module()
@@ -1401,8 +1406,8 @@ class YuntuReportTests(unittest.TestCase):
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
 
         self.assertIn('data-highlight-batch-distribution', rendered)
-        self.assertIn('aria-label="本批次标准分类分布柱状图', rendered)
-        self.assertIn("本批次标准分类分布", rendered)
+        self.assertIn('aria-label="本批次视觉主题分布柱状图', rendered)
+        self.assertIn("本批次视觉主题分布", rendered)
         self.assertIn("主体协同", rendered)
         self.assertIn("信息机制", rendered)
         self.assertIn("2 帧", rendered)

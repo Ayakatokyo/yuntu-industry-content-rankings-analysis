@@ -201,6 +201,20 @@ class YuntuPresentationTests(unittest.TestCase):
         self.assertEqual(chapter04["brands"][0]["classificationModes"][0]["categories"][0]["label"], "portrait")
         self.assertEqual(chapter04["brands"][0]["classificationModes"][1]["categories"][0]["label"], "主体协同")
 
+    def test_batch_projection_ignores_legacy_insight_fields(self):
+        facts = self.fact_pack()
+        facts["filters"]["brands"] = ["WONDERLAB/万益蓝"]
+        for fact in facts["materialFacts"]:
+            fact["title"] = f"WONDERLAB/万益蓝 {fact['material_id']}"
+
+        payload = build_yuntu_presentation(self.dual_highlight_analysis(), facts)
+        batch = payload["chapters"]["chapter04"]["brands"][0]["classificationModes"][1]
+
+        self.assertTrue(batch["categories"])
+        for category in batch["categories"]:
+            self.assertNotIn("commonConclusion", category)
+            self.assertNotIn("derivativeDirections", category)
+
     def test_chapter05_panel_projects_script_analysis_and_evidence(self):
         facts = self.fact_pack()
         facts["materialFacts"][0].update({

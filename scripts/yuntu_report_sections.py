@@ -933,8 +933,8 @@ def render_highlight_insights(
             )
         return (
             '<article class="chart-card audience-chart highlight-batch-distribution" data-highlight-batch-distribution>'
-            '<h3>本批次标准分类分布</h3>'
-            '<div class="highlight-batch-distribution-scroll"><div class="audience-column-chart" role="group" aria-label="本批次标准分类分布柱状图，样本总数 '
+            '<h3>本批次视觉主题分布</h3>'
+            '<div class="highlight-batch-distribution-scroll"><div class="audience-column-chart" role="group" aria-label="本批次视觉主题分布柱状图，样本总数 '
             + esc(total_frames) + ' 帧">'
             + '<div class="audience-column-y-axis">'
             + ''.join('<span>' + f"{value:.0f}%" + '</span>' for value in (axis_max, axis_max * 0.75, axis_max * 0.5, axis_max * 0.25, 0))
@@ -944,7 +944,7 @@ def render_highlight_insights(
             '<p class="data-note">样本总数：' + esc(total_frames) + ' 帧</p></article>'
         )
 
-    def render_groups(groups, frames, *, id_prefix="highlight"):
+    def render_groups(groups, frames, *, id_prefix="highlight", show_insights=True):
         normalized_groups = {}
         for raw_group in groups:
             if not isinstance(raw_group, dict):
@@ -972,23 +972,23 @@ def render_highlight_insights(
                 click_text = f"点击指数 {format_index_value(frame.get('click_value'))}"
                 caption = f"#{esc(frame.get('rank', '-'))} · {esc(material_title(frame))} · {esc(frame_label(frame))} · {esc(frame.get('second'))}s · {click_text}"
                 cards.append('<article class="highlight-frame-card" data-highlight-frame-card data-highlight-material-id="' + esc(material_id) + '"><figure><button class="highlight-frame-preview highlight-frame-button" type="button" data-highlight-src="' + html_module.escape(image_src(frame), quote=True) + '" data-highlight-caption="' + html_module.escape(caption, quote=True) + '" aria-label="查看高光帧大图"><img loading="lazy" src="' + html_module.escape(image_src(frame), quote=True) + '" alt="' + esc(caption) + '"></button></figure><div class="highlight-frame-meta"><small class="highlight-frame-kind">' + esc(frame_label(frame)) + '</small><span class="highlight-frame-metric">' + esc(frame.get("second")) + 's · ' + esc(click_text) + '</span><button class="highlight-material-title" type="button" data-jump-material="' + esc(material_id) + '">' + esc(material_title(frame)) + '</button></div></article>')
-            pattern_items = []
-            for item in group["common_patterns"]:
-                if isinstance(item, dict):
-                    pattern_items.append('<article class="highlight-insight"><h5>' + esc(item.get("title", "")) + '</h5><p>' + esc(item.get("body", "")) + '</p></article>')
-                else:
-                    pattern_items.append('<article class="highlight-insight"><p>' + esc(item) + '</p></article>')
-            patterns = "".join(pattern_items)
-            directions_data = list(group["derivative_directions"])
-            if len(pattern_items) != len(directions_data):
-                # Keep the two columns strictly paired in the rendered report.
-                # Legacy model outputs may contain one-sided entries; trim to
-                # the shared prefix rather than showing unmatched insights.
-                pair_count = min(len(pattern_items), len(directions_data))
-                pattern_items = pattern_items[:pair_count]
+            insight_html = ""
+            if show_insights:
+                pattern_items = []
+                for item in group["common_patterns"]:
+                    if isinstance(item, dict):
+                        pattern_items.append('<article class="highlight-insight"><h5>' + esc(item.get("title", "")) + '</h5><p>' + esc(item.get("body", "")) + '</p></article>')
+                    else:
+                        pattern_items.append('<article class="highlight-insight"><p>' + esc(item) + '</p></article>')
                 patterns = "".join(pattern_items)
-                directions_data = directions_data[:pair_count]
-            directions = "<h4>裂变方向</h4>" + "".join(f'<article class="highlight-direction"><h5>{esc(item["title"])}</h5><p>{esc(item["body"])}</p></article>' for item in directions_data)
+                directions_data = list(group["derivative_directions"])
+                if len(pattern_items) != len(directions_data):
+                    pair_count = min(len(pattern_items), len(directions_data))
+                    pattern_items = pattern_items[:pair_count]
+                    patterns = "".join(pattern_items)
+                    directions_data = directions_data[:pair_count]
+                directions = "<h4>裂变方向</h4>" + "".join(f'<article class="highlight-direction"><h5>{esc(item["title"])}</h5><p>{esc(item["body"])}</p></article>' for item in directions_data)
+                insight_html = '<div class="highlight-analysis-pair"><div class="highlight-summary"><h4>共性洞察</h4><div class="highlight-patterns">' + patterns + '</div></div><div class="highlight-directions">' + directions + '</div></div>'
             page_count = max(1, math_module.ceil(len(refs) / 12))
             cards_panel_id = f"{id_prefix}-cards-{category}"
             highlight_data_card = (
@@ -1014,11 +1014,8 @@ def render_highlight_insights(
                 + (" hidden" if not selected else "")
                 + ' data-highlight-page-size="12" data-highlight-frame-count="'
                 + esc(len(refs))
-                + '"><div class="highlight-analysis-pair"><div class="highlight-summary"><h4>共性洞察</h4><div class="highlight-patterns">'
-                + patterns
-                + '</div></div><div class="highlight-directions">'
-                + directions
-                + '</div></div>'
+                + '">'
+                + insight_html
                 + highlight_data_card
                 + '</article>'
             )
@@ -1047,8 +1044,8 @@ def render_highlight_insights(
                     mode_tabs.append('<button type="button" role="tab" id="' + esc(mode_id) + '" aria-controls="' + esc(mode_panel_id) + '" aria-selected="' + str(mode_selected).lower() + '" tabindex="' + ("0" if mode_selected else "-1") + '" data-highlight-classification-tab data-highlight-classification-target="' + esc(mode_panel_id) + '"' + disabled + title + '>' + esc(mode["label"]) + '</button>')
                     if mode["available"]:
                         mode_content = render_batch_distribution(mode.get("distribution")) if mode.get("id") == "batch" else ""
-                        mode_content += render_groups(mode["dashboard"]["groups"], mode["frames"], id_prefix=mode_id)
-                        if mode["rule"]:
+                        mode_content += render_groups(mode["dashboard"]["groups"], mode["frames"], id_prefix=mode_id, show_insights=mode.get("id") != "batch")
+                        if mode["rule"] and mode.get("id") != "batch":
                             mode_content = '<p class="highlight-classification-rule">分类规则：' + esc(mode["rule"]) + '</p>' + mode_content
                     else:
                         mode_content = '<p class="data-note">本批次标准不可用' + ("：" + esc(mode["reason"]) if mode["reason"] else "") + '。</p>'

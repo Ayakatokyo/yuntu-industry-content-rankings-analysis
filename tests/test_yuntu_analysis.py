@@ -943,19 +943,18 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("standardClassification", prompt)
         self.assertIn("batchClassification", prompt)
 
-    def test_highlight_batch_taxonomy_requires_three_paired_insights(self):
+    def test_highlight_batch_taxonomy_omits_legacy_insight_fields(self):
         analysis = load_module()
 
         schema = analysis._highlight_output_schema()
         batch_group = schema["properties"]["batchClassification"]["properties"]["groups"]["items"]
-        self.assertEqual(batch_group["properties"]["common_patterns"]["minItems"], 3)
-        self.assertEqual(batch_group["properties"]["common_patterns"]["maxItems"], 3)
-        self.assertEqual(batch_group["properties"]["derivative_directions"]["minItems"], 3)
-        self.assertEqual(batch_group["properties"]["derivative_directions"]["maxItems"], 3)
+        self.assertEqual(batch_group["required"], ["category", "label", "rule", "frame_refs"])
+        self.assertIn("common_patterns", batch_group["properties"])
+        self.assertIn("derivative_directions", batch_group["properties"])
 
         prompt = analysis._prompt_text(filters={"brands": ["燕之屋"]})
-        self.assertIn("3 条共性洞察 + 3 条裂变方向", prompt)
-        self.assertIn("改写动作、变体方式和验证指标", prompt)
+        self.assertNotIn("3 条共性洞察 + 3 条裂变方向", prompt)
+        self.assertIn("历史 JSON 即使携带", prompt)
 
     def test_highlight_prompt_requires_fine_grained_batch_taxonomy(self):
         analysis = load_module()
@@ -975,7 +974,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         batch_group = analysis._highlight_output_schema()["properties"]["batchClassification"]["properties"]["groups"]["items"]
         self.assertEqual(
             batch_group["required"],
-            ["category", "label", "rule", "frame_refs", "common_patterns", "derivative_directions"],
+            ["category", "label", "rule", "frame_refs"],
         )
 
     def test_script_prompt_requires_qianchuan_aligned_ordered_insights(self):

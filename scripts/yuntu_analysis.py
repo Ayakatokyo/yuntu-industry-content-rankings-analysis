@@ -1217,14 +1217,16 @@ def _highlight_output_schema():
     batch_group_schema = {
         "type": "object",
         "additionalProperties": False,
-        "required": ["category", "label", "rule", "frame_refs", "common_patterns", "derivative_directions"],
+        "required": ["category", "label", "rule", "frame_refs"],
         "properties": {
             "category": {"type": "string", "minLength": 1},
             "label": {"type": "string", "minLength": 1},
             "rule": {"type": "string", "minLength": 1},
             "frame_refs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
-            "common_patterns": {"type": "array", "minItems": 3, "maxItems": 3, "items": direction_schema},
-            "derivative_directions": {"type": "array", "minItems": 3, "maxItems": 3, "items": direction_schema},
+            # Historical analysis files may retain these fields; they are no
+            # longer generated or projected for batch visual themes.
+            "common_patterns": {"type": "array", "items": direction_schema},
+            "derivative_directions": {"type": "array", "items": direction_schema},
         },
     }
     classification_schema = {

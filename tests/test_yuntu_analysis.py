@@ -22,6 +22,16 @@ def load_module():
 
 
 class YuntuAnalysisTests(unittest.TestCase):
+    def test_chapter02_zero_sample_scope_is_explicitly_unavailable(self):
+        analysis = load_module()
+
+        scope = analysis._chapter02_scope_fact([], label="零样本品牌", limit=1000)
+
+        self.assertEqual(scope["sampleCount"], 0)
+        self.assertEqual(scope["availability"], "unavailable")
+        self.assertEqual(scope["missingReason"], "no_matching_material_in_scope")
+        self.assertEqual(scope["topMaterials"], [])
+
     def test_second_level_breakdown_uses_canonical_trend_names_and_script_coverage(self):
         analysis = load_module()
         detail = {

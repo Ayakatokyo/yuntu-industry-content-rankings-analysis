@@ -30,6 +30,63 @@ def load_module():
 
 
 class YuntuReportTests(unittest.TestCase):
+    def test_chapter01_and_keyword_cloud_have_overflow_safe_geometry_contract(self):
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+        self.assertIn(".unified-yuntu .brand-tabs,", css)
+        self.assertIn(".unified-yuntu .hot-material-card { min-width:0; max-width:100%; }", css)
+        self.assertIn(".unified-yuntu .brand-tab { min-width:0; white-space:normal; overflow-wrap:anywhere; }", css)
+        compact_cloud = css[css.rfind("/* The keyword cloud is intentionally dense"):]
+        self.assertIn("display:flex;", compact_cloud)
+        self.assertIn("flex-wrap:wrap;", compact_cloud)
+        self.assertIn("gap:6px 8px;", compact_cloud)
+        self.assertIn("min-height:0;", compact_cloud)
+
+    def test_keyword_selling_point_is_required_and_bound_to_its_keyword_evidence(self):
+        report = load_module()
+        facts = {"keywordCloud": {"keywords": [{
+            "keyword": "豆浆", "evidenceRefs": ["script:101:text:豆浆"], "materialIds": ["101"],
+        }, {
+            "keyword": "西梅", "evidenceRefs": ["script:102:text:西梅"], "materialIds": ["102"],
+        }]}}
+        analysis = {
+            "keywordCloudReview": [{"keyword": "豆浆", "decision": "accept", "target": ""}, {"keyword": "西梅", "decision": "accept", "target": ""}],
+            "keywordCloudInsight": {"oneSentenceConclusion": "豆浆是可用关键词。", "summary": "脚本文本中存在可回溯的豆浆表达。", "sellingPoints": []},
+        }
+        with self.assertRaisesRegex(report.YuntuReportError, "sellingPoints is required"):
+            report._validate_keyword_cloud_analysis(analysis, facts)
+
+        analysis["keywordCloudInsight"]["sellingPoints"] = [{
+            "title": "豆浆表达", "description": "使用豆浆关键词组织卖点表达。",
+            "keywordRefs": ["豆浆"], "evidenceRefs": ["script:102:text:西梅"],
+        }]
+        with self.assertRaisesRegex(report.YuntuReportError, "must belong to keywordRefs"):
+            report._validate_keyword_cloud_analysis(analysis, facts)
+
+    def test_chapter02_rejects_cross_scope_evidence_and_template_reuse(self):
+        report = load_module()
+        summary = lambda material_id, text: {"title": "事实驱动标题", "summary": text, "evidence": ["tag"], "material_ids": [material_id]}
+        value = {"scopeOrder": ["all", "品牌A"], "scopes": {
+            "all": {"audienceSummary": summary("101", "女性与早餐场景共同出现，建议验证场景表达。"), "marketingSummary": summary("101", "成分类标签集中，建议验证信息取舍。")},
+            "品牌A": {"audienceSummary": summary("102", "女性与早餐场景共同出现，建议验证场景表达。"), "marketingSummary": summary("102", "产品标签不同，建议验证产品表达。")},
+        }}
+        facts = {"chapter02AiFacts": {"scopeOrder": ["all", "品牌A"], "all": {"sampleCount": 1, "topMaterials": [{"material_id": "101"}]}, "品牌A": {"sampleCount": 1, "topMaterials": [{"material_id": "102"}]}}}
+        with self.assertRaisesRegex(report.YuntuReportError, "must differ"):
+            report._validate_chapter02_insights(value, fact_pack=facts)
+        value["scopes"]["品牌A"]["audienceSummary"] = summary("101", "品牌A有独立的人群标签，建议验证表达。")
+        with self.assertRaisesRegex(report.YuntuReportError, "outside scope"):
+            report._validate_chapter02_insights(value, fact_pack=facts)
+
+    def test_frame_understanding_rejects_second_only_template_changes_for_current_contract(self):
+        report = load_module()
+        frames = [{"frame_ref": "highlight:101:cover:0"}, {"frame_ref": "highlight:101:click_peak:2"}]
+        item = {"status": "complete", "subject": "产品包装", "visual_focus": "居中产品", "human_product_relation": "无人", "action": "静置展示", "composition": "竖屏近景", "information_expression": "包装文字可见", "failure_reason": ""}
+        dashboard = {"frameUnderstanding": [
+            {"frame_ref": frames[0]["frame_ref"], **item},
+            {"frame_ref": frames[1]["frame_ref"], **item},
+        ], "standardClassification": {"status": "unavailable", "missing_reason": "test", "groups": []}, "batchClassification": {"status": "unavailable", "missing_reason": "test", "groups": []}}
+        with self.assertRaisesRegex(report.YuntuReportError, "observations must differ"):
+            report._validate_highlight_dual_classification(dashboard, frames, strict_semantic_contract=True)
+
     def test_script_scope_limitations_do_not_trigger_industry_claim_gate(self):
         report = load_module()
         for summary in (

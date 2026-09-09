@@ -187,6 +187,10 @@ def validate_analysis_input(*, analysis_json, fact_pack=None):
         strict_top_material_contract=strict_top_material_contract,
     )
     _validate_ranking_scope_contract(analysis, fact_pack)
+    if "chapter02Insights" in analysis:
+        _validate_chapter02_insights(
+            analysis["chapter02Insights"], fact_pack=fact_pack
+        )
     _validate_period_and_hot_material_contract(analysis, fact_pack)
     _validate_script_insights(analysis, fact_pack)
     _validate_highlight_dashboard(analysis, fact_pack)
@@ -299,6 +303,14 @@ def _validate_keyword_cloud_analysis(analysis, script_facts):
         keyword for keyword in candidates
         if review_by_keyword.get(keyword, {}).get("decision", "accept") != "exclude"
     } | merge_targets
+    projected_evidence_by_keyword = {}
+    for keyword, item in candidates.items():
+        decision = review_by_keyword.get(keyword, {}).get("decision", "accept")
+        projected = review_by_keyword.get(keyword, {}).get("target", "") if decision == "merge" else keyword
+        if decision != "exclude":
+            projected_evidence_by_keyword.setdefault(projected, set()).update(
+                str(ref) for ref in item.get("evidenceRefs", []) if str(ref).strip()
+            )
     insight = analysis.get("keywordCloudInsight")
     if not isinstance(insight, dict) or set(insight) - {"oneSentenceConclusion", "summary", "sellingPoints"}:
         raise YuntuReportError("keywordCloudInsight is invalid")
@@ -307,6 +319,8 @@ def _validate_keyword_cloud_analysis(analysis, script_facts):
     selling_points = insight.get("sellingPoints")
     if not isinstance(selling_points, list) or len(selling_points) > 4:
         raise YuntuReportError("keywordCloudInsight.sellingPoints must contain at most four items")
+    if projected_keywords and not selling_points:
+        raise YuntuReportError("keywordCloudInsight.sellingPoints is required when keywords remain")
     for index, item in enumerate(selling_points, start=1):
         field = f"keyword cloud selling point {index}"
         if not isinstance(item, dict) or set(item) - {"title", "description", "keywordRefs", "evidenceRefs"}:
@@ -323,6 +337,9 @@ def _validate_keyword_cloud_analysis(analysis, script_facts):
             not isinstance(ref, str) or ref not in candidate_refs for ref in evidence_refs
         ):
             raise YuntuReportError(f"{field} evidenceRefs are invalid")
+        allowed_refs = set().union(*(projected_evidence_by_keyword.get(ref, set()) for ref in keyword_refs))
+        if not set(evidence_refs).issubset(allowed_refs):
+            raise YuntuReportError(f"{field} evidenceRefs must belong to keywordRefs")
 
 
 def _validate_summary(value, field):
@@ -416,7 +433,12 @@ def _brand_ranking_facts(fact_pack):
     return legacy_facts if isinstance(legacy_facts, dict) else {}
 
 
-def _validate_chapter02_insights(value):
+def _normalized_semantic_text(value):
+    """Compare model prose without allowing seconds/spacing to hide a template."""
+    return re.sub(r"[0-9０-９\s，。；、：:（）()【】\-—_]+", "", str(value or ""))
+
+
+def _validate_chapter02_insights(value, fact_pack=None):
     if not isinstance(value, dict):
         raise YuntuReportError("chapter02Insights must be an object")
     order = value.get("scopeOrder")
@@ -425,6 +447,8 @@ def _validate_chapter02_insights(value):
         raise YuntuReportError("chapter02Insights.scopeOrder must start with all")
     if not isinstance(scopes, dict) or set(order) != set(scopes):
         raise YuntuReportError("chapter02Insights.scopes must match scopeOrder")
+    seen_by_dimension = {"audienceSummary": set(), "marketingSummary": set()}
+    scope_facts = fact_pack.get("chapter02AiFacts", {}) if isinstance(fact_pack, dict) else {}
     for scope_key in order:
         scope = scopes[scope_key]
         if not isinstance(scope, dict):
@@ -439,7 +463,30 @@ def _validate_chapter02_insights(value):
                 raise YuntuReportError(f"chapter02Insights {scope_key} {field} title is required")
             if summary.get("summary") not in (None, ""):
                 _validate_summary(summary.get("summary"), f"chapter02Insights {field} summary")
-            _validate_evidence_and_material_ids(summary, f"chapter02Insights {field}")
+            if not isinstance(fact_pack, dict) or "chapter02AiFacts" not in fact_pack:
+                _validate_evidence_and_material_ids(summary, f"chapter02Insights {field}")
+                continue
+            scope_fact = scope_facts.get(scope_key, {})
+            sample_count = scope_fact.get("sampleCount") if isinstance(scope_fact, dict) else None
+            known_ids = {
+                str(item.get("material_id")) for item in scope_fact.get("topMaterials", [])
+                if isinstance(item, dict) and str(item.get("material_id") or "")
+            } if isinstance(scope_fact, dict) else set()
+            evidence, material_ids = summary.get("evidence"), summary.get("material_ids")
+            if sample_count == 0 or (isinstance(scope_fact, dict) and scope_fact.get("availability") == "unavailable"):
+                if evidence != [] or material_ids != []:
+                    raise YuntuReportError(f"chapter02Insights {scope_key} unavailable scope must not cite evidence")
+                if "数据不足以判断" not in str(summary.get("summary") or ""):
+                    raise YuntuReportError(f"chapter02Insights {scope_key} unavailable scope must state data insufficiency")
+                continue
+            if not isinstance(evidence, list) or not evidence or not isinstance(material_ids, list) or not material_ids:
+                raise YuntuReportError(f"chapter02Insights {scope_key} {field} requires scoped evidence")
+            if not set(material_ids).issubset(known_ids):
+                raise YuntuReportError(f"chapter02Insights {scope_key} {field} references material outside scope")
+            normalized = _normalized_semantic_text(summary.get("summary"))
+            if normalized in seen_by_dimension[field]:
+                raise YuntuReportError(f"chapter02Insights {field} must differ across nonempty scopes")
+            seen_by_dimension[field].add(normalized)
 def _normalize_chapter02_insights(value):
     """Adapt attested pre-tab chapter 02 insights without changing their source file."""
     if not isinstance(value, dict) or not isinstance(value.get("scopes"), dict):
@@ -1077,7 +1124,9 @@ def _validate_highlight_classification_groups(groups, known_refs, *, mode):
             raise YuntuReportError("standardClassification groups must use portrait, product, other order")
 
 
-def _validate_highlight_dual_classification(dashboard, successful_frames):
+def _validate_highlight_dual_classification(
+    dashboard, successful_frames, *, strict_semantic_contract=False
+):
     fields = ("frameUnderstanding", "standardClassification", "batchClassification")
     present = [field for field in fields if field in dashboard]
     if not present:
@@ -1089,6 +1138,7 @@ def _validate_highlight_dual_classification(dashboard, successful_frames):
     if not isinstance(understanding, list):
         raise YuntuReportError("frameUnderstanding must be a list")
     understanding_refs = []
+    understanding_texts = set()
     for item in understanding:
         if not isinstance(item, dict) or not isinstance(item.get("frame_ref"), str):
             raise YuntuReportError("frameUnderstanding items must include frame_ref")
@@ -1104,6 +1154,11 @@ def _validate_highlight_dual_classification(dashboard, successful_frames):
             required_fields = ("subject", "visual_focus", "human_product_relation", "action", "composition", "information_expression")
             if not all(isinstance(item.get(field), str) and item[field].strip() for field in required_fields):
                 raise YuntuReportError("frameUnderstanding complete items require visual observations")
+            if strict_semantic_contract:
+                semantic = _normalized_semantic_text(" ".join(item.get(field, "") for field in required_fields))
+                if semantic in understanding_texts:
+                    raise YuntuReportError("frameUnderstanding observations must differ by frame")
+                understanding_texts.add(semantic)
         understanding_refs.append(ref)
     if len(understanding_refs) != len(set(understanding_refs)) or set(understanding_refs) != known_refs:
         raise YuntuReportError("frameUnderstanding must cover each successful frame exactly once")
@@ -1140,7 +1195,10 @@ def _validate_highlight_dashboard(analysis, fact_pack):
             )
         # Historical reports may be re-rendered before visual analysis exists.
         return
-    _validate_highlight_dual_classification(dashboard, successful_frames)
+    _validate_highlight_dual_classification(
+        dashboard, successful_frames,
+        strict_semantic_contract=fact_pack.get("schemaVersion", 0) >= 8,
+    )
     scoped_brands = dashboard.get("brands")
     if scoped_brands is not None:
         if not isinstance(scoped_brands, list) or not scoped_brands:
@@ -1339,6 +1397,8 @@ def _validate_material_deep_dives(analysis, fact_pack):
         if not isinstance(observations, list):
             raise YuntuReportError("materialDeepDives frame_observations must be a list")
         observation_refs = []
+        strict_semantic_contract = fact_pack.get("schemaVersion", 0) >= 8
+        observation_texts = set()
         for observation in observations:
             if not isinstance(observation, dict) or not isinstance(observation.get("frame_ref"), str):
                 raise YuntuReportError("materialDeepDives frame_observations must include frame_ref")
@@ -1347,11 +1407,18 @@ def _validate_material_deep_dives(analysis, fact_pack):
                 "materialDeepDives frame observation",
                 "frame_observation",
             )
+            if strict_semantic_contract:
+                semantic = _normalized_semantic_text(observation.get("observation"))
+                if semantic in observation_texts:
+                    raise YuntuReportError("materialDeepDives frame observations must differ by frame")
+                observation_texts.add(semantic)
             observation_refs.append(observation["frame_ref"])
         if len(observation_refs) != len(set(observation_refs)) or set(observation_refs) != known_refs:
             raise YuntuReportError("materialDeepDives must observe each successful frame exactly once")
         script_analysis = dive.get("scriptAnalysis")
         if script_analysis is None:
+            if strict_semantic_contract:
+                raise YuntuReportError("scriptAnalysis is required for every selected material")
             continue
         if not isinstance(script_analysis, dict) or set(script_analysis) - {"conclusion", "evidenceRefs", "availability"}:
             raise YuntuReportError("scriptAnalysis is invalid")
@@ -1369,15 +1436,26 @@ def _validate_material_deep_dives(analysis, fact_pack):
         if any(ref not in known_script_refs for ref in evidence_refs):
             raise YuntuReportError("scriptAnalysis evidenceRefs must belong to current material")
         conclusion = script_analysis.get("conclusion")
+        script = fact.get("script", {}) if isinstance(fact.get("script"), dict) else {}
+        has_script_text = bool(str(script.get("text") or fact.get("script_text") or "").strip())
         if availability == "available":
+            if not has_script_text:
+                raise YuntuReportError("scriptAnalysis must be unavailable when script text is absent")
             if not isinstance(conclusion, str) or not 120 <= len(conclusion.strip()) <= 220:
                 raise YuntuReportError("scriptAnalysis conclusion must be 120-220 characters")
             if not evidence_refs:
                 raise YuntuReportError("scriptAnalysis evidenceRefs must not be empty when available")
             if SCRIPT_ANALYSIS_FORBIDDEN_CLAIM.search(conclusion):
                 raise YuntuReportError("scriptAnalysis conclusion contains unsupported claim")
-        elif conclusion is not None and (not isinstance(conclusion, str) or not conclusion.strip()):
-            raise YuntuReportError("scriptAnalysis conclusion is invalid")
+        else:
+            if not strict_semantic_contract:
+                continue
+            if has_script_text:
+                raise YuntuReportError("scriptAnalysis must be available when script text exists")
+            if evidence_refs:
+                raise YuntuReportError("unavailable scriptAnalysis evidenceRefs must be empty")
+            if not isinstance(conclusion, str) or "数据不足以判断" not in conclusion:
+                raise YuntuReportError("unavailable scriptAnalysis must state data insufficiency")
 
     if set(dives_by_id) != set(selected_ids):
         raise YuntuReportError("materialDeepDives must cover every selected material")

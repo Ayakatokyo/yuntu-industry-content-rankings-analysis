@@ -737,9 +737,12 @@ def _data_limitations(material_facts):
 
 def _chapter02_scope_fact(records, *, label, limit):
     selected = select_top_materials(records, limit=limit)
+    sample_count = len(selected)
     return {
         "label": label,
-        "sampleCount": len(selected),
+        "sampleCount": sample_count,
+        "availability": "available" if sample_count else "unavailable",
+        "missingReason": "" if sample_count else "no_matching_material_in_scope",
         "topMaterials": [_ranking_material_fact(record) for record in selected],
         "audienceDashboard": build_audience_dashboard(selected, limit=len(selected) or 1),
         "marketingDashboard": build_marketing_dashboard(selected, limit=len(selected) or 1),
@@ -1753,15 +1756,16 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
         "all": _chapter02_scope_fact(pool_records, label="全量 TOP1000", limit=1000),
     }
     for brand in configured_brands:
-        if brand not in brand_facts["brands"]:
-            continue
-        full_brand_materials = brand_facts["brands"][brand].get("materials", [])
+        # Retain zero-match brands as explicit scopes. They are unavailable,
+        # not a license to borrow evidence from all/another brand.
+        brand_scope = brand_facts["brands"].get(brand, {})
+        full_brand_materials = brand_scope.get("materials", [])
         full_brand_records = [
             list_by_id[item["material_id"]]
             for item in full_brand_materials
             if item.get("material_id") in list_by_id
         ]
-        ai_brand_materials = brand_facts["brands"][brand].get("materials", [])
+        ai_brand_materials = brand_scope.get("materials", [])
         ai_brand_records = [
             list_by_id[item["material_id"]]
             for item in ai_brand_materials

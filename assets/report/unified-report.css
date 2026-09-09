@@ -2109,6 +2109,43 @@ body.unified-report {
   }
 }
 
+/* Chapter 01: a long brand/fact must stay inside the report column. */
+.unified-yuntu #top-material-combination,
+.unified-yuntu #top-material-combination > .top-material-brands,
+.unified-yuntu #top-material-combination .yuntu-content-card,
+.unified-yuntu .brand-tabs,
+.unified-yuntu .brand-panels,
+.unified-yuntu .brand-panel,
+.unified-yuntu .chapter01-comparison,
+.unified-yuntu .chapter01-comparison-grid,
+.unified-yuntu .chapter01-comparison-card,
+.unified-yuntu .hot-material-panel,
+.unified-yuntu .hot-material-grid,
+.unified-yuntu .hot-material-card { min-width:0; max-width:100%; }
+.unified-yuntu .brand-tab { min-width:0; white-space:normal; overflow-wrap:anywhere; }
+.unified-yuntu .chapter01-comparison-card :is(h5,h6,li,strong),
+.unified-yuntu .hot-material-card :is(h5,p,small) { min-width:0; overflow-wrap:anywhere; word-break:break-word; }
+.unified-yuntu .hot-material-card h5 { white-space:normal; overflow:visible; text-overflow:clip; }
+
+/* The keyword cloud is intentionally dense, while retaining every token. */
+.unified-yuntu .keyword-cloud-words {
+  display:flex;
+  flex:1 1 auto;
+  flex-wrap:wrap;
+  align-content:flex-start;
+  align-items:baseline;
+  justify-content:flex-start;
+  gap:6px 8px;
+  min-height:0;
+  padding:4px 2px;
+  line-height:1.28;
+}
+.unified-yuntu .keyword-cloud-word { flex:0 1 auto; padding:2px 4px; line-height:1.28; }
+@media (max-width:700px) {
+  .unified-yuntu .brand-tabs { gap:8px; }
+  .unified-yuntu .keyword-cloud-words { gap:5px 6px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .unified-yuntu .script-formula-drill,
   .unified-yuntu .script-formula-primary-column,

@@ -1193,7 +1193,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         )
         self.assertEqual(deep_dive["evidence"]["materialFacts"][0]["material_id"], "1")
         self.assertIn("analysis-unit-manifest.json", prompt)
-        self.assertIn("同一次模型调用", prompt)
+        self.assertIn("同一次分析任务", prompt)
         self.assertIn("ranking-brand-input.json` 的 `outputSchema", prompt)
         self.assertIn(
             '`classificationSource` 只能是 `title_rule` 或 `runtime_title_rule`',

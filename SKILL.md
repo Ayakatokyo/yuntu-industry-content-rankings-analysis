@@ -1,12 +1,22 @@
 ---
 name: 云图行业内容榜单分析
-description: 适用于通过固定预策 RPA 连接器获取行业内容榜单与秒级详情，并生成内容策略报告的场景。
+description: 适用于通过固定预策 RPA 连接器获取行业内容榜单与秒级详情，或复用已落盘的云图数据、高光帧和视频继续分析并生成内容策略报告的场景。
 argument_hint: 输入行业、分析周期（近7天、近30天或自定义起止日期）、指定品牌、截取方式、年龄、性别、八大人群和秒级拆解素材数，生成行业内容榜单分析报告。
 metadata:
   pre_input: 帮我生成云图行业内容榜单分析报告，行业是 ____，分析周期是 ____（近7天、近30天或自定义起止日期；近7天/近30天直接使用云图周期定义，不换算为自定义日期），指定品牌是 ____（至少3个品牌），截取方式是 ____（曝光量TOP1000、CTRTOP1000、互动率TOP1000、完播率TOP1000），年龄是 ____（可选；不填写则不筛选，即全选），性别是 ____（可选；不填写则不筛选，即全选），八大人群是 ____（可选；不填写则不筛选，即全选），秒级拆解素材数是 ____（默认10）。
 ---
 
 # 云图行业内容榜单分析
+
+## 已落盘数据续跑
+
+用户要求“用已落盘数据继续分析/重新生成报告”时直接进入本节；采集参数从原批次 manifest 读取，不重新索要账号凭证或启动 `fetch`。只有本地数据不足且用户明确要求补采时，才进入采集流程。
+
+- 先定位用户指定批次及 `batch-manifest.json`，核对实际周期、筛选、选中素材 ID、规范化文件路径和本地资产。用户只说“最新”时核对清单内容和对话来源，不按目录名、mtime 或旧报告文件名猜测；有无法消除的多个候选时再询问。记录源清单/输入文件 SHA-256 和本轮独立输出路径。
+- 先判断重分析还是仅重渲染。用户要求完整后续分析时，生成新 AI JSON，不把历史 JSON 改名或补字段冒充新分析。仅重渲染才考虑复用已通过校验、且事实包/提示词绑定未变化的历史分析。
+- 保留源 CSV、normalized、旧 AI JSON、报告和 provenance。`prepare-analysis` 会检查高光帧并可能下载视频、截帧和回写资产清单；纯本地续跑前先检查资产完整性，并在独立批次副本运行，保持相对路径。已齐备资产直接复用；缺失资产若用户未授权补取，先报告具体缺口，不让准备步骤隐式联网。
+- 区分 `source_empty`（源字段确实为空）、`parse_failed`（解码失败）和映射遗漏。仅在数据诊断阶段允许只读追溯 raw CSV → normalized → 章节事实包；业务分析仍只使用规范化后的章节事实。发现 CSV/normalized 有趋势而事实包称 `trend_not_returned`，先修复本地规范化或事实映射，不能靠提示词补造数据。字段存在不等于正文非空，创意标签不能代替完整脚本。
+- 新事实包生成后核对素材集合、五类趋势点、脚本覆盖和成功帧集合。帧从旧数量变为新数量、脚本新增、素材范围或提示词改变时，旧分析需重新生成并重新 attest；不得删掉新增帧来迎合旧 JSON。阶段分别记为事实准备、模型分析、校验、渲染、交付，不用采集 `success` 代替分析完成。
 
 ## 先确认参数
 
@@ -41,7 +51,9 @@ python <skill-root>/scripts/rpa_connector.py retry-unresolved --shop-id "<shop_i
 
 分析阶段只读 `normalized/` 与 `diagnostic-analysis/`，不读原始 CSV、RPA response 或临时 `fileUrl`。先运行 `prepare-analysis`；新批次不再生成 `yuntu-analysis-data.json`，生成 `report-data.json`、`diagnostic-analysis/yuntu-ai-analysis.schema.json`、`diagnostic-analysis/yuntu-analysis-prompt.md` 和五个章节事实包。历史批次缺少 `report-data.json` 时兼容渲染已有 `yuntu-analysis-data.json`；旧版完整 JSON 的额外字段忽略。渲染产物还包括 `final-report.md`。
 
-当前对话模型直接完成一次分析：读取 manifest、五包和实际查看全部可用本地 JPEG，生成 `yuntu-ai-analysis.json`。禁止用 `codex exec`、子进程或外部模型服务，且不得仅凭 `--generator` 认定模型；固定规则只统计，禁止程序化兜底生成业务结论。脚本和生成的提示词是 schema 权威，只生成当前报告实际展示的分析模块。
+当前对话模型直接完成一次分析任务：读取 manifest、五包和实际查看全部可用本地 JPEG，生成 `yuntu-ai-analysis.json`。允许在当前任务中按章节、素材或帧批次分步阅读并保存模型撰写的草稿；每次保存记录事实包/提示词哈希、已查看帧引用和待办，恢复时先核对绑定。manifest 的 `single_model_call` 保留为既有契约标识，不要求一次工具输出塞完所有图片和 JSON。禁止用 `codex exec`、子进程或外部模型服务调用模型，且不得仅凭 `--generator` 认定模型；脚本可无损组装模型已写出的 JSON 和检查覆盖，固定规则只统计，禁止程序化兜底或根据品牌、标题、帧序号套模板生成业务结论。脚本和生成的提示词是 schema 权威，只生成当前报告实际展示的分析模块。
+
+校验失败后按报错字段修复：引用/素材/帧覆盖不符先查绑定与漏项；`unsupported claim` 核对具体句子和命中词，区别实际外推与否定性的范围限制；缺失事实保留不可用状态。不要为了通过门禁删证据、关闭 provenance、绕过 CLI 直接渲染或机械扩写凑字数。同一错误在未修改输入时不重复执行；修复受影响草稿后重新 attest，成功后继续 render 和打包，不把一次校验失败当成任务结束。
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py prepare-analysis --input-dir "RPA数据汇总/yuntu-rankings-analysis" --output-dir "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis"

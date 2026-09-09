@@ -1,6 +1,10 @@
 # 云图行业内容榜单分析任务
 
-读取同目录的 `analysis-units/analysis-unit-manifest.json`、manifest 指向的 `yuntu-ai-analysis.schema.json` 及其列出的五个章节事实包，在同一次模型调用中生成 `yuntu-ai-analysis.json`。最终 JSON 必须严格符合统一输出 Schema；不要读取 `yuntu-analysis-data.json` 或 `report-data.json` 作为模型证据。
+读取同目录的 `analysis-units/analysis-unit-manifest.json`、manifest 指向的 `yuntu-ai-analysis.schema.json` 及其列出的五个章节事实包，由当前对话模型在同一次分析任务中生成 `yuntu-ai-analysis.json`。最终 JSON 必须严格符合统一输出 Schema；不要读取 `yuntu-analysis-data.json` 或 `report-data.json` 作为模型证据。
+
+可以按章节、素材和帧批次分步阅读，及时保存模型撰写的草稿和已查看帧引用；最终无损组装为一个 JSON。草稿须绑定本次 manifest、五包及提示词哈希，恢复前核对，不能把旧事实包生成的正文直接移植到新批次。`single_model_call` 是既有契约标识，不限制当前任务的工具读取次数。每张可用 JPEG 均需实际查看；保存草稿不等于完成，最终仍需通过完整引用、帧覆盖和来源校验。
+
+缺失数据优先于篇幅和分析结构要求：有事实的维度正常分析，真正缺失的维度简洁说明“数据不足以判断”，不为凑句数或字数编写机制、策略或行业结论。可以明确写“覆盖不足以支持行业普遍结论”；这类范围限制不代表可以在同段其他句子声称行业规律或指标因果。解析失败与源字段为空须按事实包分别表达；怀疑映射异常时反馈具体素材和字段供本地诊断，不自行读取 CSV 补证。
 
 本提示词采用固定提示词模板；本次品牌榜单分析范围为行业 TOP1000 内按品牌匹配的全部素材，品牌范围为：__BRANDS__。
 

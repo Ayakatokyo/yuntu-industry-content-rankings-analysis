@@ -30,6 +30,36 @@ def load_module():
 
 
 class YuntuReportTests(unittest.TestCase):
+    def test_script_scope_limitations_do_not_trigger_industry_claim_gate(self):
+        report = load_module()
+        for summary in (
+            "当前已获取详情素材中，仅少量素材返回了可用的内容公式或标签结构，覆盖不足以支持行业普遍结论。现有事实更适合用于识别已出现的标签组合。",
+            "当前样本不能代表行业普遍规律。",
+            "数据不足以支持行业规律。",
+        ):
+            with self.subTest(summary=summary):
+                report._validate_script_insights({"scriptInsights": [{
+                    "title": "脚本结构", "summary": summary,
+                    "evidence": ["script_text"], "material_ids": ["101"],
+                }]}, {"scriptFacts": {"materials": [{"material_id": "101"}]}})
+
+    def test_scope_limitation_does_not_exempt_other_unsupported_claims(self):
+        report = load_module()
+        for summary in (
+            "该结构是行业普遍规律。",
+            "覆盖不足以支持行业普遍结论，但该句导致点击提升。",
+            "覆盖不足以支持行业普遍结论。但该结构仍是行业规律。",
+            "覆盖不足以支持行业普遍结论。已建立帧-话术对应关系。",
+            "并非不能代表行业普遍规律。",
+            "不能代表行业普遍规律的说法是错误的。",
+        ):
+            with self.subTest(summary=summary):
+                with self.assertRaisesRegex(report.YuntuReportError, "unsupported claim"):
+                    report._validate_script_insights({"scriptInsights": [{
+                        "title": "脚本结构", "summary": summary,
+                        "evidence": ["script_text"], "material_ids": ["101"],
+                    }]}, {"scriptFacts": {"materials": [{"material_id": "101"}]}})
+
     LEGACY_UNUSED_ANALYSIS_FIELDS = (
         "rankingOverview",
         "audienceInsights",

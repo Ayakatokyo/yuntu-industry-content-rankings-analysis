@@ -135,6 +135,13 @@ DEEP_DIVE_FORBIDDEN_CLAIM = re.compile(
 SCRIPT_INSIGHT_FORBIDDEN_CLAIM = re.compile(
     r"导致|提升|因果|行业(?:普遍|规律)|帧[-—]?话术|话术[-—]?帧|秒点.{0,8}话术|话术.{0,8}秒点|convertCnt.{0,8}订单|订单.{0,8}convertCnt"
 )
+# Exempt only complete, explicit scope-limitation clauses, not the whole summary.
+# Other claims in the same paragraph must still pass the existing gate.
+SCRIPT_SCOPE_LIMITATION = re.compile(
+    r"(?:^|[，。；！？\n])(?:当前|本批次)?(?:样本|数据|证据|覆盖)?"
+    r"(?:不足以支持|不能代表|不能外推为|无法推断)"
+    r"(?:行业普遍(?:结论|规律)|行业规律)(?=$|[，。；！？\n])"
+)
 SCRIPT_ANALYSIS_FORBIDDEN_CLAIM = re.compile(
     r"标题|画面|高光帧|秒级|曝光|点击(?:率|量|次数)?|互动(?:率|量|次数)?|评论(?:率|量|次数)?|转化|因果|导致|提升|下降|波峰|流失"
 )
@@ -226,8 +233,12 @@ def _validate_script_insights(analysis, fact_pack):
             raise YuntuReportError(f"{field} must include material IDs")
         if known_ids and not set(material_ids).issubset(known_ids):
             raise YuntuReportError(f"{field} references unknown material IDs")
-        if SCRIPT_INSIGHT_FORBIDDEN_CLAIM.search(item["summary"]):
-            raise YuntuReportError(f"{field} contains unsupported claim")
+        claim_text = SCRIPT_SCOPE_LIMITATION.sub("", item["summary"])
+        unsupported = SCRIPT_INSIGHT_FORBIDDEN_CLAIM.search(claim_text)
+        if unsupported:
+            raise YuntuReportError(
+                f"{field}.summary contains unsupported claim: {unsupported.group(0)}"
+            )
         if strict_script_contract:
             expected_prefix = "一二级内容公式：" if index == 1 else "脚本文案："
             if not item["title"].startswith(expected_prefix):
@@ -512,6 +523,17 @@ def _validate_ranking_scope_contract(analysis, fact_pack):
     for brand in actual_names:
         scope = brand_facts.get(brand)
         if not isinstance(scope, dict) or scope.get("source_scope") not in {"brand_in_top1000", "brand_top_n"}:
+            comparison_scope = (
+                (fact_pack.get("comparisonFacts") or {}).get("scopes", {}).get(brand, {})
+                if isinstance(fact_pack, dict)
+                else {}
+            )
+            current_scope = comparison_scope.get("current", {}) if isinstance(comparison_scope, dict) else {}
+            if current_scope.get("sampleCount") == 0:
+                # A specified brand can legitimately have zero matches in the
+                # merged industry TOP1000. Keep the unavailable conclusion and
+                # let the report state that the sample is insufficient.
+                continue
             raise YuntuReportError(f"missing processed brand facts for {brand}")
         if not strict_audience_contract:
             continue

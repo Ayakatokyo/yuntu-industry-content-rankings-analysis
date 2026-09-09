@@ -658,19 +658,20 @@ class YuntuReportTests(unittest.TestCase):
     def test_chapter03_keyword_cloud_fills_small_panel_without_wrapping_words(self):
         css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
 
-        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));", css)
-        self.assertIn("grid-auto-rows: minmax(54px, 1fr);", css)
-        self.assertIn("gap: 26px 18px;", css)
+        self.assertIn("display: flex;", css)
+        self.assertIn("flex-wrap: wrap;", css)
+        self.assertIn("gap: 6px 8px;", css)
         self.assertIn("white-space: nowrap;", css)
-        self.assertIn("padding-top: 6px;", css)
+        self.assertIn("min-height: 0;", css)
+        self.assertIn("padding: 4px 2px;", css)
         self.assertIn("grid-template-columns: 144px minmax(0, 1fr);", css)
         self.assertIn("min-height: 0;", css)
         self.assertIn("height: 124px;", css)
         self.assertIn("width: min(210px, 100%) !important;", css)
         self.assertIn(".unified-yuntu .keyword-cloud-words", css)
-        self.assertIn("gap: 14px 18px;", css)
-        self.assertIn("align-content: space-evenly;", css)
-        self.assertIn("justify-content: space-around;", css)
+        self.assertIn("gap: 5px 6px;", css)
+        self.assertIn("align-content: flex-start;", css)
+        self.assertIn("justify-content: flex-start;", css)
         self.assertNotIn("border-left: 3px", css)
 
     def test_render_report_creates_sibling_zip_with_final_report_directory(self):

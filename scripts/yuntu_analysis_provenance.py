@@ -7,6 +7,7 @@ from pathlib import Path
 
 from rpa_io import file_sha256, write_json_atomically
 from yuntu_report import YuntuReportError, validate_analysis_input
+from yuntu_analysis_bundle import AnalysisBundleError, load_analysis_bundle, schema_errors
 
 
 class YuntuAnalysisProvenanceError(RuntimeError):
@@ -58,11 +59,14 @@ def _verify_analysis_unit_manifest(path):
 
 
 def _validate_single_call_analysis(analysis_json, manifest_path):
-    report_data_path = Path(manifest_path).parent.parent / "report-data.json"
     try:
-        fact_pack = json.loads(report_data_path.read_text(encoding="utf-8"))
-        if not isinstance(fact_pack, dict):
-            raise ValueError("report-data.json must be an object")
+        bundle = load_analysis_bundle(manifest_path)
+        fact_pack = bundle["facts"]
+        if bundle["manifest"].get("analysisContract"):
+            analysis = json.loads(Path(analysis_json).read_text(encoding="utf-8"))
+            errors = schema_errors(analysis, bundle["schema"])
+            if errors:
+                raise ValueError(json.dumps(errors, ensure_ascii=False))
         validate_analysis_input(
             analysis_json=analysis_json,
             fact_pack=fact_pack,
@@ -106,11 +110,29 @@ def attest_analysis(
         raise YuntuAnalysisProvenanceError("analysis JSON must be an object")
     if manifest is not None:
         _validate_single_call_analysis(paths["analysisJson"], paths["factPack"])
+        try:
+            bundle = load_analysis_bundle(paths["factPack"])
+            canonical_prompt = bundle["root"] / "yuntu-analysis-prompt.md"
+            if bundle["manifest"].get("analysisContract") and file_sha256(paths["prompt"]) != file_sha256(canonical_prompt):
+                raise AnalysisBundleError("prompt does not match manifest")
+            paths["reportData"] = bundle["reportPath"]
+            if bundle["schema"]:
+                paths["outputSchema"] = bundle["root"] / bundle["manifest"]["outputSchema"]["path"]
+            from yuntu_analysis_workspace import assembly_path, verify_assembly
+            draft_receipt = assembly_path(analysis_json)
+            if bundle["manifest"].get("analysisContract") or draft_receipt.exists():
+                if not draft_receipt.is_file():
+                    raise AnalysisBundleError("assembly receipt required; use begin-analysis/check-analysis/assemble-analysis")
+                verify_assembly(analysis_json, paths["factPack"])
+                paths["assembly"] = draft_receipt
+        except (ValueError, OSError) as exc:
+            raise YuntuAnalysisProvenanceError(str(exc)) from exc
     target = Path(output_path) if output_path else default_provenance_path(analysis_json)
     receipt = {
         "schemaVersion": 1,
         "analysisSource": source,
         "generator": str(generator or "").strip() or "unspecified",
+        "authorshipEvidence": "caller_declaration; hashes verify inputs and drafts, not model identity or image viewing",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "artifacts": {
             label: {
@@ -149,7 +171,7 @@ def load_verified_provenance(
         raise YuntuAnalysisProvenanceError("analysis provenance is missing analysis JSON")
     if analysis_artifact.get("sha256") != file_sha256(analysis_json):
         raise YuntuAnalysisProvenanceError("analysis JSON does not match provenance receipt")
-    for label in ("factPack", "prompt"):
+    for label in ("factPack", "prompt", *[key for key in ("reportData", "outputSchema", "assembly") if key in artifacts]):
         artifact = artifacts.get(label)
         artifact_path = source.parent / artifact.get("path", "") if isinstance(artifact, dict) else None
         if (
@@ -162,4 +184,13 @@ def load_verified_provenance(
             )
         if label == "factPack":
             _verify_analysis_unit_manifest(artifact_path)
+            try:
+                manifest = json.loads(artifact_path.read_text(encoding="utf-8"))
+                if isinstance(manifest, dict) and manifest.get("executionMode") == "single_model_call":
+                    bundle = load_analysis_bundle(artifact_path)
+                    if bundle["manifest"].get("analysisContract") or "assembly" in artifacts:
+                        from yuntu_analysis_workspace import verify_assembly
+                        verify_assembly(analysis_json, artifact_path)
+            except (ValueError, OSError) as exc:
+                raise YuntuAnalysisProvenanceError(str(exc)) from exc
     return receipt

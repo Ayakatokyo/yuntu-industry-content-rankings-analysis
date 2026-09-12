@@ -14,7 +14,7 @@ metadata:
 
 - 先定位用户指定批次及 `batch-manifest.json`，核对实际周期、筛选、选中素材 ID、规范化文件路径和本地资产。用户只说“最新”时核对清单内容和对话来源，不按目录名、mtime 或旧报告文件名猜测；有无法消除的多个候选时再询问。记录源清单/输入文件 SHA-256 和本轮独立输出路径。
 - 先判断重分析还是仅重渲染。用户要求完整后续分析时，生成新 AI JSON，不把历史 JSON 改名或补字段冒充新分析。仅重渲染才考虑复用已通过校验、且事实包/提示词绑定未变化的历史分析。
-- 保留源 CSV、normalized、旧 AI JSON、报告和 provenance。`prepare-analysis` 会检查高光帧并可能下载视频、截帧和回写资产清单；纯本地续跑前先检查资产完整性，并在独立批次副本运行，保持相对路径。已齐备资产直接复用；缺失资产若用户未授权补取，先报告具体缺口，不让准备步骤隐式联网。
+- 保留源 CSV、normalized、旧 AI JSON、报告和 provenance。`prepare-analysis` 会检查高光帧并可能下载视频、截帧和回写资产清单；纯本地续跑前先检查资产完整性，并在独立批次副本运行，保持相对路径。本地续跑使用 `prepare-analysis --local-only`，已齐备资产直接复用；缺失资产若用户未授权补取，先报告具体缺口，不让准备步骤隐式联网。
 - 区分 `source_empty`（源字段确实为空）、`parse_failed`（解码失败）和映射遗漏。仅在数据诊断阶段允许只读追溯 raw CSV → normalized → 章节事实包；业务分析仍只使用规范化后的章节事实。发现 CSV/normalized 有趋势而事实包称 `trend_not_returned`，先修复本地规范化或事实映射，不能靠提示词补造数据。字段存在不等于正文非空，创意标签不能代替完整脚本。
 - 新事实包生成后核对素材集合、五类趋势点、脚本覆盖和成功帧集合。帧从旧数量变为新数量、脚本新增、素材范围或提示词改变时，旧分析需重新生成并重新 attest；不得删掉新增帧来迎合旧 JSON。阶段分别记为事实准备、模型分析、校验、渲染、交付，不用采集 `success` 代替分析完成。
 
@@ -51,14 +51,22 @@ python <skill-root>/scripts/rpa_connector.py retry-unresolved --shop-id "<shop_i
 
 分析阶段只读 `normalized/` 与 `diagnostic-analysis/`，不读原始 CSV、RPA response 或临时 `fileUrl`。先运行 `prepare-analysis`；新批次不再生成 `yuntu-analysis-data.json`，生成 `report-data.json`、`diagnostic-analysis/yuntu-ai-analysis.schema.json`、`diagnostic-analysis/yuntu-analysis-prompt.md` 和五个章节事实包。历史批次缺少 `report-data.json` 时兼容渲染已有 `yuntu-analysis-data.json`；旧版完整 JSON 的额外字段忽略。渲染产物还包括 `final-report.md`。
 
-当前对话模型直接完成一次分析任务：读取 manifest、五包和实际查看全部可用本地 JPEG，生成 `yuntu-ai-analysis.json`。允许在当前任务中按章节、素材或帧批次分步阅读并保存模型撰写的草稿；每次保存记录事实包/提示词哈希、已查看帧引用和待办，恢复时先核对绑定。manifest 的 `single_model_call` 保留为既有契约标识，不要求一次工具输出塞完所有图片和 JSON。禁止用 `codex exec`、子进程或外部模型服务调用模型，且不得仅凭 `--generator` 认定模型；脚本可无损组装模型已写出的 JSON 和检查覆盖，固定规则只统计，禁止程序化兜底或根据品牌、标题、帧序号套模板生成业务结论。脚本和生成的提示词是 schema 权威，只生成当前报告实际展示的分析模块。
+当前对话模型直接完成一次分析任务：读取 manifest、五包并实际查看全部可用本地 JPEG，直接撰写分段 JSON 草稿。先运行 `begin-analysis` 创建独立工作目录，再按同名 `*.task.json` 的当前范围、引用清单和 Schema 填写 `*.json` 的 `content`；第四章的 `viewedFrameRefs` 只记录实际查看过的成功 JPEG。四个章节草稿、第三章各品牌草稿及每个素材的草稿分别检查、保存和恢复，具体操作见 [分析草稿入口](references/analysis-drafts.md)。新批次 manifest 的 `analysisContract` 绑定五包、Schema、提示词、渲染事实和成功资产；恢复时由命令自动核对，变更后另建工作目录。`single_model_call` 保留为既有契约标识，不限制当前任务的读取或保存次数。
 
-校验失败后按报错字段修复：引用/素材/帧覆盖不符先查绑定与漏项；`unsupported claim` 核对具体句子和命中词，区别实际外推与否定性的范围限制；缺失事实保留不可用状态。不要为了通过门禁删证据、关闭 provenance、绕过 CLI 直接渲染或机械扩写凑字数。同一错误在未修改输入时不重复执行；修复受影响草稿后重新 attest，成功后继续 render 和打包，不把一次校验失败当成任务结束。
+每完成一份草稿，运行 `check-analysis --part <key>`；全部完成后运行完整检查和 `assemble-analysis`。组装器只合并模型已写出的 JSON，保留按哈希命名的原始草稿快照和 assembly 收据，不生成、补齐或改写业务结论。新契约的 attest 必须验证草稿到最终 JSON 的无损对应。禁止程序化兜底，禁止新建承载业务结论的 Python/JS 生成脚本（包括沿用历史 `build_current_ai_analysis.py`），禁止 `codex exec`、子进程或外部模型服务调用模型。不得仅凭 `--generator` 认定模型；它和草稿来源都是调用者声明，哈希与收据不能证明模型身份、实际看图或业务判断正确。脚本和生成的提示词是 schema 权威，只生成当前报告实际展示的分析模块；固定规则负责统计，当前模型负责判断。
+
+校验失败先读工作目录的 `validation.json`，按 `part/file/path` 修复受影响草稿。引用从该素材或 scope 的清单原样选择；帧覆盖报错列出重复、缺失和额外引用；字数不足先核对可用事实，`unsupported claim` 核对具体句子和命中词。缺失事实保留不可用状态。不要删证据、关闭 provenance、绕过 CLI 或机械凑字数；输入未变化时不重复检查。仅报告生成任务中发现事实投影或校验器缺陷，应保留失败现场并报告具体契约问题，不以修改通用技能代码来放行；用户明确要求修复技能时可在该授权范围内修复并测试。
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py prepare-analysis --input-dir "RPA数据汇总/yuntu-rankings-analysis" --output-dir "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis"
+python <skill-root>/scripts/rpa_connector.py begin-analysis --fact-pack-json ".../diagnostic-analysis/analysis-units/analysis-unit-manifest.json" --workspace ".../diagnostic-analysis/model-drafts"
+# 当前模型直接填写各份草稿后检查；--part material-<素材ID> 可单独检查某个素材。
+python <skill-root>/scripts/rpa_connector.py check-analysis --workspace ".../diagnostic-analysis/model-drafts"
+python <skill-root>/scripts/rpa_connector.py assemble-analysis --workspace ".../diagnostic-analysis/model-drafts" --output ".../diagnostic-analysis/yuntu-ai-analysis.json"
 python <skill-root>/scripts/rpa_connector.py attest-analysis --analysis-json ".../diagnostic-analysis/yuntu-ai-analysis.json" --fact-pack-json ".../diagnostic-analysis/analysis-units/analysis-unit-manifest.json" --prompt ".../diagnostic-analysis/yuntu-analysis-prompt.md" --source model_generated --generator "<模型或人工执行者>"
 python <skill-root>/scripts/rpa_connector.py render-report --analysis-json ".../diagnostic-analysis/yuntu-ai-analysis.json" --output-dir ".../final-report"
 ```
 
 报告只能由 `render-report` 渲染，使用 `assets/report/` 的离线资源并内联 CSS/JavaScript，不新增判断、不下载视频、不得手工修改 HTML。交付同级的 HTML 报告 `final-report/final-report.html` 和 `final-report.zip`；ZIP 仅含 `final-report/` 目录。报告验收只执行自动化产物校验：HTML、Markdown、报告数据、presentation JSON 与 `final-report/highlight-frames.xlsx` 非空，导航和本地帧引用有效，ZIP 含 Excel 且无占位符；不要启动实际浏览器，也不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤。报告前确认 `status == success`、选中数量达标且无拒绝，否则按部分完成交付。
+
+新分析同时执行 `analysisQualityVersion=2` 的充分性与范围契约：02 各非空范围和 03 各有正文范围的摘要不少于 180 字，04 标准分类共性与方向各不少于 100 字；这些仅是结构底线。模型仍须核对具体观察、业务含义、建议与验证边界，禁止重复凑字。03 和 04 必须覆盖全部指定品牌，缺失品牌保留入口并明确数据不足。品牌脚本在 `script-brand-<index>.json` 独立撰写；只引用同品牌原文。

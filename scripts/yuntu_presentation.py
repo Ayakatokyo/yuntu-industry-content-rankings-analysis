@@ -378,7 +378,7 @@ def _script_insights(analysis, material_ids):
             summary = _normalize_script_formula_text(summary)
         evidence = deepcopy(item.get("evidence", []))
         ids = [str(value) for value in item.get("material_ids", []) if _text(value)]
-        if not title or not summary or not ids or not set(ids).issubset(allowed):
+        if not title or not summary or (not ids and (evidence or "数据不足以判断" not in summary)) or not set(ids).issubset(allowed):
             raise YuntuPresentationError("script insight evidence is invalid")
         projected.append({
             "id": f"script-insight-{index}",
@@ -498,21 +498,20 @@ def _content_formula_detail(content_formula, value):
     if not isinstance(content_formula, dict):
         return ""
     raw_value = value.get("value") or value.get("id") if isinstance(value, dict) else value
-    detail = _text(content_formula.get(f"detail.{_text(raw_value)}"))
-    if detail:
-        return detail
-    target_label = content_formula_label("secondary", raw_value) or _text(raw_value)
-    for item in content_formula.get("labels", []) if isinstance(content_formula.get("labels"), list) else []:
-        if not isinstance(item, dict):
-            continue
-        values = item.get("level_2_labels") or item.get("level2_labels") or []
-        if not isinstance(values, list):
-            values = [values]
-        for candidate in values:
-            if content_formula_label("secondary", candidate) == target_label or _text(candidate) == target_label:
-                detail = _text(content_formula.get(f"detail.{_text(candidate.get('value') or candidate.get('id') if isinstance(candidate, dict) else candidate)}"))
-                if detail:
-                    return detail
+    target = content_formula_label("secondary", raw_value) or _text(raw_value)
+    sources = content_formula.get("sources", {})
+    script_source = sources.get("script", {}) if isinstance(sources, dict) else {}
+    details = script_source.get("detail", {}) if isinstance(script_source, dict) else {}
+    if isinstance(details, dict):
+        for key, terms in details.items():
+            if (content_formula_label("secondary", key) or str(key)) == target:
+                return "、".join(str(t) for t in terms) if isinstance(terms, list) else _text(terms)
+    if isinstance(sources, dict) and "script" in sources:
+        return ""
+    # Legacy flat detail fields describe script terms. Never borrow title/visual detail.
+    for key, terms in content_formula.items():
+        if key.startswith("detail.") and (content_formula_label("secondary", key[7:]) or key[7:]) == target:
+            return "、".join(str(t) for t in terms) if isinstance(terms, list) else _text(terms)
     return ""
 
 
@@ -591,7 +590,7 @@ def _chapter05_copy_blocks(material_id, content_formula, formula):
 
 def _chapter05_formula_terms(item):
     """Return the concrete, non-overlapping terms that may be located in copy."""
-    values = (_text(item.get("detail")), _text(item.get("level2")), _text(item.get("level1")))
+    values = (_text(item.get("detail")),)
     terms = []
     for value in values:
         for term in re.split(r"[、，,/／]+", value):
@@ -610,8 +609,9 @@ def _chapter05_script_projection(fact, dive):
     formula = _chapter05_formula_items(raw_script, content_formula)
     if not formula:
         formula = []
-    evidence = deepcopy(raw_script.get("evidence")) if isinstance(raw_script.get("evidence"), list) else []
-    if not evidence and script_text:
+    # UI targets are rebuilt from concrete source terms, separate from sentence refs.
+    evidence = []
+    if script_text:
         used_refs = set()
         for formula_index, item in enumerate(formula):
             for term in _chapter05_formula_terms(item):
@@ -643,6 +643,7 @@ def _chapter05_script_projection(fact, dive):
             str(item.get("evidenceRef")) for item in evidence
             if isinstance(item, dict) and item.get("evidenceRef")
         )
+    evidence_refs.extend(item["evidenceRef"] for item in evidence)
     for block in copy_blocks:
         evidence_refs.extend(
             str(item.get("evidenceRef")) for item in block.get("evidence", [])
@@ -654,12 +655,7 @@ def _chapter05_script_projection(fact, dive):
         for candidate in evidence:
             if not isinstance(candidate, dict):
                 continue
-            if candidate.get("formulaIndex") == formula_index or (
-                candidate.get("formulaIndex") is None and (
-                    _text(candidate.get("level2")) == _text(item.get("level2"))
-                    or _text(candidate.get("level1")) == _text(item.get("level1"))
-                )
-            ):
+            if candidate.get("formulaIndex") == formula_index:
                 refs.append(_text(candidate.get("evidenceRef")))
         for block in copy_blocks:
             refs.extend(
@@ -773,7 +769,7 @@ def _project_keyword_cloud(facts, analysis, material_ids):
     }
 
 
-def _project_chapter03(analysis, fact_pack):
+def _project_script_dashboard(analysis, fact_pack):
     facts = fact_pack.get("scriptFacts") if isinstance(fact_pack, dict) else None
     if not isinstance(facts, dict):
         facts = {
@@ -848,6 +844,21 @@ def _project_chapter03(analysis, fact_pack):
         "limitations": deepcopy(facts.get("limitations", [])),
     }
     return {"scriptDashboard": dashboard}
+
+
+def _project_chapter03(analysis, fact_pack):
+    result = _project_script_dashboard(analysis, fact_pack)
+    facts = fact_pack.get("scriptFacts", {})
+    scoped = analysis.get("scriptBrandInsights")
+    if isinstance(scoped, dict):
+        panels = [{"brand": "所有指定品牌", "facts": {"coverage": facts.get("coverage", {})},
+                   "scriptDashboard": dict(result["scriptDashboard"])}]
+        for brand in facts.get("brandScopeOrder", []):
+            scope = facts["brandScopes"][brand]
+            panels.append({"brand": brand, "facts": {"coverage": scope.get("coverage", {})},
+                           **_project_script_dashboard(scoped[brand], {"scriptFacts": scope})})
+        result["scriptDashboard"]["brandPanels"] = panels
+    return result
 
 
 def _project_chapter01(analysis, fact_pack):
@@ -1064,7 +1075,7 @@ def _project_scoped_highlight_brands(scoped_brands, available, brand_order):
             raise YuntuPresentationError("highlight brand scope is invalid")
         brand = _text(scope.get("brand"))
         groups = scope.get("groups")
-        if not brand or brand in seen_brands or not isinstance(groups, list) or not groups:
+        if not brand or brand in seen_brands or not isinstance(groups, list) or (not groups and not _text(scope.get("missing_reason"))):
             raise YuntuPresentationError("highlight brand scope is invalid")
         seen_brands.add(brand)
         merged = {}
@@ -1091,6 +1102,7 @@ def _project_scoped_highlight_brands(scoped_brands, available, brand_order):
             "id": "all-brands" if brand == "全品牌" else _scope_id(brand),
             "brand": brand,
             "categories": categories,
+            "missingReason": _text(scope.get("missing_reason")),
             "_refs": set(scope_refs),
         })
     if projected[0]["brand"] != "全品牌" or projected[0]["_refs"] != all_refs:

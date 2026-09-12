@@ -1,6 +1,7 @@
 """Build auditable industry content analysis fact packs from normalized records."""
 
 import json
+from yuntu_analysis_quality import apply_schema, QUALITY_VERSION
 from pathlib import Path
 import re
 from statistics import median
@@ -17,6 +18,7 @@ from yuntu_highlights import (
     generate_standard_highlights_for_detail,
     load_highlights_manifest,
     load_video_asset_records,
+    find_local_video_asset,
     write_highlights_manifest,
 )
 from yuntu_highlight_export import match_brands_from_title
@@ -59,6 +61,7 @@ SCRIPT_FORMULA_SECONDARY_LABELS = {
 }
 REPORT_DATA_FIELDS = (
     "schemaVersion",
+    "analysisQualityVersion",
     "filters",
     "selectedMaterials",
     "rejectedMaterials",
@@ -929,7 +932,8 @@ def _script_evidence_projection(material_id, script_text, formula, raw_evidence=
             })
     if not evidence and script_text:
         sentences = re.findall(r"[^。！？；\n]+[。！？；]?", script_text)
-        default_level2 = formula[0]["level2"] if formula and formula[0].get("level2") else ""
+        # Sentence refs support analysis; they do not imply any formula membership.
+        default_level2 = ""
         for sentence in sentences:
             sentence = sentence.strip()
             if sentence:
@@ -1153,6 +1157,7 @@ def _chapter02_output_schema(fact_pack):
         "properties": {
             "scopeOrder": {
                 "type": "array",
+                "const": scope_order,
                 "minItems": len(scope_order),
                 "maxItems": len(scope_order),
                 "items": {"type": "string", "enum": scope_order},
@@ -1244,8 +1249,11 @@ def _highlight_output_schema():
         **classification_schema,
         "properties": {
             **classification_schema["properties"],
-            "groups": {"type": "array", "minItems": 2, "items": batch_group_schema},
+            "groups": {"type": "array", "items": batch_group_schema},
         },
+        "allOf": [{"if": {"properties": {"status": {"const": "complete"}}},
+                   "then": {"properties": {"groups": {"minItems": 2}}},
+                   "else": {"properties": {"groups": {"maxItems": 0}}}}],
     }
     brand_scope_schema = {
         "type": "object",
@@ -1290,7 +1298,7 @@ def _material_deep_dive_output_schema(fact_pack):
             "required": [
                 "material_id",
                 "frame_observations",
-            ],
+            ] + (["scriptAnalysis"] if fact_pack.get("schemaVersion", 0) >= 8 else []),
             "properties": {
                 "material_id": {"type": "string", "enum": material_ids},
                 "scriptAnalysis": {
@@ -1345,19 +1353,21 @@ def _analysis_output_schema(fact_pack):
             required.extend(["keywordCloudReview", "keywordCloudInsight"])
         properties["scriptInsights"] = script_schema
         required.append("scriptInsights")
-    if any(asset.get("available") for asset in fact_pack.get("visualAssets", [])):
+    if any(asset.get("available") for asset in fact_pack.get("visualAssets", [])) or any(
+        frame.get("available") for material in fact_pack.get("materialFacts", []) for frame in material.get("highlightFrames", [])
+    ):
         properties["highlightDashboard"] = _highlight_output_schema()
         required.append("highlightDashboard")
     if any("secondLevelBreakdown" in fact for fact in fact_pack.get("materialFacts", [])):
         properties["materialDeepDives"] = _material_deep_dive_output_schema(fact_pack)
         required.append("materialDeepDives")
-    return {
+    return apply_schema({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "additionalProperties": False,
         "required": required,
         "properties": properties,
-    }
+    }, fact_pack)
 
 
 def _write_analysis_units(fact_pack, output):
@@ -1451,10 +1461,10 @@ def _write_analysis_units(fact_pack, output):
                 include_period_contract="hotMaterialFacts" in fact_pack
             )
         elif unit_name == "script_insights":
-            payload["outputSchema"] = {
-                "type": "array",
-                "items": _analysis_insight_schema(),
-            }
+            schema = _analysis_output_schema(fact_pack)
+            fields = [k for k in ("scriptInsights", "keywordCloudReview", "keywordCloudInsight", "scriptBrandInsights") if k in schema["properties"]]
+            payload["outputSchema"] = {"type": "object", "additionalProperties": False,
+                                       "required": fields, "properties": {k: schema["properties"][k] for k in fields}}
         write_json_atomically(payload, path, indent=None)
         manifest_units.append(
             {
@@ -1483,6 +1493,33 @@ def _write_analysis_units(fact_pack, output):
         },
         "units": manifest_units,
     }
+    # Freeze every input actually consumed downstream, including the compact
+    # renderer projection. Older standalone unit builders remain readable.
+    from yuntu_analysis_bundle import file_record
+    prompt_path = Path(output) / "yuntu-analysis-prompt.md"
+    report_path = Path(output) / "report-data.json"
+    if prompt_path.is_file() and report_path.is_file():
+        assets = []
+        for asset in _model_visual_assets(fact_pack.get("visualAssets", [])):
+            if not asset.get("available"):
+                continue
+            path = Path(output) / asset["image_path"]
+            record = file_record(path, output) if path.is_file() else {"path": asset["image_path"]}
+            assets.append({**record, "frame_ref": asset["frame_ref"]})
+        videos = []
+        for fact in fact_pack.get("materialFacts", []):
+            video = fact.get("localVideo", {})
+            if video.get("available"):
+                path = Path(output).parent / video["relative_path"]
+                record = file_record(path, output) if path.is_file() else {"path": f"../{video['relative_path']}"}
+                videos.append({**record, "material_id": str(fact["material_id"])})
+        manifest["analysisContract"] = {
+            "version": 1,
+            "prompt": file_record(prompt_path, output),
+            "reportData": file_record(report_path, output),
+            "visualAssets": assets,
+            "videoAssets": videos,
+        }
     write_json_atomically(manifest, unit_dir / "analysis-unit-manifest.json")
     return manifest
 
@@ -1628,7 +1665,7 @@ def _scope_period_facts(manifest, records_by_run, *, scope, brands):
     }
 
 
-def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
+def prepare_analysis(*, input_dir, output_dir, hot_material_config=None, local_only=False):
     root = Path(input_dir)
     output = Path(output_dir)
     try:
@@ -1680,6 +1717,9 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
         )
     highlights = load_highlights_manifest(root)
     for detail in details_missing_standard_highlights(details, root):
+        if local_only and find_local_video_asset(root, str(detail["material_id"])) is None:
+            # Preserve recorded failures; a local continuation never downloads assets.
+            continue
         highlights[str(detail["material_id"])] = generate_standard_highlights_for_detail(
             detail, root
         )
@@ -1702,6 +1742,13 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
     trend_summary = _trend_summary(details)
     script_facts = build_script_facts(details, selected)
     brands = manifest.get("filters", {}).get("brands", [])
+    script_facts["brandScopeOrder"] = list(brands)
+    script_facts["brandScopes"] = {}
+    for brand in brands:
+        ids = {f["material_id"] for f in material_facts
+               if brand in match_brands_from_title(f.get("title"), brands)}
+        script_facts["brandScopes"][brand] = build_script_facts(
+            details, [item for item in selected if item["material_id"] in ids])
     ranking_period_facts, comparison_facts = _build_period_facts(
         manifest, pool_records, previous_records, industry_records
     )
@@ -1786,6 +1833,7 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
         )
     fact_pack = {
         "schemaVersion": 8 if has_period_contract else 7,
+        "analysisQualityVersion": QUALITY_VERSION,
         "filters": manifest.get("filters", {}),
         "selectedMaterials": selected,
         "rejectedMaterials": rejected,
@@ -1829,7 +1877,6 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
     write_json_atomically(
         _report_data(fact_pack), output / "report-data.json", indent=None
     )
-    _write_analysis_units(fact_pack, output)
     output.mkdir(parents=True, exist_ok=True)
     (output / "yuntu-analysis-prompt.md").write_text(
         _prompt_text(
@@ -1838,4 +1885,5 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None):
         ),
         encoding="utf-8",
     )
+    _write_analysis_units(fact_pack, output)
     return 0

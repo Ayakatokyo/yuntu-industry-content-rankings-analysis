@@ -1240,7 +1240,10 @@
           refs = refs.filter(function (ref) { return typeof ref === 'string' && ref; });
           clearScriptEvidence(scriptPanel);
           var matches = Array.prototype.slice.call(scriptPanel.querySelectorAll('[data-script-evidence-ref]')).filter(function (item) {
-            return refs.indexOf(item.getAttribute('data-script-evidence-ref')) >= 0;
+            var spanRefs = [];
+            try { spanRefs = JSON.parse(item.getAttribute('data-script-span-refs') || '[]'); } catch (error) {}
+            if (!spanRefs.length) spanRefs = [item.getAttribute('data-script-evidence-ref')];
+            return spanRefs.some(function (ref) { return refs.indexOf(ref) >= 0; });
           });
           matches.forEach(function (item) {
             item.classList.add('is-evidence-active');
@@ -1275,7 +1278,11 @@
             });
           });
           scriptPanel.querySelectorAll('[data-script-evidence-ref]').forEach(function (item) {
-            function activateEvidence() { highlightScriptEvidence(scriptPanel, [item.getAttribute('data-script-evidence-ref')]); }
+            function activateEvidence() {
+              var refs = [];
+              try { refs = JSON.parse(item.getAttribute('data-script-span-refs') || '[]'); } catch (error) {}
+              highlightScriptEvidence(scriptPanel, refs.length ? refs : [item.getAttribute('data-script-evidence-ref')]);
+            }
             item.setAttribute('aria-pressed', 'false');
             item.addEventListener('click', activateEvidence);
             item.addEventListener('keydown', function (event) {
@@ -1436,7 +1443,7 @@
             button.className = 'script-formula-primary-column';
             button.setAttribute('data-script-formula-primary', '');
             button.setAttribute('data-primary-id', item.id);
-            button.setAttribute('aria-controls', 'script-formula-view');
+            button.setAttribute('aria-controls', view.id);
             var displayLabel = scriptFormulaDisplayLabel(item);
             button.setAttribute('aria-label', '查看' + displayLabel + '的二级内容公式占比');
             var plot = document.createElement('span');
@@ -1466,6 +1473,21 @@
         }
       }
 
+      document.querySelectorAll('[data-script-brand-dashboard]').forEach(function (root) {
+        var tabs = Array.from(root.querySelectorAll('[data-script-brand-tab]'));
+        var panels = Array.from(root.querySelectorAll('[data-script-brand-panel]'));
+        function activate(tab) {
+          tabs.forEach(function (item) { var selected = item === tab; item.setAttribute('aria-selected', String(selected)); item.tabIndex = selected ? 0 : -1; });
+          panels.forEach(function (panel) { panel.hidden = panel.id !== tab.getAttribute('data-script-brand-tab'); });
+        }
+        tabs.forEach(function (tab, index) {
+          tab.addEventListener('click', function () { activate(tab); });
+          tab.addEventListener('keydown', function (event) {
+            var next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
+            if (next >= 0) { event.preventDefault(); activate(tabs[next]); tabs[next].focus(); }
+          });
+        });
+      });
       document.querySelectorAll('[data-script-formula]').forEach(function (dashboard) {
         try {
           dashboard.__scriptFormulaData = JSON.parse(dashboard.getAttribute('data-script-formula') || '{}');

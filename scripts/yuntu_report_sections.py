@@ -179,7 +179,20 @@ def _script_formula_semantic_label(item):
 
 
 def render_script_insights(*, script_facts=None, script_insights=None, script_dashboard=None, esc=str):
-    if not isinstance(script_facts, dict) or not script_facts.get("materials"):
+    panels = (script_dashboard or {}).get("brandPanels", [])
+    if panels:
+        tabs, bodies = [], []
+        for index, panel in enumerate(panels):
+            prefix = f"script-brand-{index}"
+            active = index == 0
+            tabs.append(f'<button class="brand-tab" type="button" role="tab" id="{prefix}-tab" aria-controls="{prefix}-panel" aria-selected="{str(active).lower()}" tabindex="{0 if active else -1}" data-script-brand-tab="{prefix}-panel">{esc(panel["brand"])}</button>')
+            content = render_script_insights(script_facts=panel["facts"], script_dashboard=panel["scriptDashboard"], esc=esc)
+            for name in ("script-formula-view", "script-formula-body", "script-primary", "keyword-cloud-panel", "script-dashboard"):
+                content = content.replace(f'id="{name}"', f'id="{prefix}-{name}"').replace(f'aria-controls="{name}"', f'aria-controls="{prefix}-{name}"')
+            bodies.append(f'<article role="tabpanel" id="{prefix}-panel" aria-labelledby="{prefix}-tab" data-script-brand-panel {"" if active else "hidden"}>'
+                          + '<p class="brand-classification-note">品牌归属按标题匹配；分析仅使用该范围已获取的脚本详情。</p>' + content + '</article>')
+        return '<div data-script-brand-dashboard><div class="brand-tabs" role="tablist" aria-label="脚本品牌筛选">' + ''.join(tabs) + '</div>' + ''.join(bodies) + '</div>'
+    if not isinstance(script_facts, dict):
         return '<div class="data-state"><span>脚本数据：不可用</span><p>当前未提供脚本事实，数据不足以判断。</p></div>'
     dashboard = script_dashboard if isinstance(script_dashboard, dict) else {}
     coverage = script_facts.get("coverage", {})
@@ -880,7 +893,7 @@ def render_highlight_insights(
                     "dashboard": mode_dashboard,
                     "distribution": mode.get("distribution"),
                 })
-            brand_views.append({"brand": brand.get("brand", ""), "id": brand.get("id", ""), "frames": brand_frames, "dashboard": brand_dashboard, "modes": modes})
+            brand_views.append({"brand": brand.get("brand", ""), "id": brand.get("id", ""), "frames": brand_frames, "dashboard": brand_dashboard, "modes": modes, "missingReason": brand.get("missingReason", "")})
         successful_frames = [frame for view in brand_views for frame in view["frames"]]
         dashboard = None
     elif isinstance(presentation, dict) and presentation.get("categories"):
@@ -1053,6 +1066,8 @@ def render_highlight_insights(
                 classification_html = '<div class="highlight-classification-tabs" role="tablist" aria-label="分类标准">' + "".join(mode_tabs) + '</div><div class="highlight-classification-panels">' + "".join(mode_panels) + '</div>'
             else:
                 classification_html = render_groups(view["dashboard"]["groups"], view["frames"], id_prefix=f"highlight-{brand_id}")
+            if not view["frames"]:
+                classification_html = '<p class="data-note">' + esc(view.get("missingReason") or "该品牌未获取可用高光帧，数据不足以判断。") + '</p>'
             brand_panels.append('<section class="highlight-brand-panel" role="tabpanel" id="' + esc(panel_id) + '" aria-labelledby="' + esc(tab_id) + '"' + (" hidden" if not selected else "") + ' data-highlight-brand-panel>' + classification_html + '</section>')
         return '<div class="highlight-brand-tabs" role="tablist" aria-label="高光画面品牌分类">' + "".join(brand_tabs) + '</div><div class="highlight-brand-panels">' + "".join(brand_panels) + '</div>'
 
@@ -1163,12 +1178,7 @@ def render_material_deep_dive(
                 if not isinstance(candidate, dict):
                     continue
                 candidate_formula_index = candidate.get("formulaIndex")
-                if candidate_formula_index == formula_index or (
-                    candidate_formula_index is None and (
-                        str(candidate.get("level2") or "").strip() == level2
-                        or str(candidate.get("level1") or "").strip() == level1
-                    )
-                ):
+                if candidate_formula_index == formula_index:
                     refs.append(str(candidate.get("evidenceRef")))
             for block in copy_blocks:
                 for candidate in block.get("evidence", []) if isinstance(block, dict) else []:
@@ -1193,21 +1203,19 @@ def render_material_deep_dive(
                         break
                     ranges.append({"start": start, "end": start + len(sentence), "sentence": sentence, "ref": ref, "level2": str(item.get("level2") or ""), "detail": str(item.get("detail") or ""), "formulaIndex": item.get("formulaIndex")})
                     cursor = start + len(sentence)
-            ranges.sort(key=lambda item: (item["start"], -(item["end"] - item["start"])))
-            located = []
-            for item in ranges:
-                if not located or item["start"] >= located[-1]["end"]:
-                    located.append(item)
-            parts, cursor = [], 0
-            for item in located:
-                if item["start"] > cursor:
-                    parts.append(esc(text[cursor:item["start"]]))
+            # Split at every boundary so overlapping terms retain all memberships.
+            boundaries = sorted({0, len(text)} | {r[k] for r in ranges for k in ("start", "end")})
+            parts = []
+            for start, end in zip(boundaries, boundaries[1:]):
+                hits = [r for r in ranges if r["start"] <= start and r["end"] >= end]
+                if not hits:
+                    parts.append(esc(text[start:end]))
+                    continue
+                item = hits[0]
+                refs = list(dict.fromkeys(r["ref"] for r in hits))
                 color = formula_colors.get(item.get("formulaIndex"), "#d79a4b")
-                title = item["detail"] or item["level2"] or "证据文字"
-                parts.append('<span class="script-evidence-highlight" data-script-evidence-ref="' + html_module.escape(item["ref"], quote=True) + '" data-script-formula-index="' + str(item.get("formulaIndex", "")) + '" tabindex="0" role="button" aria-pressed="false" title="' + esc(title) + '" style="--script-color:' + color + '">' + esc(item["sentence"]) + '</span>')
-                cursor = item["end"]
-            if cursor < len(text):
-                parts.append(esc(text[cursor:]))
+                parts.append('<span class="script-evidence-highlight" data-script-evidence-ref="' + html_module.escape(refs[0], quote=True) + '" data-script-span-refs="' + html_module.escape(json.dumps(refs, ensure_ascii=False), quote=True) + '" data-script-formula-index="' + str(item.get("formulaIndex", "")) + '" tabindex="0" role="button" aria-pressed="false" title="' + esc(item["detail"] or item["level2"] or "证据文字") + '" style="--script-color:' + color + '">' + esc(text[start:end]) + '</span>')
+
             return "".join(parts) or esc(text)
 
         sections = []
@@ -1236,7 +1244,8 @@ def render_material_deep_dive(
                 if detail:
                     chip_body += '<span class="script-formula-detail">' + esc(detail) + '</span>'
                 chip_body += '</span>'
-                chips.append('<button type="button" class="script-formula-item script-formula-token" data-script-formula data-script-evidence-refs="' + target_payload + '" aria-controls="material-script-transcript-' + str(material_index) + '" aria-pressed="false" style="--script-color:' + color + '">' + chip_body + '</button>')
+                control = (' aria-controls="material-script-transcript-' + str(material_index) + '"') if targets else ' disabled aria-disabled="true" title="源脚本未提供可定位的对应词句"'
+                chips.append('<button type="button" class="script-formula-item script-formula-token" data-script-formula data-script-evidence-refs="' + target_payload + '"' + control + ' aria-pressed="false" style="--script-color:' + color + '">' + chip_body + '</button>')
             if chips:
                 formula_copy = html_module.escape(" + ".join(formula_copy_values), quote=True)
                 sections.append('<section class="script-analysis-section"><div class="script-analysis-section-header"><b>本视频内容公式</b><button type="button" class="copy-button" data-script-copy="' + formula_copy + '">复制内容公式</button></div><div class="script-formula-chain script-formula-text" role="group" aria-label="本视频内容公式">' + '<span class="script-formula-connector">+</span>'.join(chips) + '</div></section>')

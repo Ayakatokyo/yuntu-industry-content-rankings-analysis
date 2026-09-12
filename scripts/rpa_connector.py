@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import requests
+from rpa_io import file_sha256
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -673,6 +674,7 @@ def _parser():
     prepare_parser = commands.add_parser(
         "prepare-analysis", help="Prepare Yuntu analysis facts"
     )
+    prepare_parser.add_argument("--local-only", action="store_true", help="Reuse local assets without downloading missing videos")
     prepare_parser.add_argument("--input-dir", required=True)
     prepare_parser.add_argument("--output-dir", required=True)
     prepare_parser.add_argument(
@@ -689,6 +691,15 @@ def _parser():
     attest_parser.add_argument("--generator", required=True)
     attest_parser.add_argument("--output")
     attest_parser.add_argument("--allow-programmatic-fallback", action="store_true")
+    begin_parser = commands.add_parser("begin-analysis", help="Create bound model JSON drafts and scoped contracts")
+    begin_parser.add_argument("--fact-pack-json", required=True)
+    begin_parser.add_argument("--workspace", required=True)
+    check_parser = commands.add_parser("check-analysis", help="Check drafts without attestation or rendering")
+    check_parser.add_argument("--workspace", required=True)
+    check_parser.add_argument("--part", help="Only check this chapter or material key")
+    assemble_parser = commands.add_parser("assemble-analysis", help="Losslessly assemble checked model drafts")
+    assemble_parser.add_argument("--workspace", required=True)
+    assemble_parser.add_argument("--output", required=True)
     report_parser = commands.add_parser("render-report", help="Render Yuntu final report")
     report_parser.add_argument("--analysis-json", required=True)
     report_parser.add_argument("--output-dir", required=True)
@@ -817,6 +828,19 @@ def main(argv=None):
                 raise RpaConnectorError(str(exc)) from exc
             print(receipt)
             return 0
+        if args.command in {"begin-analysis", "check-analysis", "assemble-analysis"}:
+            from yuntu_analysis_workspace import begin_workspace, check_workspace, assemble_workspace
+            try:
+                if args.command == "begin-analysis":
+                    result = begin_workspace(args.fact_pack_json, args.workspace)
+                elif args.command == "check-analysis":
+                    result = check_workspace(args.workspace, args.part)
+                else:
+                    result = {"analysisJson": str(assemble_workspace(args.workspace, args.output))}
+            except (ValueError, OSError) as exc:
+                raise RpaConnectorError(str(exc)) from exc
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result.get("valid", True) else 1
         if args.command == "render-report":
             if render_report is None:
                 raise RpaConnectorError("report rendering support is unavailable")
@@ -848,6 +872,21 @@ def main(argv=None):
             fact_pack = {}
             if fact_pack_path.exists():
                 fact_pack = json.loads(fact_pack_path.read_text(encoding="utf-8"))
+            bound = provenance.get("artifacts", {}).get("factPack", {})
+            bound_path = provenance_path.parent / bound.get("path", "")
+            if bound_path.is_file():
+                bound_data = json.loads(bound_path.read_text(encoding="utf-8"))
+                if isinstance(bound_data, dict) and bound_data.get("executionMode") == "single_model_call":
+                    from yuntu_analysis_bundle import load_analysis_bundle
+                    try:
+                        bundle = load_analysis_bundle(bound_path)
+                        if args.fact_pack_json and file_sha256(fact_pack_path) != file_sha256(bundle["reportPath"]):
+                            raise ValueError("render fact pack differs from attested report projection")
+                        if bundle["manifest"].get("analysisContract") and args.highlight_asset_root and Path(args.highlight_asset_root).resolve() != bundle["root"].parent.resolve():
+                            raise ValueError("render asset root differs from attested asset root")
+                        fact_pack, fact_pack_path = bundle["facts"], bundle["reportPath"]
+                    except (ValueError, OSError) as exc:
+                        raise RpaConnectorError(str(exc)) from exc
             return render_report(
                 analysis_json=args.analysis_json,
                 output_dir=args.output_dir,

@@ -33,6 +33,42 @@ def script_output(ids=None, available=True):
 
 
 class BrandQualityTests(unittest.TestCase):
+    def test_v4_requires_all_classification_fields_before_drafting(self):
+        facts = self.quality_facts()
+        facts["analysisQualityVersion"] = 4
+        schema = preparation._analysis_output_schema(facts)["properties"]["highlightDashboard"]
+        self.assertEqual(set(schema["required"]), {"brands", "frameUnderstanding", "standardClassification", "batchClassification"})
+        frame_schema = schema["properties"]["frameUnderstanding"]["items"]
+        self.assertIn("standard_category", frame_schema["required"])
+        self.assertIn("category_reason", frame_schema["required"])
+        self.assertEqual(schema["properties"]["standardClassification"]["properties"]["status"], {"const": "complete"})
+
+    def test_v3_highlights_require_two_or_three_distinct_items(self):
+        facts = self.quality_facts()
+        facts["analysisQualityVersion"] = 3
+        brands = preparation._analysis_output_schema(facts)["properties"]["highlightDashboard"]["properties"]["brands"]
+        for scope in brands["prefixItems"][:2]:
+            fields = scope["properties"]["groups"]["items"]["properties"]
+            for field in ("common_patterns", "derivative_directions"):
+                validator = Draft202012Validator(fields[field])
+                items = [{"title": f"观察角度{i}", "body": "用于校验结构要求的充分长度正文。" * 10,
+                          "frame_refs": ["highlight:101:cover:0"]} for i in range(4)]
+                for count in (2, 3):
+                    self.assertEqual(list(validator.iter_errors(items[:count])), [])
+                for count in (0, 1, 4):
+                    self.assertTrue(list(validator.iter_errors(items[:count])))
+                self.assertTrue(list(validator.iter_errors([items[0], items[0]])))
+        empty = brands["prefixItems"][2]
+        self.assertEqual(list(Draft202012Validator(empty).iter_errors({
+            "brand": "无样本", "groups": [], "missing_reason": "该品牌未获取成功画面，数据不足以判断。"})), [])
+
+    def test_v2_highlights_keep_their_original_count_contract(self):
+        schema = preparation._analysis_output_schema(self.quality_facts())
+        groups = schema["properties"]["highlightDashboard"]["properties"]["brands"]["prefixItems"][0]["properties"]["groups"]
+        for field in ("common_patterns", "derivative_directions"):
+            self.assertEqual(groups["items"]["properties"][field]["minItems"], 1)
+            self.assertNotIn("maxItems", groups["items"]["properties"][field])
+
     def quality_facts(self):
         sf = script_facts()
         sf.update(brandScopeOrder=["豆浆", "无样本"], brandScopes={"豆浆": script_facts(), "无样本": script_facts(mid=None)})

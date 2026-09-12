@@ -1183,11 +1183,11 @@ def _validate_highlight_classification_groups(groups, known_refs, *, mode):
 
 
 def _validate_highlight_dual_classification(
-    dashboard, successful_frames, *, strict_semantic_contract=False
+    dashboard, successful_frames, *, strict_semantic_contract=False, require_classification=False
 ):
     fields = ("frameUnderstanding", "standardClassification", "batchClassification")
     present = [field for field in fields if field in dashboard]
-    if not present:
+    if not present and not require_classification:
         return
     if len(present) != len(fields):
         raise YuntuReportError("highlightDashboard must include frameUnderstanding, standardClassification, and batchClassification together")
@@ -1203,6 +1203,8 @@ def _validate_highlight_dual_classification(
         ref = item["frame_ref"]
         if ref not in known_refs:
             raise YuntuReportError("frameUnderstanding frame reference is invalid")
+        if require_classification and (item.get("standard_category") not in HIGHLIGHT_RENDER_CATEGORY_ORDER or len(str(item.get("category_reason") or "").strip()) < 12):
+            raise YuntuReportError("frameUnderstanding requires standard_category and category_reason")
         if item.get("status") not in {"complete", "unavailable"}:
             raise YuntuReportError("frameUnderstanding status is invalid")
         if item["status"] == "unavailable":
@@ -1225,6 +1227,8 @@ def _validate_highlight_dual_classification(
         if not isinstance(classification, dict):
             raise YuntuReportError(f"{mode} must be an object")
         status = classification.get("status")
+        if require_classification and mode == "standardClassification" and status != "complete":
+            raise YuntuReportError("standardClassification must classify all successful frames")
         if status not in {"complete", "unavailable"}:
             raise YuntuReportError(f"{mode} status is invalid")
         reason = classification.get("missing_reason")
@@ -1238,6 +1242,21 @@ def _validate_highlight_dual_classification(
         _validate_highlight_classification_groups(groups, known_refs, mode=mode)
         if mode == "batchClassification" and (not isinstance(classification.get("rule"), str) or not classification["rule"].strip()):
             raise YuntuReportError("batchClassification complete requires rule")
+
+    if require_classification:
+        assignments = {item["frame_ref"]: item["standard_category"] for item in understanding}
+        brands = dashboard.get("brands")
+        if not isinstance(brands, list) or not brands:
+            raise YuntuReportError("highlightDashboard.brands must be a non-empty list")
+        scopes = [dashboard["standardClassification"], *brands]
+        for scope in scopes:
+            if not isinstance(scope, dict) or not isinstance(scope.get("groups"), list):
+                raise YuntuReportError("highlightDashboard brand scopes require groups")
+            for group in scope.get("groups", []):
+                if not isinstance(group, dict) or not isinstance(group.get("frame_refs"), list):
+                    raise YuntuReportError("highlightDashboard groups require frame_refs")
+                if any(assignments.get(ref) != group.get("category") for ref in group.get("frame_refs", [])):
+                    raise YuntuReportError("standard classification and brand groups must agree with frameUnderstanding.standard_category")
 
 
 def _validate_highlight_dashboard(analysis, fact_pack):
@@ -1255,6 +1274,7 @@ def _validate_highlight_dashboard(analysis, fact_pack):
     _validate_highlight_dual_classification(
         dashboard, successful_frames,
         strict_semantic_contract=fact_pack.get("schemaVersion", 0) >= 8,
+        require_classification=fact_pack.get("analysisQualityVersion", 0) >= 4,
     )
     scoped_brands = dashboard.get("brands")
     if scoped_brands is not None:

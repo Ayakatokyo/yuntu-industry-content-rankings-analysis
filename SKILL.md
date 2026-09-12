@@ -69,4 +69,6 @@ python <skill-root>/scripts/rpa_connector.py render-report --analysis-json ".../
 
 报告只能由 `render-report` 渲染，使用 `assets/report/` 的离线资源并内联 CSS/JavaScript，不新增判断、不下载视频、不得手工修改 HTML。交付同级的 HTML 报告 `final-report/final-report.html` 和 `final-report.zip`；ZIP 仅含 `final-report/` 目录。报告验收只执行自动化产物校验：HTML、Markdown、报告数据、presentation JSON 与 `final-report/highlight-frames.xlsx` 非空，导航和本地帧引用有效，ZIP 含 Excel 且无占位符；不要启动实际浏览器，也不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤。报告前确认 `status == success`、选中数量达标且无拒绝，否则按部分完成交付。
 
-新分析同时执行 `analysisQualityVersion=2` 的充分性与范围契约：02 各非空范围和 03 各有正文范围的摘要不少于 180 字，04 标准分类共性与方向各不少于 100 字；这些仅是结构底线。模型仍须核对具体观察、业务含义、建议与验证边界，禁止重复凑字。03 和 04 必须覆盖全部指定品牌，缺失品牌保留入口并明确数据不足。品牌脚本在 `script-brand-<index>.json` 独立撰写；只引用同品牌原文。
+新分析同时执行 `analysisQualityVersion=4` 的充分性与范围契约：02 各非空范围和 03 各有正文范围的摘要不少于 180 字，04 每个非空标准分类组各输出 2–3 条共性结论与一一对应的裂变方向，每条正文不少于 100 字且观点不同；这些仅是结构底线。模型仍须核对具体观察、业务含义、建议与验证边界，禁止重复凑字。03 和 04 必须覆盖全部指定品牌，缺失品牌保留入口并明确数据不足。品牌脚本在 `script-brand-<index>.json` 独立撰写；只引用同品牌原文。
+
+有成功帧时，04 的逐帧理解、标准分类、本批次分类均为必填。逐帧记录 standard_category 与 category_reason，标准分类及各品牌分类必须与其一致；本批次确实无法分组时填写 unavailable 和具体原因，不得省略整个字段。

@@ -1262,6 +1262,25 @@ class YuntuReportTests(unittest.TestCase):
             "groups": [standard_group],
         }
 
+    def test_required_classification_rejects_omission_and_cross_scope_conflicts(self):
+        report = load_module()
+        dashboard = self.dual_classification_dashboard()
+        frames = [{"frame_ref": item["frame_ref"]} for item in dashboard["frameUnderstanding"]]
+        with self.assertRaisesRegex(report.YuntuReportError, "must include"):
+            report._validate_highlight_dual_classification({"brands": []}, frames, require_classification=True)
+        for item in dashboard["frameUnderstanding"]:
+            item.update(standard_category="portrait", category_reason="人物与产品同框，人物为主要讲解主体。")
+        dashboard["brands"] = [{"brand": "全品牌", "groups": copy.deepcopy(dashboard["standardClassification"]["groups"])}]
+        # A real single-category batch remains valid; diversity is not fabricated.
+        report._validate_highlight_dual_classification(dashboard, frames, require_classification=True)
+        for scope in (dashboard["standardClassification"], dashboard["brands"][0]):
+            scope["groups"][0]["category"] = "other"
+            with self.assertRaisesRegex(report.YuntuReportError, "must agree"):
+                report._validate_highlight_dual_classification(dashboard, frames, require_classification=True)
+            scope["groups"][0]["category"] = "portrait"
+        dashboard["batchClassification"] = {"status": "unavailable", "missing_reason": "画面不足以形成两个独立视觉主题", "groups": []}
+        report._validate_highlight_dual_classification(dashboard, frames, require_classification=True)
+
     def test_validate_dual_highlight_classification_covers_every_successful_frame_once(self):
         report = load_module()
         analysis = self.deep_dive_analysis()
@@ -1378,11 +1397,17 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('>标准分类<', rendered)
         self.assertIn('>本批次视觉主题<', rendered)
         self.assertIn("主体协同 · 2 帧", rendered)
+        standard_start = rendered.index('id="highlight-all-brands-mode-standard-panel"')
         batch_start = rendered.index('id="highlight-all-brands-mode-batch-panel"')
+        standard_panel = rendered[standard_start:batch_start]
+        self.assertIn('产品画面 · 0 帧', standard_panel)
+        self.assertIn('其他画面 · 0 帧', standard_panel)
+        self.assertIn('当前品牌的成功帧中暂无此类画面', standard_panel)
         batch_end = rendered.find('<section class="highlight-brand-panel"', batch_start)
         batch_panel = rendered[batch_start:batch_end]
         self.assertNotIn("共性洞察", batch_panel)
         self.assertNotIn("裂变方向", batch_panel)
+        self.assertNotIn('产品画面 · 0 帧', batch_panel)
         self.assertNotIn("分类规则：按主体协同关系与信息焦点对本批次画面分组。", batch_panel)
 
     def test_renders_batch_classification_distribution_chart(self):

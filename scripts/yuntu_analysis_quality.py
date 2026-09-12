@@ -5,13 +5,13 @@ These are structural floors, not a claim that length proves analytical quality.
 from copy import deepcopy
 from yuntu_highlight_export import match_brands_from_title
 
-QUALITY_VERSION = 2
+QUALITY_VERSION = 4
 SCRIPT_FIELDS = ("scriptInsights", "keywordCloudReview", "keywordCloudInsight")
 WRITING_RUBRIC = "有事实的分析须说明具体观察、业务含义、可执行建议及验证边界；不得重复填充。无事实时明确缺口，不借用其他品牌结论。"
 
 
 def enabled(facts):
-    return facts.get("analysisQualityVersion", 0) >= QUALITY_VERSION
+    return facts.get("analysisQualityVersion", 0) >= 2
 
 
 def script_scope_schema(properties, facts):
@@ -53,6 +53,14 @@ def apply_schema(schema, facts):
         schema["required"].append("scriptBrandInsights")
     if "highlightDashboard" in props:
         dashboard = props["highlightDashboard"]["properties"]
+        if facts.get("analysisQualityVersion", 0) >= 4:
+            props["highlightDashboard"]["required"] = ["brands", "frameUnderstanding", "standardClassification", "batchClassification"]
+            understanding = dashboard["frameUnderstanding"]["items"]
+            understanding["required"] += ["standard_category", "category_reason"]
+            understanding["properties"].update(
+                standard_category={"enum": ["portrait", "product", "other"]},
+                category_reason={"type": "string", "minLength": 12})
+            dashboard["standardClassification"]["properties"]["status"] = {"const": "complete"}
         original = dashboard["brands"]["items"]
         brands = ["全品牌", *facts.get("filters", {}).get("brands", [])]
         scopes = []
@@ -72,9 +80,13 @@ def apply_schema(schema, facts):
                 gp = groups["items"]["properties"]
                 gp["frame_refs"]["items"] = {"enum": refs}
                 for key in ("common_patterns", "derivative_directions"):
-                    gp[key]["minItems"] = 1
+                    gp[key]["minItems"] = 2 if facts.get("analysisQualityVersion", 0) >= 3 else 1
+                    if facts.get("analysisQualityVersion", 0) >= 3:
+                        gp[key].update(maxItems=3, uniqueItems=True)
                     gp[key]["items"]["properties"]["body"]["minLength"] = 100
             scopes.append(item)
         dashboard["brands"] = {"type": "array", "prefixItems": scopes,
                                "items": False, "minItems": len(scopes), "maxItems": len(scopes)}
+        if facts.get("analysisQualityVersion", 0) >= 4:
+            dashboard["standardClassification"]["properties"]["groups"] = deepcopy(scopes[0]["properties"]["groups"])
     return schema

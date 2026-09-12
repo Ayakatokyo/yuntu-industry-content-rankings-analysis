@@ -92,6 +92,8 @@ def _task(bundle, part):
     if part["key"] == "highlight":
         task["requiredFrameRefs"] = [x["frame_ref"] for x in report._overview_highlight_frames(facts)]
         task["classificationCoverage"] = "每套分类独立覆盖成功帧全集，每帧恰好一次；失败帧不分类。"
+        if facts.get("analysisQualityVersion", 0) >= 4:
+            task["classificationRequirements"] = "必须同时输出 frameUnderstanding、standardClassification、batchClassification 和 brands。逐帧填写 standard_category 与 category_reason；标准组及各品牌组必须与逐帧分类一致。人物作为讲解或操作主体归 portrait；手部辅助展示且产品为主体归 product；其余归 other 并写清理由。本批次分类按实际画面主题独立分组，不能以省略字段代替 unavailable。"
     return task
 
 

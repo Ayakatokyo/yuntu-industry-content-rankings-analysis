@@ -967,13 +967,18 @@ def render_highlight_insights(
             target["frame_refs"].extend(raw_group.get("frame_refs", []))
             target["common_patterns"].extend(raw_group.get("common_patterns", []))
             target["derivative_directions"].extend(raw_group.get("derivative_directions", []))
+        if show_insights:
+            for category in ("portrait", "product", "other"):
+                normalized_groups.setdefault(category, {"category": category, "frame_refs": [], "common_patterns": [], "derivative_directions": []})
+            normalized_groups = {category: normalized_groups[category] for category in ("portrait", "product", "other")}
         normalized = {"groups": list(normalized_groups.values())}
         frames_by_ref = {frame["frame_ref"]: frame for frame in frames}
         groups_to_render = normalized["groups"]
+        selected_index = next((i for i, group in enumerate(groups_to_render) if group["frame_refs"]), 0)
         tabs, panels = [], []
         for index, group in enumerate(groups_to_render):
             category = group["category"]
-            selected = index == 0
+            selected = index == selected_index
             panel_id, tab_id = f"{id_prefix}-panel-{category}", f"{id_prefix}-tab-{category}"
             refs = group["frame_refs"]
             category_label = category_labels.get(category) or group.get("label") or category
@@ -986,7 +991,7 @@ def render_highlight_insights(
                 caption = f"#{esc(frame.get('rank', '-'))} · {esc(material_title(frame))} · {esc(frame_label(frame))} · {esc(frame.get('second'))}s · {click_text}"
                 cards.append('<article class="highlight-frame-card" data-highlight-frame-card data-highlight-material-id="' + esc(material_id) + '"><figure><button class="highlight-frame-preview highlight-frame-button" type="button" data-highlight-src="' + html_module.escape(image_src(frame), quote=True) + '" data-highlight-caption="' + html_module.escape(caption, quote=True) + '" aria-label="查看高光帧大图"><img loading="lazy" src="' + html_module.escape(image_src(frame), quote=True) + '" alt="' + esc(caption) + '"></button></figure><div class="highlight-frame-meta"><small class="highlight-frame-kind">' + esc(frame_label(frame)) + '</small><span class="highlight-frame-metric">' + esc(frame.get("second")) + 's · ' + esc(click_text) + '</span><button class="highlight-material-title" type="button" data-jump-material="' + esc(material_id) + '">' + esc(material_title(frame)) + '</button></div></article>')
             insight_html = ""
-            if show_insights:
+            if show_insights and refs:
                 pattern_items = []
                 for item in group["common_patterns"]:
                     if isinstance(item, dict):
@@ -1002,6 +1007,8 @@ def render_highlight_insights(
                     directions_data = directions_data[:pair_count]
                 directions = "<h4>裂变方向</h4>" + "".join(f'<article class="highlight-direction"><h5>{esc(item["title"])}</h5><p>{esc(item["body"])}</p></article>' for item in directions_data)
                 insight_html = '<div class="highlight-analysis-pair"><div class="highlight-summary"><h4>共性洞察</h4><div class="highlight-patterns">' + patterns + '</div></div><div class="highlight-directions">' + directions + '</div></div>'
+            if not refs:
+                insight_html = '<p class="data-note">当前品牌的成功帧中暂无此类画面。</p>'
             page_count = max(1, math_module.ceil(len(refs) / 12))
             cards_panel_id = f"{id_prefix}-cards-{category}"
             highlight_data_card = (
@@ -1029,7 +1036,7 @@ def render_highlight_insights(
                 + esc(len(refs))
                 + '">'
                 + insight_html
-                + highlight_data_card
+                + (highlight_data_card if refs else "")
                 + '</article>'
             )
         return '<div class="highlight-dashboard-tabs" role="tablist" aria-label="高光画面分类">' + "".join(tabs) + '</div><div class="highlight-dashboard-panels">' + "".join(panels) + '</div>'

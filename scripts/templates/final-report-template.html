@@ -218,7 +218,7 @@
         if (next) next.disabled = currentPage >= pageCount;
       }
       function activateHighlightCategory(tab, focus) {
-        var owner = tab.closest('[data-highlight-brand-panel]');
+        var owner = tab.closest('[data-highlight-classification-panel]') || tab.closest('[data-highlight-brand-panel]');
         var scopedTabs = owner ? owner.querySelectorAll('[data-highlight-category-tab]') : highlightTabs;
         for (var highlightIndex = 0; highlightIndex < scopedTabs.length; highlightIndex += 1) {
           var candidate = scopedTabs[highlightIndex];
@@ -238,7 +238,7 @@
             var direction = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
             if (event.key === 'Home' || event.key === 'End' || direction[event.key]) {
               event.preventDefault();
-              var owner = tab.closest('[data-highlight-brand-panel]');
+              var owner = tab.closest('[data-highlight-classification-panel]') || tab.closest('[data-highlight-brand-panel]');
               var scopedTabs = owner ? owner.querySelectorAll('[data-highlight-category-tab]') : highlightTabs;
               var localIndex = Array.prototype.indexOf.call(scopedTabs, tab);
               var next = event.key === 'Home' ? 0 : event.key === 'End' ? scopedTabs.length - 1 : (localIndex + direction[event.key] + scopedTabs.length) % scopedTabs.length;
@@ -259,7 +259,7 @@
           if (panel) {
             panel.hidden = !selected;
             if (selected) {
-              var firstCategory = panel.querySelector('[data-highlight-category-tab]');
+              var firstCategory = panel.querySelector('[data-highlight-category-tab][aria-selected="true"]') || panel.querySelector('[data-highlight-category-tab]');
               if (firstCategory) activateHighlightCategory(firstCategory, false);
             }
           }

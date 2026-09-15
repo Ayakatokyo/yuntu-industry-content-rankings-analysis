@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+import time
 from pathlib import Path
 
 from rpa_io import file_sha256, write_json_atomically
@@ -10,6 +11,7 @@ from yuntu_analysis_bundle import (
 )
 import yuntu_report as report
 from yuntu_analysis_quality import WRITING_RUBRIC, SCRIPT_FIELDS
+from yuntu_analysis_inputs import READING_RULES, json_bytes, model_reading_view
 
 
 def _binding(bundle):
@@ -69,12 +71,14 @@ def _part_schema(bundle, part):
 def _task(bundle, part):
     task = {"part": part["key"], "outputSchema": _part_schema(bundle, part),
             "factInput": next(x["path"] for x in bundle["manifest"]["units"] if x.get("unit") == part["unit"])}
+    task["scopedFacts"] = model_reading_view(bundle, part)
+    task["readingRule"] = READING_RULES[part["unit"]]
+    task["factInputRole"] = "canonical_source_for_audit; read scopedFacts first, do not reread the full unit by default"
+    task["imageRoot"] = str(bundle["root"])
     facts = bundle["facts"]
     task["writingRubric"] = WRITING_RUBRIC
     if part["key"] == "script" or "brand" in part:
-        scope = facts["scriptFacts"] if "brand" not in part else facts["scriptFacts"]["brandScopes"][part["brand"]]
         task["scope"] = part.get("brand", "所有指定品牌")
-        task["scopedFacts"] = scope if "brand" in part else {k: v for k, v in scope.items() if k not in ("brandScopes", "brandScopeOrder")}
         task["evidenceFormat"] = "evidence 填本范围脚本文本或公式中的原文短语；material_ids 仅填本范围素材。正文缺失时 evidence=[]，明确数据不足以判断。"
     if "materialId" in part:
         fact = next(x for x in facts["materialFacts"] if str(x["material_id"]) == part["materialId"])
@@ -113,10 +117,20 @@ def begin_workspace(manifest_path, workspace):
     workspace.mkdir(parents=True, exist_ok=True)
     state = {"version": 1, "manifest": os.path.relpath(bundle["manifestPath"], workspace),
              "binding": _binding(bundle), "parts": _parts(bundle)}
+    state["readingViewVersion"] = 1
+    state["taskInputs"] = []
+    state["inputMetrics"] = {"unitFileBytes": sum(x["bytes"] for x in bundle["manifest"]["units"]),
+                             "scopedFactsBytes": 0, "taskFileBytes": 0,
+                             "measurement": "UTF-8 bytes, not model tokens or elapsed model time"}
     for part in state["parts"]:
         write_json_atomically({"binding": state["binding"], "content": None,
                                "viewedFrameRefs": []}, workspace / part["path"])
-        write_json_atomically(_task(bundle, part), workspace / f"{part['key']}.task.json")
+        task = _task(bundle, part)
+        task_path = workspace / f"{part['key']}.task.json"
+        write_json_atomically(task, task_path, indent=None)
+        state["taskInputs"].append(file_record(task_path, workspace))
+        state["inputMetrics"]["scopedFactsBytes"] += json_bytes(task["scopedFacts"])
+        state["inputMetrics"]["taskFileBytes"] += task_path.stat().st_size
     write_json_atomically(state, state_path)
     return state
 
@@ -127,6 +141,13 @@ def _load_workspace(workspace):
     bundle = load_analysis_bundle(workspace / state["manifest"])
     if state.get("version") != 1 or state.get("binding") != _binding(bundle) or state.get("parts") != _parts(bundle):
         raise AnalysisBundleError("workspace binding changed; start a new workspace for the new facts/prompt")
+    if "readingViewVersion" in state:
+        expected = [f"{part['key']}.task.json" for part in state["parts"]]
+        records = state.get("taskInputs", [])
+        if state["readingViewVersion"] != 1 or [x.get("path") for x in records] != expected:
+            raise AnalysisBundleError("workspace reading view contract changed; start a new workspace")
+        for record in records:
+            verify_record(workspace, record, "model task input")
     return state, bundle
 
 
@@ -172,9 +193,11 @@ def _merge(parts, drafts):
 
 def _check(workspace, state, bundle, only_part=None):
     errors, drafts = [], {}
-    parts = [x for x in state["parts"] if only_part is None or x["key"] == only_part]
-    if not parts:
-        raise AnalysisBundleError(f"unknown draft part: {only_part}")
+    selected = {only_part} if isinstance(only_part, str) else set(only_part or [])
+    known = {part["key"] for part in state["parts"]}
+    if only_part is not None and (not selected or selected - known):
+        raise AnalysisBundleError(f"unknown draft part: {sorted(selected - known)}")
+    parts = [x for x in state["parts"] if only_part is None or x["key"] in selected]
     for part in parts:
         def error(path, message):
             errors.append({"part": part["key"], "file": part["path"], "path": path, "message": message})
@@ -209,8 +232,12 @@ def _check(workspace, state, bundle, only_part=None):
 
 
 def check_workspace(workspace, only_part=None):
+    started = time.perf_counter()
     state, bundle = _load_workspace(workspace)
+    loaded = time.perf_counter()
     result, _ = _check(workspace, state, bundle, only_part)
+    result["timingsSeconds"] = {"loadAndVerifyInputs": round(loaded - started, 6),
+                               "validateDrafts": round(time.perf_counter() - loaded, 6)}
     write_json_atomically(result, Path(workspace) / "validation.json")
     return result
 
@@ -221,8 +248,12 @@ def assembly_path(analysis_json):
 
 
 def assemble_workspace(workspace, output):
+    started = time.perf_counter()
     state, bundle = _load_workspace(workspace)
+    loaded = time.perf_counter()
     result, drafts = _check(workspace, state, bundle)
+    result["timingsSeconds"] = {"loadAndVerifyInputs": round(loaded - started, 6),
+                               "validateDrafts": round(time.perf_counter() - loaded, 6)}
     write_json_atomically(result, Path(workspace) / "validation.json")
     if not result["valid"]:
         raise AnalysisBundleError("assembly blocked; see workspace validation.json")

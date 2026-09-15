@@ -51,23 +51,25 @@ python <skill-root>/scripts/rpa_connector.py retry-unresolved --shop-id "<shop_i
 
 分析阶段只读 `normalized/` 与 `diagnostic-analysis/`，不读原始 CSV、RPA response 或临时 `fileUrl`。先运行 `prepare-analysis`；新批次不再生成 `yuntu-analysis-data.json`，生成 `report-data.json`、`diagnostic-analysis/yuntu-ai-analysis.schema.json`、`diagnostic-analysis/yuntu-analysis-prompt.md` 和五个章节事实包。历史批次缺少 `report-data.json` 时兼容渲染已有 `yuntu-analysis-data.json`；旧版完整 JSON 的额外字段忽略。渲染产物还包括 `final-report.md`。
 
-当前对话模型直接完成一次分析任务：读取 manifest、五包并实际查看全部可用本地 JPEG，直接撰写分段 JSON 草稿。先运行 `begin-analysis` 创建独立工作目录，再按同名 `*.task.json` 的当前范围、引用清单和 Schema 填写 `*.json` 的 `content`；第四章的 `viewedFrameRefs` 只记录实际查看过的成功 JPEG。四个章节草稿、第三章各品牌草稿及每个素材的草稿分别检查、保存和恢复，具体操作见 [分析草稿入口](references/analysis-drafts.md)。新批次 manifest 的 `analysisContract` 绑定五包、Schema、提示词、渲染事实和成功资产；恢复时由命令自动核对，变更后另建工作目录。`single_model_call` 保留为既有契约标识，不限制当前任务的读取或保存次数。
+当前对话模型直接完成一次分析任务：先读 manifest 和提示词一次，运行 `begin-analysis` 创建独立工作目录，再按同名 `*.task.json` 的 scopedFacts、当前范围、引用清单和 Schema 填写 `*.json` 的 `content`。新任务内的事实视图已按章节、品牌、素材准备，不要求再全文读取五包、完整 Schema 或脚本；factInput 留作必要溯源。实际查看全部可用本地 JPEG，按素材同次完成第四章逐帧理解和第五章观察，再完成整批分类；第四章的 `viewedFrameRefs` 只记录实际查看过的成功 JPEG。四个章节草稿、第三章各品牌草稿及每个素材的草稿分别检查、保存和恢复，具体操作见 [分析草稿入口](references/analysis-drafts.md)。新批次 manifest 的 `analysisContract` 绑定五包、Schema、提示词、渲染事实和成功资产；恢复时由命令自动核对，变更后另建工作目录。`single_model_call` 保留为既有契约标识，不限制当前任务的读取或保存次数。
 
-每完成一份草稿，运行 `check-analysis --part <key>`；全部完成后运行完整检查和 `assemble-analysis`。组装器只合并模型已写出的 JSON，保留按哈希命名的原始草稿快照和 assembly 收据，不生成、补齐或改写业务结论。新契约的 attest 必须验证草稿到最终 JSON 的无损对应。禁止程序化兜底，禁止新建承载业务结论的 Python/JS 生成脚本（包括沿用历史 `build_current_ai_analysis.py`），禁止 `codex exec`、子进程或外部模型服务调用模型。不得仅凭 `--generator` 认定模型；它和草稿来源都是调用者声明，哈希与收据不能证明模型身份、实际看图或业务判断正确。脚本和生成的提示词是 schema 权威，只生成当前报告实际展示的分析模块；固定规则负责统计，当前模型负责判断。
+草稿写完立即保存，每完成一组相关草稿，用可重复的 `--part <key1> --part <key2>` 一次检查；单份报错只修受影响草稿。全部完成后直接运行 `assemble-analysis`，其内部完整检查通过才会组装，无需紧邻组装前再做一次全量检查。组装器只合并模型已写出的 JSON，保留按哈希命名的原始草稿快照和 assembly 收据，不生成、补齐或改写业务结论。新契约的 attest 必须验证草稿到最终 JSON 的无损对应。禁止程序化兜底，禁止新建承载业务结论的 Python/JS 生成脚本（包括沿用历史 `build_current_ai_analysis.py`），禁止 `codex exec`、子进程或外部模型服务调用模型。不得仅凭 `--generator` 认定模型；它和草稿来源都是调用者声明，哈希与收据不能证明模型身份、实际看图或业务判断正确。脚本和生成的提示词是 schema 权威，只生成当前报告实际展示的分析模块；固定规则负责统计，当前模型负责判断。
 
 校验失败先读工作目录的 `validation.json`，按 `part/file/path` 修复受影响草稿。引用从该素材或 scope 的清单原样选择；帧覆盖报错列出重复、缺失和额外引用；字数不足先核对可用事实，`unsupported claim` 核对具体句子和命中词。缺失事实保留不可用状态。不要删证据、关闭 provenance、绕过 CLI 或机械凑字数；输入未变化时不重复检查。仅报告生成任务中发现事实投影或校验器缺陷，应保留失败现场并报告具体契约问题，不以修改通用技能代码来放行；用户明确要求修复技能时可在该授权范围内修复并测试。
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py prepare-analysis --input-dir "RPA数据汇总/yuntu-rankings-analysis" --output-dir "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis"
 python <skill-root>/scripts/rpa_connector.py begin-analysis --fact-pack-json ".../diagnostic-analysis/analysis-units/analysis-unit-manifest.json" --workspace ".../diagnostic-analysis/model-drafts"
-# 当前模型直接填写各份草稿后检查；--part material-<素材ID> 可单独检查某个素材。
-python <skill-root>/scripts/rpa_connector.py check-analysis --workspace ".../diagnostic-analysis/model-drafts"
+# 当前模型保存一组草稿后检查；--part 可重复。全部完成后 assemble 会执行全量检查。
+python <skill-root>/scripts/rpa_connector.py check-analysis --workspace ".../diagnostic-analysis/model-drafts" --part ranking --part audience
 python <skill-root>/scripts/rpa_connector.py assemble-analysis --workspace ".../diagnostic-analysis/model-drafts" --output ".../diagnostic-analysis/yuntu-ai-analysis.json"
 python <skill-root>/scripts/rpa_connector.py attest-analysis --analysis-json ".../diagnostic-analysis/yuntu-ai-analysis.json" --fact-pack-json ".../diagnostic-analysis/analysis-units/analysis-unit-manifest.json" --prompt ".../diagnostic-analysis/yuntu-analysis-prompt.md" --source model_generated --generator "<模型或人工执行者>"
 python <skill-root>/scripts/rpa_connector.py render-report --analysis-json ".../diagnostic-analysis/yuntu-ai-analysis.json" --output-dir ".../final-report"
 ```
 
 报告只能由 `render-report` 渲染，使用 `assets/report/` 的离线资源并内联 CSS/JavaScript，不新增判断、不下载视频、不得手工修改 HTML。交付同级的 HTML 报告 `final-report/final-report.html` 和 `final-report.zip`；ZIP 仅含 `final-report/` 目录。报告验收只执行自动化产物校验：HTML、Markdown、报告数据、presentation JSON 与 `final-report/highlight-frames.xlsx` 非空，导航和本地帧引用有效，ZIP 含 Excel 且无占位符；不要启动实际浏览器，也不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤。报告前确认 `status == success`、选中数量达标且无拒绝，否则按部分完成交付。
+
+优化效果按 workspace.json 的 inputMetrics 与 validation.json 的 timingsSeconds 核对：字节量衡量模型读取体积，本地耗时衡量校验开销；实际模型耗时还需从执行日志单独计时，不用字节缩减率代替提速率。
 
 新分析同时执行 `analysisQualityVersion=4` 的充分性与范围契约：02 各非空范围和 03 各有正文范围的摘要不少于 180 字，04 每个非空标准分类组各输出 2–3 条共性结论与一一对应的裂变方向，每条正文不少于 100 字且观点不同；这些仅是结构底线。模型仍须核对具体观察、业务含义、建议与验证边界，禁止重复凑字。03 和 04 必须覆盖全部指定品牌，缺失品牌保留入口并明确数据不足。品牌脚本在 `script-brand-<index>.json` 独立撰写；只引用同品牌原文。
 

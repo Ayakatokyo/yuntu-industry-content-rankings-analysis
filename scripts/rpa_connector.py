@@ -696,7 +696,7 @@ def _parser():
     begin_parser.add_argument("--workspace", required=True)
     check_parser = commands.add_parser("check-analysis", help="Check drafts without attestation or rendering")
     check_parser.add_argument("--workspace", required=True)
-    check_parser.add_argument("--part", help="Only check this chapter or material key")
+    check_parser.add_argument("--part", action="append", help="Check this chapter or material key; repeat to check a group with one input verification")
     assemble_parser = commands.add_parser("assemble-analysis", help="Losslessly assemble checked model drafts")
     assemble_parser.add_argument("--workspace", required=True)
     assemble_parser.add_argument("--output", required=True)

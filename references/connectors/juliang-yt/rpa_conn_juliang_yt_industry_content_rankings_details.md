@@ -1,14 +1,14 @@
 # 云图-行业灵感-素材详情
 
-## 固定元数据
+## 运行时契约
 
-- `function_code`: `rpa.conn.juliang.yt.industry.content.rankings.details`
-- `platform`: `RPA_JULIANG_YT_ACCOUNT_PASSWORD`
-- `data_source_type`: `rpa`
+- 唯一固化身份：`connectorCode=rpa.conn.juliang.yt.industry.content.rankings.details`
+- 平台、入参 Schema/列表和出参说明每次从 `/dcConnector/v3/listByConnectorCode` 实时读取
+- 用 `scripts/rpa_dynamic_detail_client.py detail/schema/validate` 查看和校验，不使用本页的历史字段作为传参权威
 
 ## 请求与任务协议
 
-详情只接收以下业务字段：
+历史批次使用过以下业务结构，仅作业务语义参考：
 
 ```json
 {
@@ -17,7 +17,7 @@
 }
 ```
 
-自定义周期使用 `date_type: "CUSTOM"`，并同时传 `custom_start_date` 与 `custom_end_date`（`YYYYMMDD` 或 `YYYY-MM-DD`）。素材 ID 必须来自已验证的榜单记录；品牌、触点和候选分组只在本地调度，不能透传。
+素材 ID 必须来自已验证的榜单记录；品牌、触点和候选分组只在本地调度，不能透传。新任务的自定义周期字段、日期格式和枚举以当次实时 Schema 为准。
 
 通过 `POST /adg/v1/agent/fetch/tasks` 提交，随后以 `POST /adg/v1/agent/fetch/tasks/status` 用 `task_group_id` 查询。单次 HTTP 请求为 30 秒，查询间隔 10 秒，`completed` 与 `partial_success` 是可物化的成功终态。收到任务 ID 后先原子写入 `batch-manifest.json.taskRuns`；恢复同一输出目录时只查询该 ID。
 

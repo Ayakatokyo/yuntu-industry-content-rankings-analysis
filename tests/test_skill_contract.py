@@ -54,7 +54,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertIsNotNone(frontmatter)
         self.assertNotIn("fetch --target-top-n", frontmatter.group(1))
         self.assertNotIn("prepare-analysis --brand-top-n", frontmatter.group(1))
-        self.assertIn("秒级拆解素材数默认 10，控制 RPA 详情实际拉取并做秒级拆解的目标素材数（`fetch --target-top-n`）", skill)
+        self.assertIn("秒级拆解素材数默认 10，由批参数 JSON 的 `target_top_n` 控制", skill)
         self.assertIn("第一部分品牌分析直接使用提取到的行业 TOP1000，并在其中按品牌匹配全部素材", skill)
         self.assertNotIn("品牌榜单 Top 素材数默认 30", skill)
         self.assertIn("未完成映射核对时不得启动 RPA 长任务", skill)
@@ -66,6 +66,8 @@ class AnalysisSkillContractTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+        self.assertIn("target_top_n", result.stdout)
+        self.assertIn("candidate_top_n", result.stdout)
         self.assertIn("second-level breakdown", result.stdout)
         self.assertIn("not the brand analysis Top N", result.stdout)
 
@@ -113,8 +115,8 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertIn("榜单和素材详情必须使用同一分析周期", skill)
         self.assertRegex(
             skill,
-            r'(?s)--time-range-type "LAST_7_DAYS".{0,80}'
-            r'--detail-date-range-type "LAST_7_DAYS"',
+            r'(?s)"time_range_type": "LAST_7_DAYS".{0,160}'
+            r'"date_type": "LAST_7_DAYS"',
         )
 
     def test_documents_fixed_connectors_runtime_and_workflow(self):
@@ -144,7 +146,6 @@ class AnalysisSkillContractTests(unittest.TestCase):
         skill = self.read_skill()
         command = "python <skill-root>/scripts/rpa_connector.py"
         for subcommand in (
-            "list-accounts",
             "schema",
             "self-test",
             "fetch",
@@ -154,6 +155,9 @@ class AnalysisSkillContractTests(unittest.TestCase):
             "retry-unresolved",
         ):
             self.assertIn(f"{command} {subcommand}", skill)
+        dynamic_command = "python <skill-root>/scripts/rpa_dynamic_client.py"
+        for subcommand in ("detail", "list-accounts", "validate"):
+            self.assertIn(f"{dynamic_command} {subcommand}", skill)
 
         result = subprocess.run(
             [sys.executable, str(CONNECTOR_PATH), "fetch", "--help"],
@@ -164,17 +168,14 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         for option in (
             "--shop-id",
-            "--top-n",
+            "--params-json",
+            "--params-file",
             "--output-dir",
-            "--detail-date-range-type",
-            "--detail-custom-start-date",
-            "--detail-custom-end-date",
-            "--industry",
-            "--time-range-type",
-            "--ranking-limit-type",
         ):
             self.assertIn(option, result.stdout)
             self.assertIn(option, skill)
+        for removed_option in ("--top-n", "--industry", "--detail-date-range-type"):
+            self.assertNotIn(removed_option, result.stdout)
         root_help = subprocess.run(
             [sys.executable, str(CONNECTOR_PATH), "--help"],
             check=False,

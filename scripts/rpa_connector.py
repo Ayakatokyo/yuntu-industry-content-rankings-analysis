@@ -1,23 +1,31 @@
 #!/usr/bin/env python3
-"""Analyze Yuntu industry-content rankings with fixed Yuce RPA connectors."""
+"""Analyze Yuntu industry-content rankings with live Yuce RPA contracts."""
 
 import argparse
-from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
 import sys
 import time
 from urllib.parse import urlsplit
-from zoneinfo import ZoneInfo
 
 import requests
-from rpa_io import file_sha256
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+
+from rpa_io import file_sha256
+from rpa_dynamic_client import (
+    CONNECTOR_CODE as LIST_CONNECTOR_CODE,
+    ContractError as DynamicContractError,
+    ValidationContractError as DynamicValidationError,
+    normalized_detail,
+    resolve_platform,
+    validate_business_params as validate_dynamic_business_params,
+)
+from rpa_dynamic_detail_client import CONNECTOR_CODE as DETAIL_CONNECTOR_CODE
 
 try:
     from yuntu_batch import (
@@ -61,9 +69,6 @@ try:
 except ImportError:
     render_report = None
 
-LIST_FUNCTION_CODE = "rpa.conn.juliang.yt.industry.content.rankings.list"
-DETAIL_FUNCTION_CODE = "rpa.conn.juliang.yt.industry.content.rankings.details"
-PLATFORM = "RPA_JULIANG_YT_ACCOUNT_PASSWORD"
 DATA_SOURCE_TYPE = "rpa"
 HEADERS = {"Content-Type": "application/json"}
 HTTP_REQUEST_TIMEOUT_SECONDS = 30
@@ -76,78 +81,18 @@ REQUIRED_ENVIRONMENT = (
     "YUCE_AUTHORIZATION",
     "YUCE_SESSION_ID",
 )
-DATE_RANGE_TYPES = {"LAST_7_DAYS", "LAST_30_DAYS", "CUSTOM"}
-AGE_VALUES = {
-    "AGE_18_19",
-    "AGE_20_23",
-    "AGE_24_30",
-    "AGE_31_35",
-    "AGE_36_40",
-    "AGE_41_45",
-    "AGE_46_50",
-    "AGE_51_55",
-    "AGE_56_59",
-    "AGE_60_PLUS",
-}
-GENDER_VALUES = {"MALE", "FEMALE"}
-CROWD_GROUP_VALUES = {
-    "TOWN_YOUTH",
-    "GENZ",
-    "SENIOR_MIDDLE",
-    "REFINED_MOM",
-    "NEW_WHITE_COLLAR",
-    "URBAN_SILVER",
-    "TOWN_MIDDLE_ELDER",
-    "URBAN_BLUE_COLLAR",
-}
-RANKING_LIMIT_VALUES = {
-    "EXPOSURE_TOP1000",
-    "CTR_TOP1000",
-    "INTERACTION_RATE_TOP1000",
-    "COMPLETION_RATE_TOP1000",
-}
-BRAND_SCOPE_VALUES = {"ALL_INDUSTRY", "SPECIFIED_BRANDS"}
-LIST_FIELDS = {
-    "industry",
-    "time_range_type",
-    "custom_start_date",
-    "custom_end_date",
-    "ages",
-    "genders",
-    "crowd_groups",
-    "brand_scope_type",
-    "brands",
-    "ranking_limit_type",
-}
-DETAIL_FIELDS = {
-    "material_id",
-    "date_type",
-    "custom_start_date",
-    "custom_end_date",
-}
-SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
-
-BUSINESS_PARAMS_SCHEMA = {
-    "schema_type": "reference_metadata",
-    "title": "云图行业内容榜单分析",
-    "list_fields": sorted(LIST_FIELDS),
-    "detail_date_fields": [
-        "date_type",
-        "custom_start_date",
-        "custom_end_date",
-    ],
-    "top_n": {"type": "positive integer", "default": 10},
+DEFAULT_OUTPUT_DIR = "云图数据资源/yuntu-rankings-analysis"
+LOCAL_DETAIL_CONTEXT_FIELDS = {
+    "selectionGroupId",
+    "brandId",
+    "brandName",
+    "touchpointCode",
+    "touchpointName",
 }
 
 
 class RpaConnectorError(RuntimeError):
     """Raised when the connector cannot safely complete an operation."""
-
-
-def shanghai_today(now=None):
-    if now is None:
-        return datetime.now(SHANGHAI_TIMEZONE).date()
-    return now.astimezone(SHANGHAI_TIMEZONE).date()
 
 
 def runtime_config(environ=None):
@@ -192,178 +137,6 @@ def runtime_config(environ=None):
     return api_base, authorization, session_id, {"YCSESSIONID": cookie_session}
 
 
-def _parse_date(value, field_name):
-    if not isinstance(value, str):
-        raise RpaConnectorError(
-            f"{field_name} must use YYYYMMDD or YYYY-MM-DD format"
-        )
-    for date_format in ("%Y%m%d", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(value, date_format).date()
-        except ValueError:
-            pass
-    raise RpaConnectorError(f"{field_name} must use YYYYMMDD or YYYY-MM-DD format")
-
-
-def _normalize_multivalue(value, field_name, allowed_values=None):
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped.startswith("["):
-            try:
-                values = json.loads(stripped)
-            except json.JSONDecodeError as exc:
-                raise RpaConnectorError(
-                    f"{field_name} must be a comma-separated string or JSON array"
-                ) from exc
-        else:
-            values = value.split(",")
-    elif isinstance(value, list):
-        values = value
-    else:
-        raise RpaConnectorError(
-            f"{field_name} must be a comma-separated string or JSON array"
-        )
-
-    if not isinstance(values, list) or not values:
-        raise RpaConnectorError(f"{field_name} must contain one or more strings")
-    normalized = []
-    for item in values:
-        if not isinstance(item, str):
-            raise RpaConnectorError(f"{field_name} values must be strings")
-        item = item.strip()
-        if not item:
-            raise RpaConnectorError(f"{field_name} values cannot be blank")
-        if item in normalized:
-            raise RpaConnectorError(f"{field_name} cannot contain duplicates")
-        if allowed_values is not None and item not in allowed_values:
-            raise RpaConnectorError(
-                f"{field_name} contains an unsupported value: {item}"
-            )
-        normalized.append(item)
-    return normalized
-
-
-def validate_list_business_params(raw_params):
-    if not isinstance(raw_params, dict):
-        raise RpaConnectorError("list business_params must be an object")
-    unexpected = set(raw_params) - LIST_FIELDS
-    if unexpected:
-        raise RpaConnectorError(
-            "unexpected list business parameters: " + ", ".join(sorted(unexpected))
-        )
-
-    params = {}
-    if "industry" in raw_params:
-        industry = raw_params["industry"]
-        if not isinstance(industry, str) or not industry.strip():
-            raise RpaConnectorError("industry must be a nonblank string")
-        params["industry"] = industry.strip()
-
-    date_range_type = raw_params.get("time_range_type")
-    if date_range_type is not None:
-        if not isinstance(date_range_type, str) or date_range_type not in DATE_RANGE_TYPES:
-            raise RpaConnectorError(
-                "time_range_type must be one of: " + ", ".join(sorted(DATE_RANGE_TYPES))
-            )
-        params["time_range_type"] = date_range_type
-
-    custom_start = raw_params.get("custom_start_date")
-    custom_end = raw_params.get("custom_end_date")
-    if date_range_type == "CUSTOM":
-        if not custom_start or not custom_end:
-            raise RpaConnectorError("CUSTOM requires custom_start_date and custom_end_date")
-        start = _parse_date(custom_start, "custom_start_date")
-        end = _parse_date(custom_end, "custom_end_date")
-        today = shanghai_today()
-        if start < today - timedelta(days=369):
-            raise RpaConnectorError("custom_start_date cannot be more than 369 days before today")
-        if end > today - timedelta(days=4):
-            raise RpaConnectorError("custom_end_date cannot be later than today-4")
-        if end < start:
-            raise RpaConnectorError("custom_end_date cannot be earlier than custom_start_date")
-        if (end - start).days > 44:
-            raise RpaConnectorError("custom date span cannot exceed 44 days")
-        params["custom_start_date"] = custom_start
-        params["custom_end_date"] = custom_end
-    elif custom_start is not None or custom_end is not None:
-        raise RpaConnectorError(
-            "custom_start_date and custom_end_date are only valid for CUSTOM"
-        )
-
-    for field_name in ("ages", "genders", "crowd_groups"):
-        if field_name in raw_params:
-            params[field_name] = _normalize_multivalue(raw_params[field_name], field_name)
-
-    scope = raw_params.get("brand_scope_type")
-    if scope is not None:
-        if not isinstance(scope, str) or scope not in BRAND_SCOPE_VALUES:
-            raise RpaConnectorError(
-                "brand_scope_type must be one of: "
-                + ", ".join(sorted(BRAND_SCOPE_VALUES))
-            )
-        params["brand_scope_type"] = scope
-    if "brands" in raw_params:
-        brands = _normalize_multivalue(raw_params["brands"], "brands")
-        if scope != "SPECIFIED_BRANDS":
-            raise RpaConnectorError("brands requires brand_scope_type SPECIFIED_BRANDS")
-        if not 3 <= len(brands) <= 10:
-            raise RpaConnectorError("brands must contain 3 to 10 values")
-        params["brands"] = brands
-    elif scope == "SPECIFIED_BRANDS":
-        raise RpaConnectorError("SPECIFIED_BRANDS requires brands")
-
-    if "ranking_limit_type" in raw_params:
-        ranking_limit_type = raw_params["ranking_limit_type"]
-        if (
-            not isinstance(ranking_limit_type, str)
-            or ranking_limit_type not in RANKING_LIMIT_VALUES
-        ):
-            raise RpaConnectorError(
-                "ranking_limit_type must be one of: "
-                + ", ".join(sorted(RANKING_LIMIT_VALUES))
-            )
-        params["ranking_limit_type"] = ranking_limit_type
-    return params
-
-
-def validate_detail_business_params(raw_params):
-    if not isinstance(raw_params, dict):
-        raise RpaConnectorError("detail business_params must be an object")
-    unexpected = set(raw_params) - DETAIL_FIELDS
-    if unexpected:
-        raise RpaConnectorError(
-            "unexpected detail business parameters: " + ", ".join(sorted(unexpected))
-        )
-    material_id = raw_params.get("material_id")
-    if not isinstance(material_id, str) or not material_id.isdigit():
-        raise RpaConnectorError("material_id must contain digits only")
-    date_type = raw_params.get("date_type")
-    if date_type not in DATE_RANGE_TYPES:
-        raise RpaConnectorError(
-            "date_type must be one of: " + ", ".join(sorted(DATE_RANGE_TYPES))
-        )
-
-    params = {"material_id": material_id, "date_type": date_type}
-    start_date = raw_params.get("custom_start_date")
-    end_date = raw_params.get("custom_end_date")
-    if date_type == "CUSTOM":
-        if not start_date or not end_date:
-            raise RpaConnectorError("CUSTOM requires custom_start_date and custom_end_date")
-        start = _parse_date(start_date, "custom_start_date")
-        end = _parse_date(end_date, "custom_end_date")
-        if end < start:
-            raise RpaConnectorError(
-                "custom_end_date cannot be earlier than custom_start_date"
-            )
-        params["custom_start_date"] = start_date
-        params["custom_end_date"] = end_date
-    elif start_date is not None or end_date is not None:
-        raise RpaConnectorError(
-            "custom_start_date and custom_end_date are only valid for CUSTOM"
-        )
-    return params
-
-
 def _default_session():
     return requests.Session()
 
@@ -390,13 +163,11 @@ def _require_successful_result(result):
     return result
 
 
-def _operation_function_code(operation):
-    # Keep the gateway route closed over the two supported operations.  Public
-    # constants are display metadata and must not become caller-controlled code.
+def _operation_connector_code(operation):
     if operation == "list":
-        return "rpa.conn.juliang.yt.industry.content.rankings.list"
+        return LIST_CONNECTOR_CODE
     if operation == "detail":
-        return "rpa.conn.juliang.yt.industry.content.rankings.details"
+        return DETAIL_CONNECTOR_CODE
     raise RpaConnectorError("operation must be list or detail")
 
 
@@ -409,19 +180,71 @@ def _response_data(response, action):
     return data
 
 
-def list_accounts(environ=None, session=None):
+def fetch_connector_detail(operation, *, environ=None, session=None):
+    connector_code = _operation_connector_code(operation)
     session = _default_session() if session is None else session
+    api_base, authorization, _session_id, cookies = runtime_config(environ)
+    try:
+        response = session.post(
+            f"{api_base}/dcConnector/v3/listByConnectorCode",
+            json={"connectorCode": connector_code},
+            headers=HEADERS,
+            cookies=cookies,
+            timeout=HTTP_REQUEST_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        raise RpaConnectorError(
+            f"unable to read RPA {operation} connector detail: transport request failed"
+        ) from exc
+    _raise_for_status(response, f"read RPA {operation} connector detail")
+    body = _require_successful_result(
+        _response_json(response, f"read RPA {operation} connector detail")
+    )
+    data = body.get("data")
+    if not isinstance(data, list):
+        raise RpaConnectorError("connector detail response data must be an array")
+    matches = [
+        item
+        for item in data
+        if isinstance(item, dict) and item.get("connectorCode") == connector_code
+    ]
+    if not matches:
+        raise RpaConnectorError(
+            f"connector {connector_code} is unavailable, unpublished, or does not support BIZ_EXPERT"
+        )
+    if len(matches) != 1:
+        ids = [str(item.get("id") or "") for item in matches]
+        raise RpaConnectorError(
+            f"connector {connector_code} returned multiple details and cannot be selected uniquely: {ids}"
+        )
+    try:
+        normalized_detail(matches[0])
+    except DynamicContractError as exc:
+        raise RpaConnectorError(str(exc)) from exc
+    return matches[0]
+
+
+def _validate_live_params(detail, business_params):
+    try:
+        return validate_dynamic_business_params(detail, business_params)
+    except (DynamicContractError, DynamicValidationError) as exc:
+        raise RpaConnectorError(str(exc)) from exc
+
+
+def list_accounts(operation="list", environ=None, session=None):
+    session = _default_session() if session is None else session
+    detail = fetch_connector_detail(operation, environ=environ, session=session)
     api_base, authorization, _session_id, cookies = runtime_config(environ)
     try:
         response = session.post(
             f"{api_base}/adg/v1/agent/rpa/authorizations/query",
             json={
                 "authorization": authorization,
-                "platform": "RPA_JULIANG_YT_ACCOUNT_PASSWORD",
+                "platform": resolve_platform(detail),
             },
             headers=HEADERS,
             cookies=cookies,
-            timeout=30,
+            timeout=HTTP_REQUEST_TIMEOUT_SECONDS,
         )
     except Exception as exc:
         raise RpaConnectorError(
@@ -432,10 +255,12 @@ def list_accounts(environ=None, session=None):
 
 
 def submit_fetch_task(operation, shop_id, business_params, *, environ=None, session=None):
-    function_code = _operation_function_code(operation)
+    connector_code = _operation_connector_code(operation)
     if not isinstance(shop_id, str) or not shop_id.strip():
         raise RpaConnectorError("shop_id is required")
     session = _default_session() if session is None else session
+    detail = fetch_connector_detail(operation, environ=environ, session=session)
+    params = _validate_live_params(detail, business_params)
     api_base, authorization, session_id, cookies = runtime_config(environ)
     try:
         response = session.post(
@@ -444,9 +269,9 @@ def submit_fetch_task(operation, shop_id, business_params, *, environ=None, sess
                 "authorization": authorization,
                 "agent_session_id": session_id,
                 "data_source_type": "rpa",
-                "platform": "RPA_JULIANG_YT_ACCOUNT_PASSWORD",
-                "function_code": function_code,
-                "business_params": business_params,
+                "platform": resolve_platform(detail),
+                "function_code": connector_code,
+                "business_params": params,
                 "shop_id": shop_id.strip(),
             },
             headers=HEADERS,
@@ -555,7 +380,7 @@ def invoke_detail(shop_id, business_params, environ=None, session=None):
     return _invoke(
         "detail",
         shop_id,
-        validate_detail_business_params(business_params),
+        business_params,
         environ=environ,
         session=session,
     )
@@ -572,20 +397,24 @@ def _validate_detail_date_params(raw_params):
         raise RpaConnectorError("detail business_params must be an object")
     if "material_id" in raw_params:
         raise RpaConnectorError("material_id is selected from the list response")
-    return validate_detail_business_params({"material_id": "0", **raw_params})
+    return dict(raw_params)
 
 
 def _batch_invoker():
     def detail_params(params):
-        return {name: params[name] for name in DETAIL_FIELDS if name in params}
+        return {
+            name: value
+            for name, value in params.items()
+            if name not in LOCAL_DETAIL_CONTEXT_FIELDS
+        }
 
     return ConnectorInvoker(
         lambda sid, params: invoke_list(sid, params),
-        # Selection groups are list-derived local scheduling context.  The
-        # details connector contract accepts only the four DETAIL_FIELDS.
+        # Selection groups are local scheduling context. Every remaining field
+        # is checked against the current detail contract before submission.
         lambda sid, params: invoke_detail(sid, detail_params(params)),
         submit_detail=lambda sid, params: submit_fetch_task(
-            "detail", sid, validate_detail_business_params(detail_params(params))
+            "detail", sid, detail_params(params)
         ),
         wait_detail=lambda task_group_id: wait_fetch_task(task_group_id),
     )
@@ -602,9 +431,9 @@ def fetch_batch_analysis(
 ):
     if fetch_batch is None or ConnectorInvoker is None:
         raise RpaConnectorError("batch fetch support is unavailable")
-    if "time_range_type" not in raw_list_params:
-        raw_list_params = {**raw_list_params, "time_range_type": "LAST_7_DAYS"}
-    list_params = validate_list_business_params(raw_list_params)
+    if not isinstance(raw_list_params, dict):
+        raise RpaConnectorError("list business_params must be an object")
+    list_params = dict(raw_list_params)
     detail_date_params = _validate_detail_date_params(raw_detail_params)
     detail_date_range = {
         key: value for key, value in detail_date_params.items() if key != "material_id"
@@ -664,10 +493,15 @@ def _positive_int_argument(value):
 
 
 def _parser():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("list-accounts", help="List available RPA accounts")
-    commands.add_parser("schema", help="Print analysis parameter metadata")
+    account_parser = commands.add_parser("list-accounts", help="List available RPA accounts using a live platformCode")
+    account_parser.add_argument("--connector", choices=("list", "detail"), default="list")
+    commands.add_parser("detail", help="Read both live connector details")
+    commands.add_parser("schema", help="Print both live connector input contracts")
     commands.add_parser("self-test", help="Run offline connector checks")
     status_parser = commands.add_parser("status", help="Read collection lifecycle state")
     status_parser.add_argument("--output-dir", required=True)
@@ -719,68 +553,85 @@ def _parser():
     retry_unresolved_parser.add_argument("--shop-id", required=True)
     retry_unresolved_parser.add_argument("--output-dir", required=True)
     fetch_parser = commands.add_parser(
-        "fetch", help="Fetch rankings and details in fixed three-material waves"
+        "fetch",
+        help="Fetch rankings and details in fixed three-material waves",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     fetch_parser.add_argument("--shop-id", required=True)
-    fetch_parser.add_argument("--top-n", type=_positive_int_argument, default=10)
-    fetch_parser.add_argument(
-        "--target-top-n",
-        type=_positive_int_argument,
-        help="Target number of materials whose details are fetched for second-level breakdown; defaults to --top-n (10)",
+    params_source = fetch_parser.add_mutually_exclusive_group(required=True)
+    params_source.add_argument(
+        "--params-json",
+        help="Complete batch JSON: dynamic list/detail objects plus optional target_top_n and candidate_top_n",
+    )
+    params_source.add_argument(
+        "--params-file",
+        help="Same batch JSON in a file relative to workspace root; target_top_n owns second-level breakdown and candidate_top_n is not the brand analysis Top N",
     )
     fetch_parser.add_argument(
-        "--candidate-top-n",
-        type=_positive_int_argument,
-        help="Candidate-pool size for detail selection; defaults to 2x --target-top-n, not the brand analysis Top N",
+        "--output-dir",
+        default=DEFAULT_OUTPUT_DIR,
+        help="Collection output directory",
     )
-    fetch_parser.add_argument("--output-dir", required=True)
-    fetch_parser.add_argument("--industry")
-    fetch_parser.add_argument("--time-range-type")
-    fetch_parser.add_argument("--custom-start-date")
-    fetch_parser.add_argument("--custom-end-date")
-    fetch_parser.add_argument("--ages")
-    fetch_parser.add_argument("--genders")
-    fetch_parser.add_argument("--crowd-groups")
-    fetch_parser.add_argument("--brand-scope-type")
-    fetch_parser.add_argument("--brands")
-    fetch_parser.add_argument("--ranking-limit-type")
-    fetch_parser.add_argument("--detail-date-range-type", required=True)
-    fetch_parser.add_argument("--detail-custom-start-date")
-    fetch_parser.add_argument("--detail-custom-end-date")
     return parser
 
 
 def _cmd_self_test():
-    if LIST_FUNCTION_CODE != "rpa.conn.juliang.yt.industry.content.rankings.list":
-        raise RpaConnectorError("unexpected list function code")
-    if DETAIL_FUNCTION_CODE != "rpa.conn.juliang.yt.industry.content.rankings.details":
-        raise RpaConnectorError("unexpected detail function code")
-    if PLATFORM != "RPA_JULIANG_YT_ACCOUNT_PASSWORD" or DATA_SOURCE_TYPE != "rpa":
-        raise RpaConnectorError("unexpected fixed gateway metadata")
-    validate_list_business_params({})
-    validate_detail_business_params(
-        {"material_id": "1", "date_type": "LAST_7_DAYS"}
-    )
+    if _operation_connector_code("list") != LIST_CONNECTOR_CODE:
+        raise RpaConnectorError("unexpected list connector code")
+    if _operation_connector_code("detail") != DETAIL_CONNECTOR_CODE:
+        raise RpaConnectorError("unexpected detail connector code")
+    schema_detail = {
+        "inParamJsonSchemaText": json.dumps(
+            {
+                "type": "object",
+                "properties": {"industry": {"type": "string"}},
+                "required": ["industry"],
+                "additionalProperties": False,
+            }
+        )
+    }
+    _validate_live_params(schema_detail, {"industry": "食品饮料"})
     print("self-test passed")
 
 
-def _list_params_from_args(args):
-    return {
-        name: value
-        for name, value in {
-            "industry": args.industry,
-            "time_range_type": args.time_range_type,
-            "custom_start_date": args.custom_start_date,
-            "custom_end_date": args.custom_end_date,
-            "ages": args.ages,
-            "genders": args.genders,
-            "crowd_groups": args.crowd_groups,
-            "brand_scope_type": args.brand_scope_type,
-            "brands": args.brands,
-            "ranking_limit_type": args.ranking_limit_type,
-        }.items()
-        if value is not None
-    }
+def load_batch_params(args):
+    if args.params_json:
+        raw = args.params_json
+    else:
+        relative = Path(args.params_file)
+        if relative.is_absolute():
+            raise RpaConnectorError("params-file must be relative to the workspace root")
+        workspace_root = Path.cwd().resolve()
+        path = (workspace_root / relative).resolve()
+        try:
+            path.relative_to(workspace_root)
+        except ValueError as exc:
+            raise RpaConnectorError("params-file cannot leave the workspace root") from exc
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RpaConnectorError(f"unable to read params-file: {exc}") from exc
+    try:
+        params = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RpaConnectorError(f"batch params are not valid JSON: {exc}") from exc
+    if not isinstance(params, dict):
+        raise RpaConnectorError("batch params must be a JSON object")
+    allowed = {"list", "detail", "target_top_n", "candidate_top_n"}
+    unknown = sorted(set(params) - allowed)
+    if unknown:
+        raise RpaConnectorError("unknown batch params: " + ", ".join(unknown))
+    if not isinstance(params.get("list"), dict):
+        raise RpaConnectorError("batch params.list must be a JSON object")
+    if not isinstance(params.get("detail"), dict):
+        raise RpaConnectorError("batch params.detail must be a JSON object")
+    if "material_id" in params["detail"]:
+        raise RpaConnectorError("params.detail.material_id is selected from the list response")
+    if "target_top_n" in params:
+        _validate_top_n(params["target_top_n"])
+    if "candidate_top_n" in params:
+        _validate_top_n(params["candidate_top_n"])
+    return params
 
 
 def main(argv=None):
@@ -788,10 +639,25 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "list-accounts":
-            print(json.dumps(list_accounts(), ensure_ascii=False, indent=2))
+            print(json.dumps(list_accounts(args.connector), ensure_ascii=False, indent=2))
             return 0
-        if args.command == "schema":
-            print(json.dumps(BUSINESS_PARAMS_SCHEMA, ensure_ascii=False, indent=2))
+        if args.command in {"detail", "schema"}:
+            details = {
+                operation: normalized_detail(fetch_connector_detail(operation))
+                for operation in ("list", "detail")
+            }
+            if args.command == "schema":
+                details = {
+                    operation: {
+                        "connectorCode": value["connectorCode"],
+                        "name": value["name"],
+                        "inputMode": value["inputMode"],
+                        "schema": value["inputSchema"],
+                        "inParamList": value["inputParams"],
+                    }
+                    for operation, value in details.items()
+                }
+            print(json.dumps(details, ensure_ascii=False, indent=2))
             return 0
         if args.command == "self-test":
             _cmd_self_test()
@@ -908,17 +774,14 @@ def main(argv=None):
             )
             print(Path(args.output_dir) / "batch-manifest.json")
             return status
-        target_top_n = args.target_top_n or args.top_n
+        batch_params = load_batch_params(args)
+        target_top_n = batch_params.get("target_top_n", 10)
         status = fetch_batch_analysis(
             args.shop_id,
-            _list_params_from_args(args),
-            {
-                "date_type": args.detail_date_range_type,
-                "custom_start_date": args.detail_custom_start_date,
-                "custom_end_date": args.detail_custom_end_date,
-            },
+            batch_params["list"],
+            batch_params["detail"],
             target_top_n=target_top_n,
-            candidate_top_n=args.candidate_top_n,
+            candidate_top_n=batch_params.get("candidate_top_n"),
             output_dir=args.output_dir,
         )
         print(Path(args.output_dir) / "batch-manifest.json")

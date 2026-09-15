@@ -21,30 +21,51 @@ metadata:
 ## 先确认参数
 
 - 行业必填；指定品牌可选，填写时给 3–10 个品牌并使用 `SPECIFIED_BRANDS`。年龄、性别、八大人群空缺时不传筛选参数（全选）。截取方式为曝光量TOP1000、CTRTOP1000、互动率TOP1000或完播率TOP1000。
-- 秒级拆解素材数默认 10，控制 RPA 详情实际拉取并做秒级拆解的目标素材数（`fetch --target-top-n`）；第一部分品牌分析直接使用提取到的行业 TOP1000，并在其中按品牌匹配全部素材。启动前复述映射；未完成映射核对时不得启动 RPA 长任务。
+- 秒级拆解素材数默认 10，由批参数 JSON 的 `target_top_n` 控制 RPA 详情实际拉取并做秒级拆解的目标素材数；第一部分品牌分析直接使用提取到的行业 TOP1000，并在其中按品牌匹配全部素材。启动前复述映射；未完成映射核对时不得启动 RPA 长任务。
 - 榜单和素材详情必须使用同一分析周期：近7天=`LAST_7_DAYS`、近30天=`LAST_30_DAYS`，不换算为自定义日期，未填默认近七天。自定义日期两端均为 `CUSTOM` 且闭区间；云图界面日期只作展示核对，上一等长周期按实际日期前移，全行业固定 `ALL_INDUSTRY`。
 
 ## 采集
 
-先读 `references/platforms/juliang-yt.md`、`references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_list.md` 和 `references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_details.md`。固定连接器为 `rpa.conn.juliang.yt.industry.content.rankings.list` 与 `rpa.conn.juliang.yt.industry.content.rankings.details`；仅使用平台运行时注入的 `ENV_BACKEND_HOST`、`YUCE_AUTHORIZATION`、`YUCE_SESSION_ID`（或 `YCSESSIONID`），凭证只留在环境变量。MCP 知识库地址不是 `ENV_BACKEND_HOST`。未知 `shop_id` 先 `list-accounts`；404 查基路径，504 为网关超时，保留批次后用 `status` 排查。
+先读 `references/platforms/juliang-yt.md`、`references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_list.md` 和 `references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_details.md`。榜单与详情分别由 `scripts/rpa_dynamic_client.py` 和 `scripts/rpa_dynamic_detail_client.py` 固化唯一 connector code：`rpa.conn.juliang.yt.industry.content.rankings.list` 与 `rpa.conn.juliang.yt.industry.content.rankings.details`。平台、入参契约和出参说明每次都从 `/dcConnector/v3/listByConnectorCode` 实时读取。不得把详情返回的 `id` 当 connector code，不得固化 platform、复制 JSON Schema 或回退到逐字段 CLI。
+
+仅使用平台运行时注入的 `ENV_BACKEND_HOST`、`YUCE_AUTHORIZATION`、`YUCE_SESSION_ID`（或 `YCSESSIONID`），凭证只留在环境变量。MCP 知识库地址不是 `ENV_BACKEND_HOST`；404 先核对网关基路径，504 视为网关超时并保留批次后用 `status` 排查。每次新采集固定按以下顺序，执行 `detail`、`schema`、`list-accounts`、`validate` 和真实 `fetch` 时，外层工具超时都显式设为 3600 秒：
 
 ```bash
-python <skill-root>/scripts/rpa_connector.py list-accounts
+python <skill-root>/scripts/rpa_dynamic_client.py detail
+python <skill-root>/scripts/rpa_dynamic_detail_client.py detail
 python <skill-root>/scripts/rpa_connector.py schema
+python <skill-root>/scripts/rpa_dynamic_client.py list-accounts
+python <skill-root>/scripts/rpa_dynamic_client.py validate --params-json '<按实时榜单契约生成的完整 JSON 对象>'
 python <skill-root>/scripts/rpa_connector.py self-test
-python <skill-root>/scripts/rpa_connector.py fetch --shop-id "<shop_id>" --industry "食品饮料" --time-range-type "LAST_7_DAYS" --detail-date-range-type "LAST_7_DAYS" --target-top-n 10 --candidate-top-n 20 --output-dir "RPA数据汇总/yuntu-rankings-analysis"
-python <skill-root>/scripts/rpa_connector.py status --output-dir "RPA数据汇总/yuntu-rankings-analysis"
 ```
 
-自定义范围时，两组日期类型都改 `CUSTOM` 并传 `--custom-start-date`、`--custom-end-date`、`--detail-custom-start-date`、`--detail-custom-end-date`；列表筛选还可传 `--ages`、`--genders`、`--crowd-groups`、`--brand-scope-type`、`--brands`、`--ranking-limit-type`。`--top-n` 仅兼容旧列表参数，不控制品牌分析范围。
+`inParamJsonSchemaText` 非空时只按其原文的 Draft 2020-12 契约校验；仅它为 `null` 时才使用 `inParamList`。未知 `shop_id` 先按详情返回的原始 `platformCode` 执行 `list-accounts`，不补 `_ACCOUNT_PASSWORD`。详情数组为空时停止，说明连接器不存在、未上线或不支持 `BIZ_EXPERT`。
+
+将榜单和详情的动态业务参数合并成一个 JSON 文件；`target_top_n` 和 `candidate_top_n` 是本地批处理选材配置，不会透传给 connector。下例仅表示容器结构，`list`/`detail` 内的字段和枚举必须以本次 `schema` 输出为准：
+
+```json
+{
+  "list": {"industry": "食品饮料", "time_range_type": "LAST_7_DAYS"},
+  "detail": {"date_type": "LAST_7_DAYS"},
+  "target_top_n": 10,
+  "candidate_top_n": 20
+}
+```
+
+```bash
+python <skill-root>/scripts/rpa_connector.py fetch --shop-id "<shop_id>" --params-file "tmp/yuntu-rpa-params.json" --output-dir "云图数据资源/yuntu-rankings-analysis"
+python <skill-root>/scripts/rpa_connector.py status --output-dir "云图数据资源/yuntu-rankings-analysis"
+```
+
+用 `--params-json` 可以传同样的完整对象。批处理 `fetch` 在每次榜单或详情任务下发前都会重新反查对应连接器详情并二次校验；失败时不下发该 RPA 任务。自定义日期、人群、品牌和榜单口径的业务映射仍遵守“先确认参数”，但实际字段名、类型、枚举与必填性不再由本文档固化。
 
 固定顺序：三次列表（query、previous_period、industry）→ 验证 `list_context` 并选择唯一数字型 `material_id` → 详情 → 规范化 → 事实包 → 当前对话模型洞察 → 报告。RPA 优先 `files-envelope`/CSV：先落盘 `raw-csv/list.csv`、`raw-csv/details/<material_id>.csv`，再生成 `normalized/list-records.json`、`normalized/detail-records/<material_id>.json`；CSV 为主路径，兼容旧 `list-response.json`、`details/<material_id>.json`、`manifest.json`。
 
 `fetch` 通过异步任务协议观察，单个远端任务最多轮询 3600 秒。`run-summary.json` 保存参数指纹和 `taskRuns` 汇总投影；`batch-manifest.json` 在提交后立即保存 `task_group_id`，并记录 `unresolvedMaterials`。同一输出目录恢复时只轮询已登记任务，不重复提交。`status --output-dir` 同时核对摘要、manifest、规范化列表和详情。列表请求失败写清单并非零退出且不发详情；详情请求失败继续处理其余素材，最终非零但保留成功文件。仅在用户确认可能重复请求后运行：
 
 ```bash
-python <skill-root>/scripts/rpa_connector.py retry-failed --shop-id "<shop_id>" --output-dir "RPA数据汇总/yuntu-rankings-analysis"
-python <skill-root>/scripts/rpa_connector.py retry-unresolved --shop-id "<shop_id>" --output-dir "RPA数据汇总/yuntu-rankings-analysis"
+python <skill-root>/scripts/rpa_connector.py retry-failed --shop-id "<shop_id>" --output-dir "云图数据资源/yuntu-rankings-analysis"
+python <skill-root>/scripts/rpa_connector.py retry-unresolved --shop-id "<shop_id>" --output-dir "云图数据资源/yuntu-rankings-analysis"
 ```
 
 ## 分析与交付
@@ -58,7 +79,7 @@ python <skill-root>/scripts/rpa_connector.py retry-unresolved --shop-id "<shop_i
 校验失败先读工作目录的 `validation.json`，按 `part/file/path` 修复受影响草稿。引用从该素材或 scope 的清单原样选择；帧覆盖报错列出重复、缺失和额外引用；字数不足先核对可用事实，`unsupported claim` 核对具体句子和命中词。缺失事实保留不可用状态。不要删证据、关闭 provenance、绕过 CLI 或机械凑字数；输入未变化时不重复检查。仅报告生成任务中发现事实投影或校验器缺陷，应保留失败现场并报告具体契约问题，不以修改通用技能代码来放行；用户明确要求修复技能时可在该授权范围内修复并测试。
 
 ```bash
-python <skill-root>/scripts/rpa_connector.py prepare-analysis --input-dir "RPA数据汇总/yuntu-rankings-analysis" --output-dir "RPA数据汇总/yuntu-rankings-analysis/diagnostic-analysis"
+python <skill-root>/scripts/rpa_connector.py prepare-analysis --input-dir "云图数据资源/yuntu-rankings-analysis" --output-dir "云图数据资源/yuntu-rankings-analysis/diagnostic-analysis"
 python <skill-root>/scripts/rpa_connector.py begin-analysis --fact-pack-json ".../diagnostic-analysis/analysis-units/analysis-unit-manifest.json" --workspace ".../diagnostic-analysis/model-drafts"
 # 当前模型保存一组草稿后检查；--part 可重复。全部完成后 assemble 会执行全量检查。
 python <skill-root>/scripts/rpa_connector.py check-analysis --workspace ".../diagnostic-analysis/model-drafts" --part ranking --part audience

@@ -1,12 +1,12 @@
 # 云图行业内容榜单分析任务
 
-读取同目录的 `analysis-units/analysis-unit-manifest.json`、manifest 指向的 `yuntu-ai-analysis.schema.json` 及其列出的五个章节事实包，由当前对话模型在同一次分析任务中生成 `yuntu-ai-analysis.json`。最终 JSON 必须严格符合统一输出 Schema；不要读取 `yuntu-analysis-data.json` 或 `report-data.json` 作为模型证据。
+由当前对话模型在同一次分析任务中生成 `yuntu-ai-analysis.json`。先读同目录的 `analysis-units/analysis-unit-manifest.json` 与本提示词一次，再由 begin-analysis 创建各部分任务。新任务的 `scopedFacts` 是从五包确定性投影的本部分事实，`outputSchema` 是本部分输出约束；优先只读对应 `*.task.json`，无需再全文读取五包、完整 Schema 或脚本源码。旧任务没有 scopedFacts 时才读取对应章节事实包。最终 JSON 必须严格符合统一输出 Schema；不要读取 `yuntu-analysis-data.json` 或 `report-data.json` 作为模型证据。
 
-执行入口：先用 `begin-analysis --fact-pack-json <manifest> --workspace <独立草稿目录>` 创建草稿。阅读当前章节事实包和同名 `*.task.json`，直接填写对应 JSON 的 `content`；不要创建业务结论生成脚本。`ranking.json`、`audience.json`、`script.json`、`highlight.json` 的 content 是它们负责的顶层字段对象，`material-<ID>.json` 的 content 是单个素材对象。字段结构、当前素材允许的脚本引用、成功帧全集、scope 素材范围和字数硬约束由 task 文件给出；引用必须原样使用，不凭记忆拼接。
+执行入口：先用 `begin-analysis --fact-pack-json <manifest> --workspace <独立草稿目录>` 创建草稿。阅读同名 `*.task.json` 的 scopedFacts、readingRule 和 outputSchema，直接填写对应 JSON 的 `content`；不要创建业务结论生成脚本。`ranking.json`、`audience.json`、`script.json`、`highlight.json` 的 content 是它们负责的顶层字段对象，`material-<ID>.json` 的 content 是单个素材对象。字段结构、当前素材允许的脚本引用、成功帧全集、scope 素材范围和字数硬约束由 task 文件给出；引用必须原样使用，不凭记忆拼接。
 
-每份写完运行 `check-analysis --workspace <目录> --part <文件名去掉.json>`，按 `validation.json` 的具体路径修复。阅读过的成功图片引用填写到 `highlight.json.viewedFrameRefs`，不得把预置清单当作实际看图记录。全部草稿通过完整 `check-analysis` 后，使用 `assemble-analysis --workspace <目录> --output <新分析JSON路径>` 无损合并并保留原始草稿快照，再 attest 和 render。失败只修对应草稿，禁止运行时修改校验器、程序化补结论或循环扩写凑字数。新契约没有 assembly 收据不能 attest。具体业务写作要求如下；缺失事实优先，推荐篇幅不能作为补造内容的理由。
+每份草稿写完即保存；每完成一组相关草稿再运行一次 `check-analysis --workspace <目录> --part <key1> --part <key2>`，共享一次事实及资产校验。通常第一、二章一组，第三章及品牌草稿一组，第五章按 3–5 个素材一组，第四章整批分类完成后单独检查。仅排查某份草稿时使用单个 --part，按 `validation.json` 的具体路径修复。阅读过的成功图片引用填写到 `highlight.json.viewedFrameRefs`，不得把预置清单当作实际看图记录。各组通过后，使用 `assemble-analysis --workspace <目录> --output <新分析JSON路径>`（内部执行完整 check-analysis 等价检查，无需先重复跑全量检查）无损合并并保留原始草稿快照，再 attest 和 render。失败只修对应草稿，禁止运行时修改校验器、程序化补结论或循环扩写凑字数。新契约没有 assembly 收据不能 attest。具体业务写作要求如下；缺失事实优先，推荐篇幅不能作为补造内容的理由。
 
-可以按章节、素材和帧批次分步阅读，及时保存模型撰写的草稿和已查看帧引用；最终无损组装为一个 JSON。草稿须绑定本次 manifest、五包及提示词哈希，恢复前核对，不能把旧事实包生成的正文直接移植到新批次。`single_model_call` 是既有契约标识，不限制当前任务的工具读取次数。每张可用 JPEG 均需实际查看；保存草稿不等于完成，最终仍需通过完整引用、帧覆盖和来源校验。
+可以按章节、素材和帧批次分步阅读，及时保存模型撰写的草稿和已查看帧引用；最终无损组装为一个 JSON。草稿须绑定本次 manifest、五包及提示词哈希，恢复前核对，不能把旧事实包生成的正文直接移植到新批次。`single_model_call` 是既有契约标识，不限制当前任务的工具读取次数。每张可用 JPEG 均需实际查看：按素材连续看一小组清晰原图，同次查看完成第四章 frameUnderstanding 与第五章 frame_observations，及时保存；所有逐帧理解完成后再生成第四章两套分类和各品牌洞察。同一帧无疑点时不重复看图，不用缩略图拼图代替原图。只共享这次直接观察，不把第四章业务结论作为第五章证据；缺失或模糊时按原规则处理。保存草稿不等于完成，最终仍需通过完整引用、帧覆盖和来源校验。
 
 缺失数据优先于篇幅和分析结构要求：有事实的维度正常分析，真正缺失的维度简洁说明“数据不足以判断”，不为凑句数或字数编写机制、策略或行业结论。可以明确写“覆盖不足以支持行业普遍结论”；这类范围限制不代表可以在同段其他句子声称行业规律或指标因果。解析失败与源字段为空须按事实包分别表达；怀疑映射异常时反馈具体素材和字段供本地诊断，不自行读取 CSV 补证。
 
@@ -67,4 +67,10 @@
 
 第三章保留顶层三字段作为全部已获取详情素材的分析；新增 `scriptBrandInsights`，按 `scriptFacts.brandScopeOrder` 为每个品牌输出独立的 `scriptInsights`、`keywordCloudReview`、`keywordCloudInsight`。各品牌仅读取 `brandScopes[品牌]`，关键词和公式统计已独立计算，不能复制全量结论或借用其他品牌文案。`evidence` 必须摘录被引用素材脚本或公式的原文短语，不能填写“脚本事实”等泛称。正文数量为零的范围，两条洞察仍保留并说明具体缺口及“数据不足以判断”，evidence=[]，无素材时 material_ids=[]；关键词卖点=[]。缺失范围不用满足非空范围字数，但每段至少 12 字，不假装完成品牌分析。
 
-第四章 `brands` 必须严格按“全品牌＋所有指定品牌”逐项输出。每个品牌只分类自身成功帧；无成功帧时 groups=[] 并给出至少 12 字的 missing_reason。每个非空标准分类组必须输出 2–3 条共性洞察及同样数量、一一对应的裂变方向；各条应分别分析不同的可见特征与拍摄机会，不能把同一观点拆句或换词重复，两者正文分别至少 100 字，目标 120–220 字，写清画面特征、表达作用、拍摄建议及验证方式。少量帧不虚构跨素材共性。动态视觉主题只分类，不新增已取消的共性/裂变正文。每个品牌的分析独立撰写，不能把全品牌段落复制过去。
+第四章 `brands` 必须严格按“全品牌＋所有指定品牌”逐项输出。每个品牌只分类自身成功帧；无成功帧时 groups=[] 并给出至少 12 字的 missing_reason。每个非空标准分类组必须输出 2–3 条共性洞察及同样数量、一一对应的裂变方向；各条应分别分析不同的可见特征与拍摄机会，不能把同一观点拆句或换词重复，两者正文分别至少 100 字，目标 120–220 字，写清画面特征、表达作用、拍摄建议及验证方式。同一品牌范围内 `portrait`、`product`、`other` 各组的共性洞察正文和裂变方向正文都必须独立，不能复用另一组的正文、标题或模板化尾句；有样本的不同品牌范围也要结合各自帧引用独立撰写，不能把全品牌段落复制过去。少量帧不虚构跨素材共性。动态视觉主题只分类，不新增已取消的共性/裂变正文。
+
+### 输入与执行效率
+
+新任务的 readingRule 说明投影方式：第一章聚合 materials 改为完整 materialIds，保留四项指标、周期比较、缺失状态及完整爆款明细；第二章的 topMaterialIds 按原顺序指向 materialsById 完整对象，所有统计与长尾标签均保留，不截取样本；第三章只携带本范围正文；第五章只携带当前素材脚本与帧，秒级曲线仍由报告从正式事实读取。图片路径相对于 task.imageRoot。factInput 保留原包路径供必要溯源，不是要求重复读取。
+
+先确定本范围的事实锚点再一次写成可展示 JSON，引用从 task 原样选取。缺失范围写具体缺口，避免反复扩写；有事实范围保留现有充分性与独立判断要求。在既有字数范围内写到足以支撑判断即可，不把目标上限当成必达字数。输入和草稿未变时不重复检查；错误只修受影响草稿，再按 --part 合并检查。workspace.inputMetrics 记录输入字节量，validation.timingsSeconds 记录本地校验耗时，两者都不能直接宣称为模型提速比例。

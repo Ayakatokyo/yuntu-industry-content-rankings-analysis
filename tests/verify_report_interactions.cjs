@@ -22,10 +22,10 @@ for (const tab of tabs) {
   assert.deepStrictEqual(panels.filter(x => !x.hidden).map(x => x.id), [tab.attrs['data-script-brand-tab']]);
   assert.strictEqual(tabs.filter(x => x.attrs['aria-selected'] === 'true').length, 1);
 }
-tabs[6].events.keydown({key: 'ArrowRight', preventDefault() {}});
+tabs[tabs.length - 1].events.keydown({key: 'ArrowRight', preventDefault() {}});
 assert.strictEqual(panels[0].hidden, false);
 tabs[0].events.keydown({key: 'End', preventDefault() {}});
-assert.strictEqual(panels[6].hidden, false);
+assert.strictEqual(panels[panels.length - 1].hidden, false);
 const highlightBrandTabs = data.highlightTabs.map(x => node(x));
 const highlightPanels = data.highlightPanels.map(x => ({...node(x), querySelector() { return null; }}));
 const highlightScript = data.scripts.find(x => x.includes('function activateHighlightBrand('));
@@ -37,7 +37,7 @@ for (const tab of highlightBrandTabs) {
   tab.events.click();
   assert.deepStrictEqual(highlightPanels.filter(x => !x.hidden).map(x => x.id), [tab.attrs['data-highlight-brand-target']]);
 }
-highlightBrandTabs[6].events.keydown({key: 'Home', preventDefault() {}});
+highlightBrandTabs[highlightBrandTabs.length - 1].events.keydown({key: 'Home', preventDefault() {}});
 assert.strictEqual(highlightPanels[0].hidden, false);
 const evidenceScript = data.scripts.find(x => x.includes('function clearScriptEvidence('));
 const start = evidenceScript.indexOf('function scriptPrefersReducedMotion(');

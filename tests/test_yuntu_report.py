@@ -1318,6 +1318,24 @@ class YuntuReportTests(unittest.TestCase):
             path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
             report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
 
+    def test_rejects_reused_standard_highlight_insights_across_categories(self):
+        report = load_module()
+        dashboard = self.dual_classification_dashboard()
+        standard = dashboard["standardClassification"]["groups"][0]
+        refs = standard["frame_refs"]
+        first = copy.deepcopy(standard)
+        second = copy.deepcopy(standard)
+        first["category"], first["frame_refs"] = "portrait", refs[:2]
+        second["category"], second["frame_refs"] = "product", refs[2:]
+        for group in (first, second):
+            for item in (*group["common_patterns"], *group["derivative_directions"]):
+                item["frame_refs"] = group["frame_refs"]
+        dashboard["standardClassification"]["groups"] = [first, second]
+        frames = [{"frame_ref": ref} for ref in refs]
+
+        with self.assertRaisesRegex(report.YuntuReportError, "independent across categories"):
+            report._validate_highlight_dual_classification(dashboard, frames)
+
     def test_validate_batch_highlight_taxonomy_requires_semantic_categories_and_two_groups(self):
         report = load_module()
         fact_pack = self.deep_dive_fact_pack()

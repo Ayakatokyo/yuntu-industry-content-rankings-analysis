@@ -61,7 +61,9 @@ def verify(path, output):
     tabs = [n.attrs for n in nodes if "data-script-brand-tab" in n.attrs]
     panels = [n.attrs for n in nodes if "data-script-brand-panel" in n.attrs]
     highlight_tabs = [n.attrs for n in nodes if "data-highlight-brand-tab" in n.attrs]
-    assert len(tabs) == len(panels) == len(highlight_tabs) == 7
+    assert len(tabs) == len(panels) == len(highlight_tabs) > 0, (
+        "script and highlight brand tab/panel counts must match and be non-zero"
+    )
     vectors = []
     for node in nodes:
         if "material-deep-panel" not in node.attrs.get("class", "").split():

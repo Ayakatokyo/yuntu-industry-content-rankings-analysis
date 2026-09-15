@@ -1175,11 +1175,35 @@ def _validate_highlight_classification_groups(groups, known_refs, *, mode):
                 _validate_deep_dive_text(item["title"], f"{mode} {label} title")
                 _validate_deep_dive_text(item["body"], f"{mode} {label} body")
         actual_refs.extend(refs)
+    if mode == "standardClassification":
+        _validate_highlight_insight_independence(groups, mode=mode)
     _require_frame_coverage(actual_refs, known_refs, f"{mode} must classify each successful frame exactly once")
     if mode == "standardClassification":
         expected_order = [category for category in HIGHLIGHT_RENDER_CATEGORY_ORDER if category in categories]
         if categories != expected_order:
             raise YuntuReportError("standardClassification groups must use portrait, product, other order")
+
+
+def _validate_highlight_insight_independence(groups, *, mode):
+    """Reject copied prose between standard visual categories in one scope."""
+    for field, label in (("common_patterns", "common pattern"),
+                         ("derivative_directions", "derivative direction")):
+        seen = {}
+        for group in groups:
+            category = str(group.get("category") or "")
+            for index, item in enumerate(group.get(field, [])):
+                if not isinstance(item, dict):
+                    continue
+                semantic = _normalized_semantic_text(item.get("body"))
+                if not semantic:
+                    continue
+                previous = seen.get(semantic)
+                if previous is not None:
+                    raise YuntuReportError(
+                        f"{mode} {label} body must be independent across categories "
+                        f"({previous[0]} vs {category})"
+                    )
+                seen[semantic] = (category, index)
 
 
 def _validate_highlight_dual_classification(
@@ -1334,6 +1358,7 @@ def _validate_highlight_dashboard(analysis, fact_pack):
                         _validate_deep_dive_text(item["title"], f"highlightDashboard {label} title")
                         _validate_deep_dive_text(item["body"], f"highlightDashboard {label} body")
                 actual_refs.extend(frame_refs)
+            _validate_highlight_insight_independence(groups, mode="highlightDashboard brand scope")
             if categories != [category for category in HIGHLIGHT_RENDER_CATEGORY_ORDER if category in categories]:
                 raise YuntuReportError("highlightDashboard brand groups must use portrait, product, other order")
             expected_refs = known_refs if brand == "全品牌" else {

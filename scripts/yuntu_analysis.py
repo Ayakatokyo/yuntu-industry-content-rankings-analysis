@@ -1555,10 +1555,29 @@ def _format_hot_material_rule(hot_material_rule=None):
     )
 
 
+def _brand_values(value):
+    """Normalize persisted connector brand values before local iteration."""
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if not isinstance(value, str):
+        return []
+    text = value.strip()
+    if not text:
+        return []
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        decoded = None
+    if isinstance(decoded, list):
+        return [str(item).strip() for item in decoded if str(item).strip()]
+    return [part.strip() for part in text.replace("/", ",").split(",") if part.strip()]
+
+
 def _prompt_text(*, filters, hot_material_rule=None):
-    brands = "、".join(str(brand) for brand in filters.get("brands", []) if brand)
+    brand_values = _brand_values(filters.get("brands", []))
+    brands = "、".join(brand_values)
     scope_labels = "、".join(
-        ["all（全量 TOP1000）", *(str(brand) for brand in filters.get("brands", []) if brand)]
+        ["all（全量 TOP1000）", *brand_values]
     )
     return (
         _load_prompt_template()
@@ -1673,6 +1692,9 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None, local_o
     except HotMaterialConfigError as exc:
         raise YuntuAnalysisError(str(exc)) from exc
     manifest = _load_json(root / "batch-manifest.json")
+    filters = manifest.get("filters")
+    if isinstance(filters, dict) and "brands" in filters:
+        manifest["filters"] = {**filters, "brands": _brand_values(filters["brands"])}
     list_records = _load_json(root / "normalized" / "list-records.json")
     selected = manifest.get("selectedMaterials", [])
     rejected = manifest.get("rejectedMaterials", [])

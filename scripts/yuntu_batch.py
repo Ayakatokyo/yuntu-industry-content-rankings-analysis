@@ -284,7 +284,7 @@ def _new_manifest(
         "status": "running",
         "rankingRuns": {},
         "taskRuns": {},
-        "filters": list_params,
+        "filters": _manifest_filters(list_params),
         "detailDateRange": detail_date_params,
         "targetTopN": target_top_n,
         "candidateTopN": candidate_top_n,
@@ -325,7 +325,7 @@ def _open_or_new_manifest(
     except (OSError, ValueError) as exc:
         raise YuntuBatchError("existing batch manifest is unreadable") from exc
     if (
-        manifest.get("filters") != list_params
+        _manifest_filters(manifest.get("filters")) != _manifest_filters(list_params)
         or manifest.get("detailDateRange") != detail_date_params
         or manifest.get("targetTopN") != target_top_n
         or manifest.get("candidateTopN") != candidate_top_n
@@ -340,6 +340,7 @@ def _open_or_new_manifest(
             "parameterFingerprint": summary["parameterFingerprint"],
             "collectionContract": summary["collectionContract"],
             "status": "running",
+            "filters": _manifest_filters(list_params),
         }
     )
     for key in (
@@ -590,6 +591,34 @@ def _brand_tokens(value):
     }
 
 
+def _brand_values(value):
+    """Normalize the connector's string multi-value formats for comparison."""
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if not isinstance(value, str):
+        return []
+    text = value.strip()
+    if not text:
+        return []
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        decoded = None
+    if isinstance(decoded, list):
+        return [str(item).strip() for item in decoded if str(item).strip()]
+    return [part.strip() for part in text.replace("/", ",").split(",") if part.strip()]
+
+
+def _manifest_filters(list_params):
+    """Store analysis filters in their canonical local representation."""
+    if not isinstance(list_params, dict):
+        return list_params
+    filters = dict(list_params)
+    if "brands" in filters:
+        filters["brands"] = _brand_values(filters["brands"])
+    return filters
+
+
 def _display_date(value):
     text = str(value or "")
     if len(text) == 8 and text.isdigit():
@@ -619,7 +648,7 @@ def _validate_list_context(list_records, list_params):
         if not isinstance(actual_brands, list):
             actual_brands = []
         actual_tokens = [_brand_tokens(brand) for brand in actual_brands]
-        for brand in list_params.get("brands", []):
+        for brand in _brand_values(list_params.get("brands")):
             if not any(_brand_tokens(brand) & tokens for tokens in actual_tokens):
                 issues.append("brands")
                 break
@@ -646,7 +675,7 @@ def _reusable_list_artifact(root, list_params, detail_date_params):
     except (OSError, ValueError):
         return None
     if (
-        previous.get("filters") != list_params
+        _manifest_filters(previous.get("filters")) != _manifest_filters(list_params)
         or previous.get("detailDateRange") != detail_date_params
     ):
         return None

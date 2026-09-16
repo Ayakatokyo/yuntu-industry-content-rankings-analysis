@@ -1047,7 +1047,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             self._write_input(root, records, selected, details)
             manifest_path = root / "batch-manifest.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest["filters"]["brands"] = ["五个女博士"]
+            manifest["filters"]["brands"] = "五个女博士"
             manifest_path.write_text(
                 json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
             )

@@ -482,6 +482,63 @@ class YuntuBatchTests(unittest.TestCase):
         self.assertTrue(result["valid"])
         self.assertEqual(result["issues"], [])
 
+    def test_list_context_accepts_comma_delimited_specified_brands(self):
+        batch = load_batch()
+
+        result = batch._validate_list_context(
+            [{
+                "list_context": {
+                    "brand_scope": "指定品牌",
+                    "brands": ["小仙炖", "五个女博士", "燕之屋"],
+                }
+            }],
+            {
+                "brand_scope_type": "SPECIFIED_BRANDS",
+                "brands": "小仙炖,五个女博士,燕之屋",
+            },
+        )
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["issues"], [])
+
+    def test_list_context_accepts_slash_delimited_specified_brands(self):
+        batch = load_batch()
+
+        result = batch._validate_list_context(
+            [{
+                "list_context": {
+                    "brand_scope": "SPECIFIED_BRANDS",
+                    "brands": ["小仙炖", "五个女博士", "燕之屋"],
+                }
+            }],
+            {
+                "brand_scope_type": "SPECIFIED_BRANDS",
+                "brands": "小仙炖/五个女博士/燕之屋",
+            },
+        )
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["issues"], [])
+
+    def test_list_context_accepts_json_array_specified_brands(self):
+        batch = load_batch()
+
+        result = batch._validate_list_context(
+            [{
+                "list_context": {
+                    "brand_scope": "指定品牌",
+                    "brands": ["小仙炖", "五个女博士", "燕之屋"],
+                }
+            }],
+            {
+                "brand_scope_type": "SPECIFIED_BRANDS",
+                "brands": '["小仙炖", "五个女博士", "燕之屋"]',
+            },
+        )
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["issues"], [])
+
     def test_fetch_batch_runs_three_detail_rpas_concurrently(self):
         batch = load_batch()
 
@@ -513,7 +570,7 @@ class YuntuBatchTests(unittest.TestCase):
             "custom_start_date": "20260810",
             "custom_end_date": "20260820",
             "brand_scope_type": "SPECIFIED_BRANDS",
-            "brands": ["小仙炖", "燕之屋", "五个女博士"],
+            "brands": "小仙炖,燕之屋,五个女博士",
         }
         with tempfile.TemporaryDirectory() as directory:
             status = batch.fetch_batch(
@@ -537,6 +594,22 @@ class YuntuBatchTests(unittest.TestCase):
             )
 
         self.assertEqual(status, 0)
+        self.assertEqual(
+            manifest["filters"]["brands"],
+            ["小仙炖", "燕之屋", "五个女博士"],
+        )
+        requested_scopes = [
+            params
+            for _, params in invoker.list_calls
+            if params.get("brand_scope_type") == "SPECIFIED_BRANDS"
+        ]
+        self.assertEqual(len(requested_scopes), 2)
+        self.assertTrue(
+            all(
+                params["brands"] == "小仙炖,燕之屋,五个女博士"
+                for params in requested_scopes
+            )
+        )
         self.assertEqual(invoker.max_list_active, 3)
         self.assertEqual(
             list(manifest["rankingRuns"]), ["query", "previous_period", "industry"]
@@ -547,6 +620,47 @@ class YuntuBatchTests(unittest.TestCase):
         self.assertEqual(
             [item["status"] for item in manifest["rankingRuns"].values()],
             ["success", "success", "success"],
+        )
+
+    def test_open_or_new_manifest_upgrades_legacy_string_brands(self):
+        batch = load_batch()
+        list_params = {
+            "industry": "食品饮料",
+            "brand_scope_type": "SPECIFIED_BRANDS",
+            "brands": "小仙炖,燕之屋,五个女博士",
+        }
+        detail_date_params = {"date_range_type": "LAST_7_DAYS"}
+        summary = {
+            "runId": "run-1",
+            "parameterFingerprint": "fingerprint",
+            "collectionContract": {"listParams": list_params},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = Path(directory) / "batch-manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "filters": dict(list_params),
+                        "detailDateRange": detail_date_params,
+                        "targetTopN": 1,
+                        "candidateTopN": 1,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            manifest = batch._open_or_new_manifest(
+                manifest_path=manifest_path,
+                list_params=list_params,
+                detail_date_params=detail_date_params,
+                target_top_n=1,
+                candidate_top_n=1,
+                summary=summary,
+            )
+
+        self.assertEqual(
+            manifest["filters"]["brands"],
+            ["小仙炖", "燕之屋", "五个女博士"],
         )
 
     def test_fetch_batch_isolates_comparison_failure_but_query_failure_blocks_details(self):

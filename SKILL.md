@@ -45,7 +45,7 @@ python <skill-root>/scripts/rpa_connector.py self-test
 
 ```json
 {
-  "list": {"industry": "食品饮料", "time_range_type": "LAST_7_DAYS"},
+  "list": {"industry": "食品饮料", "date_type": "LAST_7_DAYS"},
   "detail": {"date_type": "LAST_7_DAYS"},
   "target_top_n": 10,
   "candidate_top_n": 20

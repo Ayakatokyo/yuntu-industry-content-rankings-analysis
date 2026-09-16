@@ -13,7 +13,7 @@
 
 ## 历史业务语义参考
 
-行业、时间、品牌范围、品牌、年龄、性别、八大人群和榜单限制是该链路保留的业务意图。旧字段名曾包括 `industry`、`time_range_type`、`custom_start_date`、`custom_end_date`、`ages`、`genders`、`crowd_groups`、`brand_scope_type`、`brands`、`ranking_limit_type`；它们只用于理解历史批次，新任务必须以实时详情契约为准。
+行业、时间、品牌范围、品牌、年龄、性别、八大人群和榜单限制是该链路保留的业务意图。新请求的时间字段为 `date_type`；历史批次曾使用 `time_range_type`，旧字段只用于读取历史数据，新任务必须以实时详情契约为准。
 
 业务 JSON 使用 `scripts/rpa_dynamic_client.py validate --params-json/--params-file` 先校验，下发前还会再次反查和校验。
 

@@ -92,13 +92,23 @@ def _compact_date(value):
     return value.strftime("%Y%m%d")
 
 
+def _list_period_type(params):
+    if "date_type" in params:
+        return params.get("date_type")
+    return params.get("time_range_type")
+
+
+def _list_period_key(params):
+    return "date_type" if "date_type" in params else "time_range_type"
+
+
 def build_ranking_run_specs(list_params, *, resolved_date_range=None):
     """Build immutable query, previous-period, and industry list request specs."""
     if not isinstance(list_params, dict):
         raise YuntuBatchError("list_params must be an object")
     query_params = dict(list_params)
     start = end = None
-    if query_params.get("time_range_type") == "CUSTOM":
+    if _list_period_type(query_params) == "CUSTOM":
         start = _parse_period_date(query_params.get("custom_start_date"))
         end = _parse_period_date(query_params.get("custom_end_date"))
     elif isinstance(resolved_date_range, dict):
@@ -114,7 +124,7 @@ def build_ranking_run_specs(list_params, *, resolved_date_range=None):
         previous_start = previous_end - timedelta(days=period_days - 1)
         previous_params = {
             **query_params,
-            "time_range_type": "CUSTOM",
+            _list_period_key(query_params): "CUSTOM",
             "custom_start_date": _compact_date(previous_start),
             "custom_end_date": _compact_date(previous_end),
         }
@@ -595,7 +605,7 @@ def _validate_list_context(list_records, list_params):
     issues = []
     if "industry" in list_params and context.get("industry") != list_params["industry"]:
         issues.append("industry")
-    if list_params.get("time_range_type") == "CUSTOM":
+    if _list_period_type(list_params) == "CUSTOM":
         expected = (
             f"{_display_date(list_params['custom_start_date'])} ~ "
             f"{_display_date(list_params['custom_end_date'])}"
@@ -1041,10 +1051,11 @@ def fetch_batch(
 
     started = time.monotonic()
     legacy_single_run = (
-        "time_range_type" not in list_params
-        or
-        summary.get("schemaVersion", 0) < 3
-        and _reusable_list_artifact(root, list_params, detail_date_params) is not None
+        not any(key in list_params for key in ("date_type", "time_range_type"))
+        or (
+            summary.get("schemaVersion", 0) < 3
+            and _reusable_list_artifact(root, list_params, detail_date_params) is not None
+        )
     )
     if legacy_single_run:
         try:

@@ -115,7 +115,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertIn("榜单和素材详情必须使用同一分析周期", skill)
         self.assertRegex(
             skill,
-            r'(?s)"time_range_type": "LAST_7_DAYS".{0,160}'
+            r'(?s)"date_type": "LAST_7_DAYS".{0,160}'
             r'"date_type": "LAST_7_DAYS"',
         )
 

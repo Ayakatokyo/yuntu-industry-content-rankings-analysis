@@ -157,7 +157,14 @@ class MultiPeriodInvoker:
 
     def invoke_detail(self, shop_id, detail_params):
         self.detail_calls.append((shop_id, dict(detail_params)))
-        return detail_result(detail_params["material_id"])
+        result = detail_result(detail_params["material_id"])
+        result["data"][0]["dateRangeType"] = detail_params.get(
+            "date_type", detail_params.get("date_range_type")
+        )
+        if result["data"][0]["dateRangeType"] == "CUSTOM":
+            result["data"][0]["customStartDate"] = detail_params["custom_start_date"]
+            result["data"][0]["customEndDate"] = detail_params["custom_end_date"]
+        return result
 
 
 class ParallelRankingInvoker:
@@ -381,7 +388,7 @@ class YuntuBatchTests(unittest.TestCase):
                 "touchpoint_name": "信息流",
             },
         }
-        detail_range = {"date_range_type": "LAST_7_DAYS"}
+        detail_range = {"date_type": "LAST_7_DAYS"}
 
         manifest_item = batch._manifest_material(candidate)
 
@@ -403,14 +410,14 @@ class YuntuBatchTests(unittest.TestCase):
                 shop_id="shop-42",
                 list_params={
                     "industry": "食品饮料",
-                    "time_range_type": "CUSTOM",
+                    "date_type": "CUSTOM",
                     "custom_start_date": "20260810",
                     "custom_end_date": "20260820",
                     "brand_scope_type": "SPECIFIED_BRANDS",
                     "brands": ["小仙炖", "燕之屋", "五个女博士"],
                 },
                 detail_date_params={
-                    "date_range_type": "CUSTOM",
+                    "date_type": "CUSTOM",
                     "custom_start_date": "20260810",
                     "custom_end_date": "20260820",
                 },

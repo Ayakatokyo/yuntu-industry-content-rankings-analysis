@@ -9,7 +9,7 @@ from yuntu_highlight_export import match_brands_from_title
 
 
 PRESENTATION_SCHEMA_VERSION = 3
-REPORT_TITLE = "云图行业内容榜单分析"
+REPORT_TITLE = "云图行业素材诊断"
 SECTION_IDS = ("chapter01", "chapter02", "chapter03", "chapter04", "chapter05")
 REPORT_STATUSES = {"complete", "partial", "unavailable"}
 HIGHLIGHT_CATEGORIES = ("portrait", "product", "scene", "text_overlay", "other")

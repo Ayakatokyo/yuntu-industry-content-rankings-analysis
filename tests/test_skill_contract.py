@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILL_PATH = ROOT / "SKILL.md"
 OPENAI_YAML_PATH = ROOT / "agents" / "openai.yaml"
 CONNECTOR_PATH = ROOT / "scripts" / "rpa_connector.py"
+METADATA_PATH = ROOT / "metadata.yaml"
 
 
 class AnalysisSkillContractTests(unittest.TestCase):
@@ -23,7 +24,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
 
         self.assertIsNotNone(frontmatter)
         self.assertIn(
-            "name: 云图行业内容榜单分析", frontmatter.group(1)
+            "name: 云图行业素材诊断", frontmatter.group(1)
         )
         description = re.search(r"^description: (.+)$", frontmatter.group(1), re.MULTILINE)
         self.assertIsNotNone(description)
@@ -35,8 +36,9 @@ class AnalysisSkillContractTests(unittest.TestCase):
         frontmatter = re.match(r"\A---\n(.*?)\n---", skill, re.DOTALL)
 
         self.assertIsNotNone(frontmatter)
-        self.assertRegex(frontmatter.group(1), r"(?m)^argument_hint: .+分析周期")
-        self.assertRegex(frontmatter.group(1), r"(?m)^  pre_input: .+分析周期")
+        self.assertRegex(frontmatter.group(1), r"(?m)^argument_hint: .+时间范围")
+        self.assertIn("生成云图行业素材诊断报告", frontmatter.group(1))
+        self.assertRegex(frontmatter.group(1), r"(?m)^  pre_input: \|")
         for phrase in (
             "近七天",
             "云图界面",
@@ -97,14 +99,33 @@ class AnalysisSkillContractTests(unittest.TestCase):
         prompt = (ROOT / "prompts" / "yuntu-analysis-prompt.md").read_text(
             encoding="utf-8"
         )
+        metadata = METADATA_PATH.read_text(encoding="utf-8")
 
-        for phrase in (
-            "指定品牌是 ____（至少3个品牌）",
-            "年龄是 ____（可选；不填写则不筛选，即全选）",
-            "性别是 ____（可选；不填写则不筛选，即全选）",
-            "八大人群是 ____（可选；不填写则不筛选，即全选）",
+        for field in (
+            "industry",
+            "date_range",
+            "ranking_metric",
+            "brand_scope",
+            "brands",
+            "ages",
+            "genders",
+            "crowd_groups",
+            "material_list",
+            "detail_top_n",
         ):
-            self.assertIn(phrase, skill)
+            self.assertIn(f"__field:{field}__", skill)
+            self.assertIn(f"- key: {field}", metadata)
+        self.assertIn("label: 全行业/指定品牌", metadata)
+        self.assertIn("label: 详情素材数", metadata)
+        self.assertIn(
+            "description: 默认 10；详情请求包含秒级拆解和内容公式字段；如同时生成高光帧图片，再按下方规则提取高光帧图片",
+            metadata,
+        )
+        self.assertIn("品牌范围是 __field:brand_scope__；指定品牌是 __field:brands__", skill)
+        self.assertIn(
+            "年龄筛选：__field:ages__；性别筛选：__field:genders__；八大人群筛选：__field:crowd_groups__",
+            skill,
+        )
         removed_brand = "\u5c0f\u4ed9\u7096"
         self.assertNotIn(removed_brand, skill)
         self.assertNotIn(removed_brand, prompt)
@@ -278,7 +299,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
         ):
             self.assertIn(phrase, skill)
         self.assertIn("python <skill-root>/scripts/rpa_connector.py status", skill)
-        self.assertLessEqual(len(skill.splitlines()), 100)
+        self.assertLessEqual(len(skill.splitlines()), 110)
         self.assertNotIn("industryTop1000Facts", skill)
         self.assertNotIn("--highlight-trends", skill)
 
@@ -316,7 +337,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertRegex(metadata, r'(?m)^  display_name: "[^"\n]+"\s*$')
         self.assertRegex(metadata, r'(?m)^  short_description: "[^"\n]+"\s*$')
         self.assertIn(
-            "$云图行业内容榜单分析",
+            "$云图行业素材诊断",
             metadata,
         )
 

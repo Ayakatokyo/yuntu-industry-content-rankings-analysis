@@ -781,7 +781,7 @@ def _validate_period_and_hot_material_contract(analysis, fact_pack):
 
 
 def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
-    lines = ["# 云图行业内容榜单分析报告", ""]
+    lines = ["# 云图行业素材诊断报告", ""]
     combination = analysis["topMaterialCombination"]
     lines.extend(["## 01｜素材榜单数据洞察", ""])
     lines.extend(["---", "", "### 各品牌榜单分析", ""])

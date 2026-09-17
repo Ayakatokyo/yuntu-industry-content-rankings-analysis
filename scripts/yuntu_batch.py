@@ -867,7 +867,7 @@ def _finalize_details(
     incomplete_status="partial",
     require_no_unresolved=True,
 ):
-    """Write the shared collection handoff after fetch or either retry path."""
+    """Write the shared collection handoff after collection."""
     _refresh_ready_materials(root, manifest)
     succeeded = (
         not manifest.get("rejectedMaterials")
@@ -1677,107 +1677,6 @@ def collection_status(*, output_dir):
             "detailRecordsDir": str(detail_dir) if detail_dir.is_dir() else None,
         },
     }
-
-
-def _retry_batch_items(*, shop_id, output_dir, invoker, item_key, downloader=None):
-    if not isinstance(shop_id, str) or not shop_id.strip():
-        raise YuntuBatchError("shop_id is required")
-    downloader = FileDownloader() if downloader is None else downloader
-    root = Path(output_dir)
-    manifest_path = root / "batch-manifest.json"
-    summary_path = root / run_state.RUN_SUMMARY_NAME
-    if not summary_path.is_file():
-        raise YuntuBatchError(
-            "output directory contains an unverifiable existing batch; choose a new output directory"
-        )
-    try:
-        summary = run_state.load_run_state(summary_path)
-    except run_state.YuntuRunStateError as exc:
-        raise YuntuBatchError(
-            "output directory contains an unverifiable existing batch; choose a new output directory"
-        ) from exc
-    contract = summary.get("collectionContract")
-    if not isinstance(contract, dict) or not run_state.collection_contract_matches(
-        summary, contract
-    ):
-        raise YuntuBatchError(
-            "output directory contains an unverifiable existing batch; choose a new output directory"
-        )
-    if contract.get("shopId") != shop_id.strip():
-        raise YuntuBatchError(
-            "output directory belongs to a different collection contract; choose a new output directory"
-        )
-    manifest = _load_json(manifest_path)
-    detail_date_params = contract["detailDateRange"]
-    if manifest.get("detailDateRange") != detail_date_params:
-        raise YuntuBatchError("batch manifest detailDateRange does not match collection contract")
-    retry_items = list(manifest.get(item_key, []))
-    if not retry_items:
-        return _finalize_details(
-            root,
-            manifest,
-            summary,
-            manifest_path,
-            incomplete_status=manifest.get("status", "partial"),
-        )
-
-    selected_ids = _selected_ids(manifest)
-    still_retry_items = []
-    for item in retry_items:
-        material_id = item.get("material_id")
-        if not isinstance(material_id, str) or not material_id.isdigit():
-            still_retry_items.append(item)
-            continue
-        detail_started = time.monotonic()
-        try:
-            _, selected_entry = _persist_detail(
-                root=root,
-                summary=summary,
-                item=item,
-                gateway_result=invoker.invoke_detail(
-                    shop_id, _detail_request(item, detail_date_params)
-                ),
-                downloader=downloader,
-                detail_fetch_sec=_elapsed(detail_started),
-                expected_context=detail_date_params,
-            )
-            if material_id not in selected_ids:
-                manifest.setdefault("selectedMaterials", []).append(selected_entry)
-                selected_ids.add(material_id)
-        except Exception as exc:
-            retry_count = int(item.get("retryCount", 0)) + 1
-            updated = dict(item)
-            updated["reason"] = exc.__class__.__name__
-            updated["error"] = str(exc)
-            updated["retryCount"] = retry_count
-            updated["timingsSec"] = {"detailFetchSec": _elapsed(detail_started)}
-            still_retry_items.append(updated)
-
-    manifest["selectedMaterials"] = sorted(
-        manifest.get("selectedMaterials", []), key=lambda item: item.get("rank", 0)
-    )
-    manifest[item_key] = still_retry_items
-    return _finalize_details(root, manifest, summary, manifest_path)
-
-
-def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
-    return _retry_batch_items(
-        shop_id=shop_id,
-        output_dir=output_dir,
-        invoker=invoker,
-        item_key="rejectedMaterials",
-        downloader=downloader,
-    )
-
-
-def retry_unresolved_batch(*, shop_id, output_dir, invoker, downloader=None):
-    return _retry_batch_items(
-        shop_id=shop_id,
-        output_dir=output_dir,
-        invoker=invoker,
-        item_key="unresolvedMaterials",
-        downloader=downloader,
-    )
 
 
 def _relative(root, path):

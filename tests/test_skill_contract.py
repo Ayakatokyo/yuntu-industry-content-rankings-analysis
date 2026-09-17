@@ -172,8 +172,6 @@ class AnalysisSkillContractTests(unittest.TestCase):
             "fetch",
             "prepare-analysis",
             "render-report",
-            "retry-failed",
-            "retry-unresolved",
         ):
             self.assertIn(f"{command} {subcommand}", skill)
         dynamic_command = "python <skill-root>/scripts/rpa_dynamic_client.py"
@@ -204,10 +202,12 @@ class AnalysisSkillContractTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(root_help.returncode, 0, root_help.stderr)
-        self.assertIn("retry-failed", root_help.stdout)
-        self.assertIn("retry-unresolved", root_help.stdout)
+        self.assertNotIn("retry-failed", root_help.stdout)
+        self.assertNotIn("retry-unresolved", root_help.stdout)
+        self.assertNotIn("retry-failed", skill)
+        self.assertNotIn("retry-unresolved", skill)
 
-    def test_documents_long_task_recovery_and_explicit_unresolved_retry(self):
+    def test_documents_long_task_recovery_without_rpa_resubmission(self):
         skill = self.read_skill()
 
         for phrase in (
@@ -215,7 +215,6 @@ class AnalysisSkillContractTests(unittest.TestCase):
             "异步",
             "3600 秒",
             "unresolvedMaterials",
-            "retry-unresolved",
             "不重复提交",
         ):
             self.assertIn(phrase, skill)

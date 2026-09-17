@@ -227,23 +227,13 @@ class RpaConnectorTest(unittest.TestCase):
             "shop-42", {"material_id": "101", "date_type": "LAST_7_DAYS"}
         )
 
-    def test_main_dispatches_explicit_unresolved_retry(self):
+    def test_rpa_retry_commands_are_not_available(self):
         connector = self.connector()
-        with mock.patch.object(
-            connector, "retry_unresolved_batch_analysis", return_value=0
-        ) as retry, mock.patch("sys.stdout", new_callable=io.StringIO):
-            status = connector.main(
-                [
-                    "retry-unresolved",
-                    "--shop-id",
-                    "shop-42",
-                    "--output-dir",
-                    "output",
-                ]
-            )
-
-        self.assertEqual(status, 0)
-        retry.assert_called_once_with("shop-42", output_dir="output")
+        for command in ("retry-failed", "retry-unresolved"):
+            with self.subTest(command=command), self.assertRaises(SystemExit):
+                connector._parser().parse_args(
+                    [command, "--shop-id", "shop-42", "--output-dir", "output"]
+                )
 
     def test_connector_entrypoints_are_the_only_static_gateway_identity(self):
         connector = self.connector()

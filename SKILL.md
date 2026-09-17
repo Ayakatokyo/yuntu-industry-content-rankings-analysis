@@ -69,12 +69,7 @@ python <skill-root>/scripts/rpa_connector.py status --output-dir "云图数据�
 
 固定顺序：三次列表（query、previous_period、industry）→ 验证 `list_context` 并选择唯一数字型 `material_id` → 详情 → 规范化 → 事实包 → 当前对话模型洞察 → 报告。RPA 优先 `files-envelope`/CSV：先落盘 `raw-csv/list.csv`、`raw-csv/details/<material_id>.csv`，再生成 `normalized/list-records.json`、`normalized/detail-records/<material_id>.json`；CSV 为主路径，兼容旧 `list-response.json`、`details/<material_id>.json`、`manifest.json`。
 
-`fetch` 通过异步任务协议观察，单个远端任务最多轮询 3600 秒。`run-summary.json` 保存参数指纹和 `taskRuns` 汇总投影；`batch-manifest.json` 在提交后立即保存 `task_group_id`，并记录 `unresolvedMaterials`。同一输出目录恢复时只轮询已登记任务，不重复提交。`status --output-dir` 同时核对摘要、manifest、规范化列表和详情。列表请求失败写清单并非零退出且不发详情；详情请求失败继续处理其余素材，最终非零但保留成功文件。仅在用户确认可能重复请求后运行：
-
-```bash
-python <skill-root>/scripts/rpa_connector.py retry-failed --shop-id "<shop_id>" --output-dir "云图数据资源/yuntu-rankings-analysis"
-python <skill-root>/scripts/rpa_connector.py retry-unresolved --shop-id "<shop_id>" --output-dir "云图数据资源/yuntu-rankings-analysis"
-```
+`fetch` 通过异步任务协议观察，单个远端任务最多轮询 3600 秒。`run-summary.json` 保存参数指纹和 `taskRuns` 汇总投影；`batch-manifest.json` 在提交后立即保存 `task_group_id`，并记录 `unresolvedMaterials`。同一输出目录恢复时只轮询已登记任务，不重复提交；没有可复用任务 ID 的失败项保持失败，不提供 RPA 重提命令。`status --output-dir` 同时核对摘要、manifest、规范化列表和详情。列表请求失败写清单并非零退出且不发详情；详情请求失败继续处理其余素材，最终非零但保留成功文件。
 
 ## 分析与交付
 

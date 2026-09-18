@@ -102,6 +102,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
         metadata = METADATA_PATH.read_text(encoding="utf-8")
 
         for field in (
+            "rpa_shop",
             "industry",
             "date_range",
             "ranking_metric",
@@ -129,6 +130,22 @@ class AnalysisSkillContractTests(unittest.TestCase):
         removed_brand = "\u5c0f\u4ed9\u7096"
         self.assertNotIn(removed_brand, skill)
         self.assertNotIn(removed_brand, prompt)
+
+    def test_uses_one_rpa_selector_for_ranking_and_detail(self):
+        skill = self.read_skill()
+        metadata = METADATA_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("__field:rpa_shop__", skill)
+        self.assertIn("- key: rpa_shop\n    type: rpa_shop", metadata)
+        self.assertIn("application_id: RPA_JULIANG_YT_ACCOUNT_PASSWORD", metadata)
+        self.assertIn("rpa_shop.extra.shop_id", skill)
+        self.assertIn("rpa_shop_not_authorized", skill)
+
+    def test_date_range_uses_the_yuntu_t_plus_4_form_policy(self):
+        metadata = METADATA_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("max_policy: t_plus_4", metadata)
+        self.assertIn("结束日期不得晚于采集当天前 4 天", metadata)
 
     def test_requires_the_same_time_range_for_ranking_and_detail(self):
         skill = self.read_skill()

@@ -43,7 +43,7 @@ class BrandQualityTests(unittest.TestCase):
         self.assertIn("category_reason", frame_schema["required"])
         self.assertEqual(schema["properties"]["standardClassification"]["properties"]["status"], {"const": "complete"})
 
-    def test_v3_highlights_require_two_or_three_distinct_items(self):
+    def test_v3_highlights_allow_one_to_three_distinct_items(self):
         facts = self.quality_facts()
         facts["analysisQualityVersion"] = 3
         brands = preparation._analysis_output_schema(facts)["properties"]["highlightDashboard"]["properties"]["brands"]
@@ -53,9 +53,9 @@ class BrandQualityTests(unittest.TestCase):
                 validator = Draft202012Validator(fields[field])
                 items = [{"title": f"观察角度{i}", "body": "用于校验结构要求的充分长度正文。" * 10,
                           "frame_refs": ["highlight:101:cover:0"]} for i in range(4)]
-                for count in (2, 3):
+                for count in (1, 2, 3):
                     self.assertEqual(list(validator.iter_errors(items[:count])), [])
-                for count in (0, 1, 4):
+                for count in (0, 4):
                     self.assertTrue(list(validator.iter_errors(items[:count])))
                 self.assertTrue(list(validator.iter_errors([items[0], items[0]])))
         empty = brands["prefixItems"][2]
@@ -96,14 +96,26 @@ class BrandQualityTests(unittest.TestCase):
         values[-1].pop("missing_reason")
         self.assertTrue(list(validator.iter_errors(values)))
 
-    def test_audience_short_summaries_and_missing_script_brands_are_rejected(self):
+    def test_audience_concise_summaries_are_accepted_but_missing_script_brands_are_rejected(self):
         schema = preparation._analysis_output_schema(self.quality_facts())
         audience = schema["properties"]["chapter02Insights"]
         value = {"scopeOrder": ["all"], "scopes": {"all": {key: {
             "title": "观察", "summary": "只描述标签。", "evidence": ["早餐"], "material_ids": ["101"]}
             for key in ("audienceSummary", "marketingSummary")}}}
-        self.assertEqual(len(list(Draft202012Validator(audience).iter_errors(value))), 2)
+        self.assertEqual(list(Draft202012Validator(audience).iter_errors(value)), [])
         self.assertTrue(list(Draft202012Validator(schema["properties"]["scriptBrandInsights"]).iter_errors({})))
+
+    def test_all_industry_schema_does_not_require_brand_script_output(self):
+        facts = self.quality_facts()
+        facts["filters"]["brands"] = []
+        facts["scriptFacts"]["brandScopeOrder"] = []
+        facts["scriptFacts"]["brandScopes"] = {}
+
+        schema = preparation._analysis_output_schema(facts)
+
+        self.assertNotIn("scriptBrandInsights", schema["required"])
+        self.assertNotIn("scriptBrandInsights", schema["properties"])
+        self.assertFalse(any("brand" in part for part in _parts({"schema": schema, "facts": facts})))
 
     def test_script_evidence_never_quotes_visual_or_title_only_text(self):
         facts = {"analysisQualityVersion": 2, "scriptFacts": script_facts()}
@@ -137,7 +149,7 @@ class BrandQualityTests(unittest.TestCase):
         self.assertEqual(result["evidence"], [])
         self.assertFalse(result["formula"][0].get("evidenceRefs"))
 
-    def test_schema_rejects_short_analysis_before_attestation(self):
+    def test_schema_accepts_concise_analysis_without_character_quotas(self):
         props = {"scriptInsights": {"type": "array", "minItems": 2, "maxItems": 2, "items": preparation._analysis_insight_schema()},
                  "keywordCloudReview": {"type": "array", "items": preparation._keyword_cloud_review_schema()},
                  "keywordCloudInsight": preparation._keyword_cloud_insight_schema()}
@@ -145,7 +157,19 @@ class BrandQualityTests(unittest.TestCase):
         value = script_output(["101"])
         self.assertEqual(list(Draft202012Validator(schema).iter_errors(value)), [])
         value["scriptInsights"][0]["summary"] = "早餐场景连接配方卖点。"
-        self.assertTrue(any("summary" in e.json_path for e in Draft202012Validator(schema).iter_errors(value)))
+        value["keywordCloudInsight"]["summary"] = "品质词更集中。"
+        self.assertEqual(list(Draft202012Validator(schema).iter_errors(value)), [])
+
+    def test_highlight_schema_keeps_prose_nonempty_without_length_or_item_quotas(self):
+        facts = self.quality_facts()
+        facts["analysisQualityVersion"] = 4
+        dashboard = preparation._analysis_output_schema(facts)["properties"]["highlightDashboard"]["properties"]
+        groups = dashboard["brands"]["prefixItems"][0]["properties"]["groups"]
+        fields = groups["items"]["properties"]
+
+        for name in ("common_patterns", "derivative_directions"):
+            self.assertEqual(fields[name]["minItems"], 1)
+            self.assertNotIn("minLength", fields[name]["items"]["properties"]["body"])
 
     def test_brand_script_rejects_foreign_ids_and_unquoted_evidence(self):
         facts = {"analysisQualityVersion": 2, "scriptFacts": script_facts()}
@@ -158,6 +182,9 @@ class BrandQualityTests(unittest.TestCase):
     def test_empty_brand_uses_no_aggregate_evidence(self):
         facts = {"analysisQualityVersion": 2, "scriptFacts": script_facts(mid=None), "selectedMaterials": [{"material_id": "999"}]}
         value = script_output(available=False)
+        for insight in value["scriptInsights"]:
+            insight["summary"] = "本品牌没有可用脚本文本。"
+        value["keywordCloudInsight"]["summary"] = "本品牌没有可用关键词。"
         report._validate_script_insights(value, facts)
         value["scriptInsights"][0]["material_ids"] = ["999"]
         with self.assertRaises(report.YuntuReportError):

@@ -1,6 +1,7 @@
-"""Versioned, scope-aware writing requirements shared by tasks and validators.
+"""Versioned, scope-aware structural requirements shared by tasks and validators.
 
-These are structural floors, not a claim that length proves analytical quality.
+Prose quality belongs in the writing rubric. Validators protect shape, scope and
+evidence integrity without forcing a model to pad otherwise valid report copy.
 """
 from copy import deepcopy
 from yuntu_highlight_export import match_brands_from_title
@@ -20,15 +21,15 @@ def script_scope_schema(properties, facts):
               "properties": {k: deepcopy(properties[k]) for k in SCRIPT_FIELDS}}
     props = result["properties"]
     available = bool(facts.get("coverage", {}).get("script"))
-    props["scriptInsights"]["items"]["properties"]["summary"]["minLength"] = 180 if available else 12
+    props["scriptInsights"]["items"]["properties"]["summary"]["minLength"] = 1
     ids = [str(m["material_id"]) for m in facts.get("materials", [])]
     props["scriptInsights"]["items"]["properties"]["material_ids"] = {
         "type": "array", "uniqueItems": True, "items": {"enum": ids} if ids else False,
         **({"minItems": 1} if available else {})}
     if not available:
         props["scriptInsights"]["items"]["properties"]["evidence"]["maxItems"] = 0
-    props["keywordCloudInsight"]["properties"]["summary"]["minLength"] = 100 if available else 12
-    props["keywordCloudInsight"]["properties"]["sellingPoints"]["items"]["properties"]["description"]["minLength"] = 60
+    props["keywordCloudInsight"]["properties"]["summary"]["minLength"] = 1
+    props["keywordCloudInsight"]["properties"]["sellingPoints"]["items"]["properties"]["description"]["minLength"] = 1
     return result
 
 
@@ -39,18 +40,18 @@ def apply_schema(schema, facts):
     scopes = props["chapter02Insights"]["properties"]["scopes"]["properties"]
     for key in list(scopes):
         scopes[key] = deepcopy(scopes[key])
-        available = bool(facts["chapter02AiFacts"][key].get("sampleCount"))
         for item in scopes[key]["properties"].values():
-            item["properties"]["summary"]["minLength"] = 180 if available else 12
+            item["properties"]["summary"]["minLength"] = 1
     script_facts = facts.get("scriptFacts", {})
     if "scriptInsights" in props:
         base = deepcopy(props)
         props.update(script_scope_schema(base, script_facts)["properties"])
         order = script_facts.get("brandScopeOrder", [])
-        props["scriptBrandInsights"] = {
-            "type": "object", "additionalProperties": False, "required": order,
-            "properties": {b: script_scope_schema(base, script_facts["brandScopes"][b]) for b in order}}
-        schema["required"].append("scriptBrandInsights")
+        if order:
+            props["scriptBrandInsights"] = {
+                "type": "object", "additionalProperties": False, "required": order,
+                "properties": {b: script_scope_schema(base, script_facts["brandScopes"][b]) for b in order}}
+            schema["required"].append("scriptBrandInsights")
     if "highlightDashboard" in props:
         dashboard = props["highlightDashboard"]["properties"]
         if facts.get("analysisQualityVersion", 0) >= 4:
@@ -59,7 +60,7 @@ def apply_schema(schema, facts):
             understanding["required"] += ["standard_category", "category_reason"]
             understanding["properties"].update(
                 standard_category={"enum": ["portrait", "product", "other"]},
-                category_reason={"type": "string", "minLength": 12})
+                category_reason={"type": "string", "minLength": 1})
             dashboard["standardClassification"]["properties"]["status"] = {"const": "complete"}
         original = dashboard["brands"]["items"]
         brands = ["全品牌", *facts.get("filters", {}).get("brands", [])]
@@ -75,15 +76,14 @@ def apply_schema(schema, facts):
             if not refs:
                 groups.update(minItems=0, maxItems=0)
                 item["required"].append("missing_reason")
-                item["properties"]["missing_reason"]["minLength"] = 12
+                item["properties"]["missing_reason"]["minLength"] = 1
             else:
                 gp = groups["items"]["properties"]
                 gp["frame_refs"]["items"] = {"enum": refs}
                 for key in ("common_patterns", "derivative_directions"):
-                    gp[key]["minItems"] = 2 if facts.get("analysisQualityVersion", 0) >= 3 else 1
+                    gp[key]["minItems"] = 1
                     if facts.get("analysisQualityVersion", 0) >= 3:
                         gp[key].update(maxItems=3, uniqueItems=True)
-                    gp[key]["items"]["properties"]["body"]["minLength"] = 100
             scopes.append(item)
         dashboard["brands"] = {"type": "array", "prefixItems": scopes,
                                "items": False, "minItems": len(scopes), "maxItems": len(scopes)}

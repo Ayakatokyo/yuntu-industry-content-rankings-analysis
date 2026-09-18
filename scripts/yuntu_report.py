@@ -120,10 +120,6 @@ HIGHLIGHT_CATEGORY_LABELS = {
 HIGHLIGHT_CATEGORY_ORDER = tuple(HIGHLIGHT_CATEGORY_LABELS)
 HIGHLIGHT_RENDER_CATEGORY_ORDER = ("portrait", "product", "other")
 SECOND_LEVEL_TRENDS = ("点赞指数", "流失指数", "点击指数", "互动指数", "评论指数")
-AI_TEXT_MINIMUMS = {
-    "frame_observation": 24,
-    "second_level": 28,
-}
 AI_PLACEHOLDER_TEXT = (
     "事实包返回",
     "该素材用于观察",
@@ -132,7 +128,9 @@ AI_PLACEHOLDER_TEXT = (
 )
 AUDIT_JSON_PATTERN = re.compile(r'(?:\[\s*)?\{\s*"[^"\n]+"\s*:')
 DEEP_DIVE_FORBIDDEN_CLAIM = re.compile(
-    r"脚本|话术|内容公式|真实(?:点击|互动|点赞|评论)(?:量|次数)?|转化|因果|导致|提升"
+    r"脚本|话术|内容公式|真实(?:点击|互动|点赞|评论)(?:量|次数)?|"
+    r"转化(?:率|量|次数|效果)|(?:导致|带来).{0,12}(?:曝光|点击|互动|点赞|评论|转化)|"
+    r"(?:曝光|点击|互动|点赞|评论|转化)(?:率|量|次数|指数)?.{0,8}(?:提升|下降)"
 )
 SCRIPT_INSIGHT_FORBIDDEN_CLAIM = re.compile(
     r"导致|提升|因果|行业(?:普遍|规律)|帧[-—]?话术|话术[-—]?帧|秒点.{0,8}话术|话术.{0,8}秒点|convertCnt.{0,8}订单|订单.{0,8}convertCnt"
@@ -145,7 +143,9 @@ SCRIPT_SCOPE_LIMITATION = re.compile(
     r"(?:行业普遍(?:结论|规律)|行业规律)(?=$|[，。；！？\n])"
 )
 SCRIPT_ANALYSIS_FORBIDDEN_CLAIM = re.compile(
-    r"标题|画面|高光帧|秒级|曝光|点击(?:率|量|次数)?|互动(?:率|量|次数)?|评论(?:率|量|次数)?|转化|因果|导致|提升|下降|波峰|流失"
+    r"标题|画面|高光帧|秒级|曝光(?:量|次数|指数)?|"
+    r"点击(?:率|量|次数|指数|高点|峰值|波峰)|互动(?:率|量|次数|指数)|"
+    r"评论(?:率|量|次数|指数)|转化(?:率|量|次数|效果)|波峰|流失"
 )
 
 
@@ -243,8 +243,8 @@ def _validate_script_insights(analysis, fact_pack):
         _validate_summary(item.get("summary"), f"{field}.summary")
         evidence = item.get("evidence")
         if quality_enabled(fact_pack) and not facts.get("coverage", {}).get("script"):
-            if evidence != [] or not set(item.get("material_ids", [])).issubset(known_ids) or "数据不足以判断" not in item["summary"]:
-                raise YuntuReportError(f"{field}: unavailable script scope requires empty evidence and data insufficiency")
+            if evidence != [] or not set(item.get("material_ids", [])).issubset(known_ids):
+                raise YuntuReportError(f"{field}: unavailable script scope requires empty evidence")
             continue
         if not isinstance(evidence, list) or not evidence:
             raise YuntuReportError(f"{field} must include evidence")
@@ -394,10 +394,8 @@ def _validate_deep_dive_text(value, field):
         raise YuntuReportError(f"{field} must not contain scripts, counts, conversion, or causal claims")
 
 
-def _validate_ai_text(value, field, quality_key):
+def _validate_ai_text(value, field, _quality_key):
     _validate_deep_dive_text(value, field)
-    if len(value.strip()) < AI_TEXT_MINIMUMS[quality_key]:
-        raise YuntuReportError(f"{field} is below the AI quality minimum")
     if any(token in value for token in AI_PLACEHOLDER_TEXT):
         raise YuntuReportError(f"{field} contains placeholder text")
 
@@ -521,8 +519,8 @@ def _validate_chapter02_insights(value, fact_pack=None):
             if sample_count == 0 or (isinstance(scope_fact, dict) and scope_fact.get("availability") == "unavailable"):
                 if evidence != [] or material_ids != []:
                     raise YuntuReportError(f"chapter02Insights {scope_key} unavailable scope must not cite evidence")
-                if "数据不足以判断" not in str(summary.get("summary") or ""):
-                    raise YuntuReportError(f"chapter02Insights {scope_key} unavailable scope must state data insufficiency")
+                if not str(summary.get("summary") or "").strip():
+                    raise YuntuReportError(f"chapter02Insights {scope_key} unavailable scope requires a reason")
                 continue
             if not isinstance(evidence, list) or not evidence or not isinstance(material_ids, list) or not material_ids:
                 raise YuntuReportError(f"chapter02Insights {scope_key} {field} requires scoped evidence")
@@ -1549,9 +1547,8 @@ def _validate_material_deep_dives(analysis, fact_pack):
         if availability == "available":
             if not has_script_text:
                 raise YuntuReportError("scriptAnalysis must be unavailable when script text is absent")
-            if not isinstance(conclusion, str) or not 120 <= len(conclusion.strip()) <= 220:
-                size = len(conclusion.strip()) if isinstance(conclusion, str) else None
-                raise YuntuReportError(f"scriptAnalysis conclusion must be 120-220 characters (material={material_id}, actual={size})")
+            if not isinstance(conclusion, str) or not conclusion.strip():
+                raise YuntuReportError(f"scriptAnalysis conclusion must be nonempty (material={material_id})")
             if not evidence_refs:
                 raise YuntuReportError("scriptAnalysis evidenceRefs must not be empty when available")
             claim = SCRIPT_ANALYSIS_FORBIDDEN_CLAIM.search(conclusion)
@@ -1564,8 +1561,8 @@ def _validate_material_deep_dives(analysis, fact_pack):
                 raise YuntuReportError("scriptAnalysis must be available when script text exists")
             if evidence_refs:
                 raise YuntuReportError("unavailable scriptAnalysis evidenceRefs must be empty")
-            if not isinstance(conclusion, str) or "数据不足以判断" not in conclusion:
-                raise YuntuReportError("unavailable scriptAnalysis must state data insufficiency")
+            if not isinstance(conclusion, str) or not conclusion.strip():
+                raise YuntuReportError("unavailable scriptAnalysis requires a reason")
 
     if set(dives_by_id) != set(selected_ids):
         raise YuntuReportError("materialDeepDives must cover every selected material")

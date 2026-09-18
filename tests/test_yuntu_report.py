@@ -76,6 +76,18 @@ class YuntuReportTests(unittest.TestCase):
         with self.assertRaisesRegex(report.YuntuReportError, "outside scope"):
             report._validate_chapter02_insights(value, fact_pack=facts)
 
+    def test_unavailable_chapter02_scope_accepts_a_clear_equivalent_reason(self):
+        report = load_module()
+        summary = {"title": "当前范围缺少样本", "summary": "本范围未获取到可用素材。", "evidence": [], "material_ids": []}
+        value = {"scopeOrder": ["all"], "scopes": {"all": {
+            "audienceSummary": dict(summary), "marketingSummary": dict(summary),
+        }}}
+        facts = {"chapter02AiFacts": {"scopeOrder": ["all"], "all": {
+            "sampleCount": 0, "availability": "unavailable", "topMaterials": [],
+        }}}
+
+        report._validate_chapter02_insights(value, fact_pack=facts)
+
     def test_frame_understanding_rejects_second_only_template_changes_for_current_contract(self):
         report = load_module()
         frames = [{"frame_ref": "highlight:101:cover:0"}, {"frame_ref": "highlight:101:click_peak:2"}]
@@ -156,6 +168,67 @@ class YuntuReportTests(unittest.TestCase):
 
         with self.assertRaisesRegex(report.YuntuReportError, "scriptAnalysis evidenceRefs"):
             report._validate_material_deep_dives(analysis, fact_pack)
+
+    def test_prose_validation_allows_testing_language_but_rejects_metric_claims(self):
+        report = load_module()
+
+        report._validate_deep_dive_text(
+            "建议比较两种开场版本，观察是否提升产品辨识度。",
+            "derivative direction body",
+        )
+        with self.assertRaisesRegex(report.YuntuReportError, "must not contain"):
+            report._validate_deep_dive_text(
+                "该画面导致点击率提升。",
+                "derivative direction body",
+            )
+
+    def test_material_script_analysis_allows_click_as_a_test_direction(self):
+        report = load_module()
+        ref = "script:101:text:开场先说明使用场景。"
+        fact_pack = {
+            "selectedMaterials": [{"material_id": "101"}],
+            "materialFacts": [{
+                "material_id": "101",
+                "script": {"text": "开场先说明使用场景。", "formula": [], "evidence": []},
+                "evidenceIndex": {"script": [ref]},
+                "secondLevelBreakdown": {"metrics": []},
+            }],
+        }
+        analysis = {"materialDeepDives": [{
+            "material_id": "101",
+            "frame_observations": [],
+            "scriptAnalysis": {
+                "conclusion": "建议保留场景开头，并用后续点击测试比较表达顺序。",
+                "evidenceRefs": [ref],
+                "availability": "available",
+            },
+        }]}
+
+        report._validate_material_deep_dives(analysis, fact_pack)
+
+    def test_unavailable_material_script_accepts_a_clear_equivalent_reason(self):
+        report = load_module()
+        fact_pack = {
+            "schemaVersion": 8,
+            "selectedMaterials": [{"material_id": "101"}],
+            "materialFacts": [{
+                "material_id": "101",
+                "script": {"text": "", "formula": [], "evidence": []},
+                "evidenceIndex": {"script": []},
+                "secondLevelBreakdown": {"metrics": []},
+            }],
+        }
+        analysis = {"materialDeepDives": [{
+            "material_id": "101",
+            "frame_observations": [],
+            "scriptAnalysis": {
+                "conclusion": "未获取到该素材的可用脚本文本。",
+                "evidenceRefs": [],
+                "availability": "unavailable",
+            },
+        }]}
+
+        report._validate_material_deep_dives(analysis, fact_pack)
 
     def test_validate_script_insights_requires_scoped_material_evidence(self):
         report = load_module()

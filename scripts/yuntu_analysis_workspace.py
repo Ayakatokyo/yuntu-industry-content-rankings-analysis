@@ -58,7 +58,7 @@ def _part_schema(bundle, part):
         script = schema["properties"]["scriptAnalysis"]["properties"]
         has_text = bool(fact.get("script", {}).get("text", "").strip())
         script["availability"] = {"const": "available" if has_text else "unavailable"}
-        script["conclusion"] = {"type": "string", **({"minLength": 120, "maxLength": 220} if has_text else {})}
+        script["conclusion"] = {"type": "string", "minLength": 1}
         refs = fact.get("evidenceIndex", {}).get("script", [])
         script["evidenceRefs"] = {"type": "array", "uniqueItems": True,
                                   "items": {"type": "string", "enum": refs} if refs else False,
@@ -86,7 +86,6 @@ def _task(bundle, part):
         task["requiredFrameRefs"] = [x["frame_ref"] for x in fact.get("highlightFrames", []) if x.get("available")]
         task["scriptTextAvailable"] = bool(fact.get("script", {}).get("text", "").strip())
         task["scriptForbiddenClaimPattern"] = report.SCRIPT_ANALYSIS_FORBIDDEN_CLAIM.pattern
-        task["observationMinCharacters"] = report.AI_TEXT_MINIMUMS["frame_observation"]
     if part["key"] == "audience":
         scopes = facts["chapter02AiFacts"]
         task["scopes"] = {key: {"sampleCount": scopes[key].get("sampleCount"),

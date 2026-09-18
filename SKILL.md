@@ -5,6 +5,7 @@ argument_hint: 输入行业、时间范围、榜单类型、品牌和人群筛�
 metadata:
   pre_input: |
     请采集云图行业素材及相关数据。
+    云图诊断授权账号：__field:rpa_shop__（必填）
     行业是 __field:industry__（必填，云图行业筛选）
     分析周期是 __field:date_range__
     截取方式是 __field:ranking_metric__
@@ -27,6 +28,8 @@ metadata:
 - 新事实包生成后核对素材集合、五类趋势点、脚本覆盖和成功帧集合。帧从旧数量变为新数量、脚本新增、素材范围或提示词改变时，旧分析需重新生成并重新 attest；不得删掉新增帧来迎合旧 JSON。阶段分别记为事实准备、模型分析、校验、渲染、交付，不用采集 `success` 代替分析完成。
 
 ## 先确认参数
+
+云图没有独立的 API 报表店铺阶段。先选择 `rpa_shop`：榜单和素材详情均通过 `RPA_JULIANG_YT_ACCOUNT_PASSWORD` 获取，`rpa_shop.extra.shop_id` 是这两个步骤唯一使用的授权账号 ID，必须原样同时传入两步的 `--shop-id`；不得再手填、猜测或替换账号。执行每个阶段前查询当前授权列表：所选账号不在列表时以 `rpa_shop_not_authorized` 停止，不提交后续 RPA 任务，也不改用其他账号。
 
 - 行业必填；指定品牌可选，填写时给 3–10 个品牌并使用 `SPECIFIED_BRANDS`。实时连接器的 `brands` 是 STRING：优先用英文逗号分隔品牌名；本地上下文校验也兼容斜杠分隔和 JSON 数组字符串，归一化后逐品牌比对页面实际 tag。连接器请求和 `run-summary.json` 保留该 STRING；写入 `batch-manifest.json.filters.brands` 后必须是规范化的品牌列表，供分析、草稿和报告逐品牌消费。年龄、性别、八大人群空缺时不传筛选参数（全选）。截取方式为曝光量TOP1000、CTRTOP1000、互动率TOP1000或完播率TOP1000。
 - 秒级拆解素材数默认 10，由批参数 JSON 的 `target_top_n` 控制 RPA 详情实际拉取并做秒级拆解的目标素材数；第一部分品牌分析直接使用提取到的行业 TOP1000，并在其中按品牌匹配全部素材。启动前复述映射；未完成映射核对时不得启动 RPA 长任务。
@@ -79,7 +82,7 @@ python <skill-root>/scripts/rpa_connector.py status --output-dir "云图数据�
 
 草稿写完立即保存，每完成一组相关草稿，用可重复的 `--part <key1> --part <key2>` 一次检查；单份报错只修受影响草稿。全部完成后直接运行 `assemble-analysis`，其内部完整检查通过才会组装，无需紧邻组装前再做一次全量检查。组装器只合并模型已写出的 JSON，保留按哈希命名的原始草稿快照和 assembly 收据，不生成、补齐或改写业务结论。新契约的 attest 必须验证草稿到最终 JSON 的无损对应。禁止程序化兜底，禁止新建承载业务结论的 Python/JS 生成脚本（包括沿用历史 `build_current_ai_analysis.py`），禁止 `codex exec`、子进程或外部模型服务调用模型。不得仅凭 `--generator` 认定模型；它和草稿来源都是调用者声明，哈希与收据不能证明模型身份、实际看图或业务判断正确。脚本和生成的提示词是 schema 权威，只生成当前报告实际展示的分析模块；固定规则负责统计，当前模型负责判断。
 
-校验失败先读工作目录的 `validation.json`，按 `part/file/path` 修复受影响草稿。引用从该素材或 scope 的清单原样选择；帧覆盖报错列出重复、缺失和额外引用；字数不足先核对可用事实，`unsupported claim` 核对具体句子和命中词。缺失事实保留不可用状态。不要删证据、关闭 provenance、绕过 CLI 或机械凑字数；输入未变化时不重复检查。仅报告生成任务中发现事实投影或校验器缺陷，应保留失败现场并报告具体契约问题，不以修改通用技能代码来放行；用户明确要求修复技能时可在该授权范围内修复并测试。
+校验失败先读工作目录的 `validation.json`，按 `part/file/path` 修复受影响草稿。引用从该素材或 scope 的清单原样选择；帧覆盖报错列出重复、缺失和额外引用；`unsupported claim` 只核对具体句子中的跨事实源或指标因果断言。缺失事实保留不可用状态。不要删证据、关闭 provenance 或绕过 CLI；报告正文没有字数硬门槛，不为凑字数反复改写；输入未变化时不重复检查。仅报告生成任务中发现事实投影或校验器缺陷，应保留失败现场并报告具体契约问题，不以修改通用技能代码来放行；用户明确要求修复技能时可在该授权范围内修复并测试。
 
 ```bash
 python <skill-root>/scripts/rpa_connector.py prepare-analysis --input-dir "云图数据资源/yuntu-rankings-analysis" --output-dir "云图数据资源/yuntu-rankings-analysis/diagnostic-analysis"
@@ -95,6 +98,6 @@ python <skill-root>/scripts/rpa_connector.py render-report --analysis-json ".../
 
 优化效果按 workspace.json 的 inputMetrics 与 validation.json 的 timingsSeconds 核对：字节量衡量模型读取体积，本地耗时衡量校验开销；实际模型耗时还需从执行日志单独计时，不用字节缩减率代替提速率。
 
-新分析同时执行 `analysisQualityVersion=4` 的充分性与范围契约：02 各非空范围和 03 各有正文范围的摘要不少于 180 字，04 每个非空标准分类组各输出 2–3 条共性结论与一一对应的裂变方向，每条正文不少于 100 字且观点不同；这些仅是结构底线。模型仍须核对具体观察、业务含义、建议与验证边界，禁止重复凑字。03 和 04 必须覆盖全部指定品牌，缺失品牌保留入口并明确数据不足。品牌脚本在 `script-brand-<index>.json` 独立撰写；只引用同品牌原文。
+新分析同时执行 `analysisQualityVersion=4` 的范围与证据契约：02、03 必须引用当前 scope 的事实，04 每个非空标准分类组根据证据充分度输出 1–3 条共性结论与一一对应的裂变方向。模型须核对具体观察、业务含义、建议与验证边界，禁止重复凑字；校验器不以字数或句数判定正文质量。03 和 04 必须覆盖全部指定品牌，缺失品牌保留入口并明确数据不足。品牌脚本在 `script-brand-<index>.json` 独立撰写；只引用同品牌原文。
 
 有成功帧时，04 的逐帧理解、标准分类、本批次分类均为必填。逐帧记录 standard_category 与 category_reason，标准分类及各品牌分类必须与其一致；本批次确实无法分组时填写 unavailable 和具体原因，不得省略整个字段。

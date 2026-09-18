@@ -11,7 +11,21 @@ from yuntu_analysis_bundle import (
 )
 import yuntu_report as report
 from yuntu_analysis_quality import WRITING_RUBRIC, SCRIPT_FIELDS
-from yuntu_analysis_inputs import READING_RULES, json_bytes, model_reading_view
+from yuntu_analysis_inputs import READING_RULES, json_bytes, model_reading_view, concise_reading_view
+from analysis_task_io import task_pages
+
+
+def _skeleton(schema):
+    """Only structural constants; null prose must be authored by the model."""
+    if 'const' in schema:
+        return copy.deepcopy(schema['const'])
+    if schema.get('type') == 'object':
+        return {key: _skeleton(schema.get('properties', {}).get(key, {})) for key in schema.get('required', [])}
+    if schema.get('type') == 'array':
+        if 'prefixItems' in schema:
+            return [_skeleton(item) for item in schema['prefixItems']]
+        return [_skeleton(schema.get('items', {})) for _ in range(schema.get('minItems', 0))]
+    return None
 
 
 def _binding(bundle):
@@ -71,7 +85,9 @@ def _part_schema(bundle, part):
 def _task(bundle, part):
     task = {"part": part["key"], "outputSchema": _part_schema(bundle, part),
             "factInput": next(x["path"] for x in bundle["manifest"]["units"] if x.get("unit") == part["unit"])}
-    task["scopedFacts"] = model_reading_view(bundle, part)
+    task["scopedFacts"] = concise_reading_view(model_reading_view(bundle, part))
+    task['outputSkeleton'] = _skeleton(task['outputSchema'])
+    task['writingBudget'] = '统一精简：总览100–150字，维度40–70字，脚本50–80字，唯一画面观察25–60字，素材核心判断80–120字；每组一条判断和一个方向。字数不作通过门槛。'
     task["readingRule"] = READING_RULES[part["unit"]]
     task["factInputRole"] = "canonical_source_for_audit; read scopedFacts first, do not reread the full unit by default"
     task["imageRoot"] = str(bundle["root"])
@@ -80,21 +96,29 @@ def _task(bundle, part):
     if part["key"] == "script" or "brand" in part:
         task["scope"] = part.get("brand", "所有指定品牌")
         task["evidenceFormat"] = "evidence 填本范围脚本文本或公式中的原文短语；material_ids 仅填本范围素材。正文缺失时 evidence=[]，明确数据不足以判断。"
+        task['requiredScriptTitles'] = ['一二级内容公式：', '脚本文案：']
+        task['scopeLimitationExample'] = '本批次样本尚不足以代表行业普遍规律。'
     if "materialId" in part:
         fact = next(x for x in facts["materialFacts"] if str(x["material_id"]) == part["materialId"])
         task["scriptEvidenceRefs"] = fact.get("evidenceIndex", {}).get("script", [])
         task["requiredFrameRefs"] = [x["frame_ref"] for x in fact.get("highlightFrames", []) if x.get("available")]
         task["scriptTextAvailable"] = bool(fact.get("script", {}).get("text", "").strip())
         task["scriptForbiddenClaimPattern"] = report.SCRIPT_ANALYSIS_FORBIDDEN_CLAIM.pattern
+        task['outputSkeleton']['frame_observations'] = [
+            {'frame_ref': ref, 'observation': None} for ref in task['requiredFrameRefs']]
     if part["key"] == "audience":
         scopes = facts["chapter02AiFacts"]
         task["scopes"] = {key: {"sampleCount": scopes[key].get("sampleCount"),
                                 "availability": scopes[key].get("availability"),
-                                "materialIds": [str(x["material_id"]) for x in scopes[key].get("topMaterials", [])]}
+                                "materialIds": task['scopedFacts']['chapter02AiFacts'][key].get('topMaterialIds',
+                                    [str(x["material_id"]) for x in scopes[key].get("topMaterials", [])])}
                           for key in scopes["scopeOrder"]}
     if part["key"] == "highlight":
         task["requiredFrameRefs"] = [x["frame_ref"] for x in report._overview_highlight_frames(facts)]
         task["classificationCoverage"] = "每套分类独立覆盖成功帧全集，每帧恰好一次；失败帧不分类。"
+        frame_schema = task['outputSchema']['properties']['highlightDashboard']['properties']['frameUnderstanding']['items']
+        task['outputSkeleton']['highlightDashboard']['frameUnderstanding'] = [
+            {**_skeleton(frame_schema), 'frame_ref': ref} for ref in task['requiredFrameRefs']]
         if facts.get("analysisQualityVersion", 0) >= 4:
             task["classificationRequirements"] = "必须同时输出 frameUnderstanding、standardClassification、batchClassification 和 brands。逐帧填写 standard_category 与 category_reason；标准组及各品牌组必须与逐帧分类一致。人物作为讲解或操作主体归 portrait；手部辅助展示且产品为主体归 product；其余归 other 并写清理由。本批次分类按实际画面主题独立分组，不能以省略字段代替 unavailable。"
     return task
@@ -122,9 +146,9 @@ def begin_workspace(manifest_path, workspace):
                              "scopedFactsBytes": 0, "taskFileBytes": 0,
                              "measurement": "UTF-8 bytes, not model tokens or elapsed model time"}
     for part in state["parts"]:
-        write_json_atomically({"binding": state["binding"], "content": None,
-                               "viewedFrameRefs": []}, workspace / part["path"])
         task = _task(bundle, part)
+        write_json_atomically({"binding": state["binding"], "content": task['outputSkeleton'],
+                               "viewedFrameRefs": []}, workspace / part["path"])
         task_path = workspace / f"{part['key']}.task.json"
         write_json_atomically(task, task_path, indent=None)
         state["taskInputs"].append(file_record(task_path, workspace))
@@ -132,6 +156,20 @@ def begin_workspace(manifest_path, workspace):
         state["inputMetrics"]["taskFileBytes"] += task_path.stat().st_size
     write_json_atomically(state, state_path)
     return state
+
+
+def read_task(workspace, part_key, page=0):
+    state, bundle = _load_workspace(workspace)
+    part = next((part for part in state['parts'] if part['key'] == part_key), None)
+    if part is None:
+        raise AnalysisBundleError('unknown draft part')
+    # Persisted task is hash-verified by _load_workspace. Do not silently replace it.
+    task = read_json(Path(workspace) / f'{part_key}.task.json') if 'readingViewVersion' in state else _task(bundle, part)
+    pages = task_pages(task)
+    if type(page) is not int or not 0 <= page < len(pages):
+        raise AnalysisBundleError('analysis page is out of range')
+    return {'part': part_key, 'binding': state['binding'], 'page': page, 'pageCount': len(pages),
+            'nextPage': page + 1 if page + 1 < len(pages) else None, 'records': pages[page]}
 
 
 def _load_workspace(workspace):

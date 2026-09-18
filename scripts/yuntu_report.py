@@ -139,8 +139,8 @@ SCRIPT_INSIGHT_FORBIDDEN_CLAIM = re.compile(
 # Other claims in the same paragraph must still pass the existing gate.
 SCRIPT_SCOPE_LIMITATION = re.compile(
     r"(?:^|[，。；！？\n])(?:当前|本批次)?(?:样本|数据|证据|覆盖)?"
-    r"(?:不足以支持|不能代表|不能外推为|无法推断)"
-    r"(?:行业普遍(?:结论|规律)|行业规律)(?=$|[，。；！？\n])"
+    r"(?:尚)?(?:不足以支持|不足以代表|不能代表|不能外推为|无法推断|不能据此推断)"
+    r"(?:行业普遍(?:结论|规律)|行业规律|因果关系)(?=$|[，。；！？\n])"
 )
 SCRIPT_ANALYSIS_FORBIDDEN_CLAIM = re.compile(
     r"标题|画面|高光帧|秒级|曝光(?:量|次数|指数)?|"
@@ -233,6 +233,7 @@ def _validate_script_insights(analysis, fact_pack):
             for item in fact_pack.get("selectedMaterials", [])
             if isinstance(item, dict) and str(item.get("material_id") or "").isdigit()
         }
+    errors = []
     for index, item in enumerate(insights, start=1):
         field = f"script insight {index}"
         if not isinstance(item, dict):
@@ -265,17 +266,20 @@ def _validate_script_insights(analysis, fact_pack):
                 source_parts.extend([str(material.get("script_text") or ""), json.dumps(labels, ensure_ascii=False), json.dumps(script_source.get("detail", {}), ensure_ascii=False)])
             source_text = "\n".join(source_parts)
             if any(not isinstance(e, str) or not e.strip() or e not in source_text for e in evidence):
-                raise YuntuReportError(f"{field}.evidence must quote the cited materials' script or formula facts")
+                errors.append(f"{field}.evidence must quote the cited materials' script or formula facts")
         claim_text = SCRIPT_SCOPE_LIMITATION.sub("", item["summary"])
         unsupported = SCRIPT_INSIGHT_FORBIDDEN_CLAIM.search(claim_text)
         if unsupported:
-            raise YuntuReportError(
+            errors.append(
                 f"{field}.summary contains unsupported claim: {unsupported.group(0)}"
             )
         if strict_script_contract:
             expected_prefix = "一二级内容公式：" if index == 1 else "脚本文案："
             if not item["title"].startswith(expected_prefix):
-                raise YuntuReportError(f"{field}.title must start with {expected_prefix}")
+                errors.append(f"{field}.title must start with {expected_prefix}")
+
+    if errors:
+        raise YuntuReportError('\n'.join(errors))
 
     if strict_script_contract:
         _validate_keyword_cloud_analysis(analysis, facts)

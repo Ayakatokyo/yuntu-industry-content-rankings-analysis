@@ -547,6 +547,10 @@ def _parser():
     check_parser = commands.add_parser("check-analysis", help="Check drafts without attestation or rendering")
     check_parser.add_argument("--workspace", required=True)
     check_parser.add_argument("--part", action="append", help="Check this chapter or material key; repeat to check a group with one input verification")
+    read_parser = commands.add_parser('read-analysis', help='Read a bounded task page with facts and output skeleton')
+    read_parser.add_argument('--workspace', required=True)
+    read_parser.add_argument('--part', required=True)
+    read_parser.add_argument('--page', type=int, default=0)
     assemble_parser = commands.add_parser("assemble-analysis", help="Losslessly assemble checked model drafts")
     assemble_parser.add_argument("--workspace", required=True)
     assemble_parser.add_argument("--output", required=True)
@@ -699,13 +703,15 @@ def main(argv=None):
                 raise RpaConnectorError(str(exc)) from exc
             print(receipt)
             return 0
-        if args.command in {"begin-analysis", "check-analysis", "assemble-analysis"}:
-            from yuntu_analysis_workspace import begin_workspace, check_workspace, assemble_workspace
+        if args.command in {"begin-analysis", "check-analysis", "assemble-analysis", "read-analysis"}:
+            from yuntu_analysis_workspace import begin_workspace, check_workspace, assemble_workspace, read_task
             try:
                 if args.command == "begin-analysis":
                     result = begin_workspace(args.fact_pack_json, args.workspace)
                 elif args.command == "check-analysis":
                     result = check_workspace(args.workspace, args.part)
+                elif args.command == 'read-analysis':
+                    result = read_task(args.workspace, args.part, args.page)
                 else:
                     result = {"analysisJson": str(assemble_workspace(args.workspace, args.output))}
             except (ValueError, OSError) as exc:

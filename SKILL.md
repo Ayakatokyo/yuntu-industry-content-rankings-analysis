@@ -17,6 +17,8 @@ metadata:
 
 # 云图行业素材全景分析
 
+统一精简分析，不设详细档位或切换参数。建议总览100–150字、经营/人群维度40–70字、两类脚本洞察每条50–80字、每张唯一画面观察25–60字、单素材核心结论80–120字；每个分类组默认一条共性判断和一个可测试方向。字数是表达预算，不是必须达到的门槛；保留事实、范围、引用及必要字段，不补字、不重复解释。
+
 ## 已落盘数据续跑
 
 用户要求“用已落盘数据继续分析/重新生成报告”时直接进入本节；采集参数从原批次 manifest 读取，不重新索要账号凭证或启动 `fetch`。只有本地数据不足且用户明确要求补采时，才进入采集流程。
@@ -78,7 +80,7 @@ python <skill-root>/scripts/rpa_connector.py status --output-dir "云图数据�
 
 分析阶段只读 `normalized/` 与 `diagnostic-analysis/`，不读原始 CSV、RPA response 或临时 `fileUrl`。先运行 `prepare-analysis`；新批次不再生成 `yuntu-analysis-data.json`，生成 `report-data.json`、`diagnostic-analysis/yuntu-ai-analysis.schema.json`、`diagnostic-analysis/yuntu-analysis-prompt.md` 和五个章节事实包。历史批次缺少 `report-data.json` 时兼容渲染已有 `yuntu-analysis-data.json`；旧版完整 JSON 的额外字段忽略。渲染产物还包括 `final-report.md`。
 
-当前对话模型直接完成一次分析任务：先读 manifest 和提示词一次，运行 `begin-analysis` 创建独立工作目录，再按同名 `*.task.json` 的 scopedFacts、当前范围、引用清单和 Schema 填写 `*.json` 的 `content`。新任务内的事实视图已按章节、品牌、素材准备，不要求再全文读取五包、完整 Schema 或脚本；factInput 留作必要溯源。实际查看全部可用本地 JPEG，按素材同次完成第四章逐帧理解和第五章观察，再完成整批分类；第四章的 `viewedFrameRefs` 只记录实际查看过的成功 JPEG。四个章节草稿、第三章各品牌草稿及每个素材的草稿分别检查、保存和恢复，具体操作见 [分析草稿入口](references/analysis-drafts.md)。新批次 manifest 的 `analysisContract` 绑定五包、Schema、提示词、渲染事实和成功资产；恢复时由命令自动核对，变更后另建工作目录。`single_model_call` 保留为既有契约标识，不限制当前任务的读取或保存次数。
+当前对话模型直接完成一次分析任务：先读 manifest 和提示词一次，运行 `begin-analysis` 创建独立工作目录，再用 `read-analysis --workspace <目录> --part <key> --page 0` 读取任务页，按 scopedFacts、outputSkeleton、当前范围及引用清单填写 `*.json` 的 `content`。新任务内的事实视图已按章节、品牌、素材准备，不要求再全文读取五包、完整 Schema 或脚本；factInput 留作必要溯源。实际查看全部可用本地 JPEG，按素材同次完成第四章逐帧理解和第五章观察，再完成整批分类；第四章的 `viewedFrameRefs` 只记录实际查看过的成功 JPEG。四个章节草稿、第三章各品牌草稿及每个素材的草稿分别检查、保存和恢复，具体操作见 [分析草稿入口](references/analysis-drafts.md)。新批次 manifest 的 `analysisContract` 绑定五包、Schema、提示词、渲染事实和成功资产；恢复时由命令自动核对，变更后另建工作目录。`single_model_call` 保留为既有契约标识，不限制当前任务的读取或保存次数。
 
 草稿写完立即保存，每完成一组相关草稿，用可重复的 `--part <key1> --part <key2>` 一次检查；单份报错只修受影响草稿。全部完成后直接运行 `assemble-analysis`，其内部完整检查通过才会组装，无需紧邻组装前再做一次全量检查。组装器只合并模型已写出的 JSON，保留按哈希命名的原始草稿快照和 assembly 收据，不生成、补齐或改写业务结论。新契约的 attest 必须验证草稿到最终 JSON 的无损对应。禁止程序化兜底，禁止新建承载业务结论的 Python/JS 生成脚本（包括沿用历史 `build_current_ai_analysis.py`），禁止 `codex exec`、子进程或外部模型服务调用模型。不得仅凭 `--generator` 认定模型；它和草稿来源都是调用者声明，哈希与收据不能证明模型身份、实际看图或业务判断正确。脚本和生成的提示词是 schema 权威，只生成当前报告实际展示的分析模块；固定规则负责统计，当前模型负责判断。
 
@@ -98,6 +100,6 @@ python <skill-root>/scripts/rpa_connector.py render-report --analysis-json ".../
 
 优化效果按 workspace.json 的 inputMetrics 与 validation.json 的 timingsSeconds 核对：字节量衡量模型读取体积，本地耗时衡量校验开销；实际模型耗时还需从执行日志单独计时，不用字节缩减率代替提速率。
 
-新分析同时执行 `analysisQualityVersion=4` 的范围与证据契约：02、03 必须引用当前 scope 的事实，04 每个非空标准分类组根据证据充分度输出 1–3 条共性结论与一一对应的裂变方向。模型须核对具体观察、业务含义、建议与验证边界，禁止重复凑字；校验器不以字数或句数判定正文质量。03 和 04 必须覆盖全部指定品牌，缺失品牌保留入口并明确数据不足。品牌脚本在 `script-brand-<index>.json` 独立撰写；只引用同品牌原文。
+新分析同时执行 `analysisQualityVersion=4` 的范围与证据契约：02、03 必须引用当前 scope 的事实，04 每个非空标准分类组默认输出一条共性结论与一个对应的裂变方向（结构兼容1–3条）。模型须核对具体观察、业务含义、建议与验证边界，禁止重复凑字；校验器不以字数或句数判定正文质量。03 和 04 必须覆盖全部指定品牌，缺失品牌保留入口并明确数据不足。品牌脚本在 `script-brand-<index>.json` 独立撰写；只引用同品牌原文。
 
 有成功帧时，04 的逐帧理解、标准分类、本批次分类均为必填。逐帧记录 standard_category 与 category_reason，标准分类及各品牌分类必须与其一致；本批次确实无法分组时填写 unavailable 和具体原因，不得省略整个字段。

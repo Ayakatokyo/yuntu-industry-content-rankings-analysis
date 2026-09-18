@@ -956,17 +956,12 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertNotIn("3 条共性洞察 + 3 条裂变方向", prompt)
         self.assertIn("历史 JSON 即使携带", prompt)
 
-    def test_highlight_prompt_requires_fine_grained_batch_taxonomy(self):
+    def test_highlight_prompt_requires_evidence_based_batch_taxonomy(self):
         analysis = load_module()
 
         prompt = analysis._prompt_text(filters={"brands": ["燕之屋"]})
 
-        self.assertIn("n≤3", prompt)
-        self.assertIn("2–3 类", prompt)
-        self.assertIn("4≤n≤7", prompt)
-        self.assertIn("3–6 类", prompt)
-        self.assertIn("n≥8", prompt)
-        self.assertIn("6–10 类", prompt)
+        self.assertIn("2–4", prompt)
         self.assertIn("其他1/其他2", prompt)
         self.assertIn("主体、动作或信息机制", prompt)
         self.assertIn("至少两个有意义类别", prompt)
@@ -1367,10 +1362,6 @@ class YuntuAnalysisTests(unittest.TestCase):
         )
         self.assertIn("不进入用户可见正文", prompt)
         self.assertIn("不得写执行过程", prompt)
-        self.assertIn("事实锚点 -> 业务判断 -> 形成原因/内容机制 -> 内容策略 -> 下一步验证", prompt)
-        self.assertIn("少量关键事实锚点 + 多句分析判断", prompt)
-        self.assertIn("为什么值得保留或改写", prompt)
-        self.assertIn("下一步如何验证", prompt)
         self.assertIn("本次品牌榜单分析范围为行业 TOP1000 内按品牌匹配的全部素材", prompt)
         self.assertIn("chapter02AiFacts", prompt)
         self.assertIn("audienceSummary", prompt)
@@ -1380,8 +1371,6 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertNotIn("至少 4 句", prompt)
         self.assertIn("不以句数或字数作为通过门槛", prompt)
         self.assertIn("每个品牌对象及 `allBrandsConclusion` 都必须分别输出 `dataSummary` 与 `hotMaterialInsight`", prompt)
-        self.assertIn("为什么形成这种表现", prompt)
-        self.assertIn("如何转化为内容策略", prompt)
         self.assertNotIn("渲染层会自动添加“1. ”、“2. ”等编号", prompt)
         self.assertIn("总结性标题", prompt)
         self.assertIn("标点", prompt)

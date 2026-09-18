@@ -1,4 +1,4 @@
 interface:
-  display_name: "云图行业素材诊断"
+  display_name: "云图行业素材全景分析"
   short_description: "获取榜单列表及入选素材的秒级详情"
-  default_prompt: "使用 $云图行业素材诊断，获取带筛选条件的云图榜单列表及其 TOP 素材的秒级详情。"
+  default_prompt: "使用 $云图行业素材全景分析，获取带筛选条件的云图榜单列表及其 TOP 素材的秒级详情。"

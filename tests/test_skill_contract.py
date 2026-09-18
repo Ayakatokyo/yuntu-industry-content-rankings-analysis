@@ -24,7 +24,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
 
         self.assertIsNotNone(frontmatter)
         self.assertIn(
-            "name: 云图行业素材诊断", frontmatter.group(1)
+            "name: 云图行业素材全景分析", frontmatter.group(1)
         )
         description = re.search(r"^description: (.+)$", frontmatter.group(1), re.MULTILINE)
         self.assertIsNotNone(description)
@@ -37,7 +37,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
 
         self.assertIsNotNone(frontmatter)
         self.assertRegex(frontmatter.group(1), r"(?m)^argument_hint: .+时间范围")
-        self.assertIn("生成云图行业素材诊断报告", frontmatter.group(1))
+        self.assertIn("生成云图行业素材全景分析报告", frontmatter.group(1))
         self.assertRegex(frontmatter.group(1), r"(?m)^  pre_input: \|")
         for phrase in (
             "近七天",
@@ -353,7 +353,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertRegex(metadata, r'(?m)^  display_name: "[^"\n]+"\s*$')
         self.assertRegex(metadata, r'(?m)^  short_description: "[^"\n]+"\s*$')
         self.assertIn(
-            "$云图行业素材诊断",
+            "$云图行业素材全景分析",
             metadata,
         )
 

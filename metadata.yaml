@@ -15,8 +15,8 @@ requires:
     - YUCE_SESSION_ID
     - YCSESSIONID
 market:
-  title: "云图行业素材诊断"
-  summary: "按行业、分析周期、榜单口径、品牌和人群筛选云图内容，获取素材秒级详情并生成内容策略分析报告。"
+  title: "云图行业素材全景分析"
+  summary: "按行业、分析周期、榜单口径、品牌和人群筛选云图内容，获取素材秒级详情并生成全景内容策略分析报告。"
   category:
     key: short_video_content
     label: 短视频内容

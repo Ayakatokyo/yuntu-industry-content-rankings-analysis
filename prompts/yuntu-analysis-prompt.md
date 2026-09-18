@@ -1,4 +1,4 @@
-# 云图行业素材诊断任务
+# 云图行业素材全景分析任务
 
 由当前对话模型在同一次分析任务中生成 `yuntu-ai-analysis.json`。先读同目录的 `analysis-units/analysis-unit-manifest.json` 与本提示词一次，再由 begin-analysis 创建各部分任务。新任务的 `scopedFacts` 是从五包确定性投影的本部分事实，`outputSchema` 是本部分输出约束；优先只读对应 `*.task.json`，无需再全文读取五包、完整 Schema 或脚本源码。旧任务没有 scopedFacts 时才读取对应章节事实包。最终 JSON 必须严格符合统一输出 Schema；不要读取 `yuntu-analysis-data.json` 或 `report-data.json` 作为模型证据。
 

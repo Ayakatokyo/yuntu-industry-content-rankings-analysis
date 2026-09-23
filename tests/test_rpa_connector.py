@@ -94,10 +94,17 @@ class RpaConnectorTest(unittest.TestCase):
             "outParamList": [],
         }
 
+    def authorized_shop_response(self, shop_id="shop-42"):
+        return FakeResponse({
+            "success": True,
+            "data": [{"platform": "YUNTU_DYNAMIC_PLATFORM", "accountId": shop_id}],
+        })
+
     def completed_task_session(self, task_group_id, connector_code, params=()):
         return SequencedSession(
             [
                 FakeResponse({"success": True, "data": [self.connector_detail(connector_code, params)]}),
+                self.authorized_shop_response(),
                 FakeResponse({"success": True, "data": {"task_group_id": task_group_id}}),
                 FakeResponse({"success": True, "data": {"status": "completed", "payload": []}}),
             ]
@@ -319,6 +326,7 @@ class RpaConnectorTest(unittest.TestCase):
                     "rpa.conn.juliang.yt.industry.content.rankings.details",
                     ("material_id", "date_type"),
                 )]}),
+                self.authorized_shop_response(),
                 FakeResponse({"success": True, "data": {"task_group_id": "task-123"}}),
                 FakeResponse({"success": True, "data": {"status": "completed", "files": []}}),
             ]
@@ -334,7 +342,15 @@ class RpaConnectorTest(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["task_group_id"], "task-123")
         self.assertEqual(sleep.call_args.args, (10,))
-        submit_url, submit_options = session.posts[1]
+        self.assertEqual(
+            session.posts[1][0],
+            "https://gateway.example/adg/v1/agent/rpa/authorizations/query",
+        )
+        self.assertEqual(
+            session.posts[1][1]["json"],
+            {"authorization": "authorization-token", "platform": "YUNTU_DYNAMIC_PLATFORM"},
+        )
+        submit_url, submit_options = session.posts[2]
         self.assertEqual(submit_url, "https://gateway.example/adg/v1/agent/fetch/tasks")
         self.assertEqual(
             submit_options["json"],
@@ -349,11 +365,11 @@ class RpaConnectorTest(unittest.TestCase):
             },
         )
         self.assertEqual(
-            session.posts[2][0],
+            session.posts[3][0],
             "https://gateway.example/adg/v1/agent/fetch/tasks/status",
         )
         self.assertEqual(
-            session.posts[2][1]["json"],
+            session.posts[3][1]["json"],
             {"authorization": "authorization-token", "task_group_id": "task-123"},
         )
 
@@ -434,8 +450,12 @@ class RpaConnectorTest(unittest.TestCase):
             (list_session, connector.LIST_CONNECTOR_CODE, {"industry": "食品饮料"}),
             (detail_session, connector.DETAIL_CONNECTOR_CODE, {"material_id": "764", "date_type": "LAST_7_DAYS"}),
         ):
-            self.assertEqual(len(session.posts), 3)
-            url, options = session.posts[1]
+            self.assertEqual(len(session.posts), 4)
+            self.assertEqual(
+                session.posts[1][0],
+                "https://gateway.example/adg/v1/agent/rpa/authorizations/query",
+            )
+            url, options = session.posts[2]
             self.assertEqual(url, "https://gateway.example/adg/v1/agent/fetch/tasks")
             self.assertEqual(
                 options,
@@ -455,7 +475,7 @@ class RpaConnectorTest(unittest.TestCase):
                 },
             )
             self.assertEqual(
-                session.posts[2][0],
+                session.posts[3][0],
                 "https://gateway.example/adg/v1/agent/fetch/tasks/status",
             )
 

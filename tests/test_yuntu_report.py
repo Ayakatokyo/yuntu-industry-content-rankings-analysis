@@ -3478,8 +3478,8 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn(".second-level-section {", css)
         self.assertIn("border-top: 0;", css)
         self.assertIn("padding-top: 0;", css)
-        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));", css)
-        self.assertIn("grid-auto-rows: minmax(54px, 1fr);", css)
+        self.assertIn(".unified-yuntu .keyword-cloud-words", css)
+        self.assertIn("flex-wrap: wrap;", css)
 
     def test_shared_style_keeps_audience_drill_height_and_compacts_pies(self):
         css = (ROOT / "assets" / "report" / "unified-report.css").read_text(

@@ -90,6 +90,10 @@ class DynamicRpaRefactorTest(unittest.TestCase):
         code = "rpa.conn.juliang.yt.industry.content.rankings.list"
         session = SequencedSession(
             {"success": True, "data": [connector_detail(code)]},
+            {
+                "success": True,
+                "data": [{"platform": "YUNTU_DYNAMIC_PLATFORM", "accountId": "shop-42"}],
+            },
             {"success": True, "data": {"task_group_id": "task-1"}},
             {"success": True, "data": {"status": "completed", "files": []}},
         )
@@ -105,11 +109,16 @@ class DynamicRpaRefactorTest(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(
             [url.rsplit("/", 1)[-1] for url, _options in session.posts],
-            ["listByConnectorCode", "tasks", "status"],
+            ["listByConnectorCode", "query", "tasks", "status"],
         )
         detail_payload = session.posts[0][1]["json"]
         self.assertEqual(detail_payload, {"connectorCode": code})
-        submit_payload = session.posts[1][1]["json"]
+        auth_payload = session.posts[1][1]["json"]
+        self.assertEqual(
+            auth_payload,
+            {"authorization": "authorization-token", "platform": "YUNTU_DYNAMIC_PLATFORM"},
+        )
+        submit_payload = session.posts[2][1]["json"]
         self.assertEqual(submit_payload["platform"], "YUNTU_DYNAMIC_PLATFORM")
         self.assertEqual(submit_payload["function_code"], code)
         self.assertEqual(submit_payload["business_params"], {"industry": "食品饮料"})

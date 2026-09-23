@@ -12,12 +12,12 @@
   <main class="page">
     <header class="report-cover"><div class="hero-copy"><h1>云图 TOP 素材池商业诊断报告</h1><p class="subtitle">$subtitle</p></div></header>
     <div class="report-shell">
-      <nav class="report-nav" aria-label="报告目录"><small>报告目录</small><a href="#top-material-combination" aria-current="location">01｜TOP 素材组合结论</a><a href="#audience-insights">02｜人群及营销卖点洞察</a><a href="#script-insights">03｜脚本洞察</a><a href="#highlight-insights">04｜高光画面洞察</a><a href="#material-deep-dive">05｜单素材深度分析</a></nav>
+      <nav class="report-nav" aria-label="报告目录"><small>报告目录</small><a href="#top-material-combination" aria-current="location">01｜素材榜单数据洞察</a><a href="#audience-insights">02｜人群及营销卖点洞察</a><a href="#script-insights">03｜脚本洞察</a><a href="#highlight-insights">04｜高光画面洞察</a><a href="#material-deep-dive">05｜单素材深度分析</a></nav>
       <div class="report-content" id="report-content">
-        <section class="section" id="top-material-combination"><header class="section-header"><h2>01｜TOP 素材组合结论</h2>$top_material_scope</header>$top_material_combination</section>
+        <section class="section" id="top-material-combination"><header class="section-header"><h2>01｜素材榜单数据洞察</h2>$top_material_scope</header>$top_material_combination</section>
         $audience_insights
         <section class="section" id="script-insights"><header class="section-header"><h2>03｜脚本洞察</h2></header>$script_insights</section>
-        <section class="section" id="highlight-insights"><header class="section-header"><h2>04｜高光画面洞察</h2>$highlight_scope</header>$highlight_insights</section>
+        <section class="section" id="highlight-insights"><header class="section-header highlight-section-header"><div class="section-heading"><h2>04｜高光画面洞察</h2>$highlight_scope</div>$highlight_export</header>$highlight_insights</section>
         <section class="section" id="material-deep-dive"><header class="section-header"><h2>05｜单素材深度分析</h2>$material_deep_dive_scope</header>$material_deep_dive</section>
       </div>
     </div>
@@ -146,6 +146,13 @@
           candidate.tabIndex = selected ? 0 : -1;
           if (panel) panel.hidden = !selected;
         }
+        document.querySelectorAll('.script-evidence-highlight.is-evidence-active').forEach(function (item) {
+          item.classList.remove('is-evidence-active');
+          item.setAttribute('aria-pressed', 'false');
+        });
+        document.querySelectorAll('[data-script-formula][aria-pressed="true"]').forEach(function (item) {
+          item.setAttribute('aria-pressed', 'false');
+        });
         if (focus) tab.focus();
       }
       for (var materialIndex = 0; materialIndex < materialTabs.length; materialIndex += 1) {
@@ -180,6 +187,8 @@
         });
       });
 
+      var highlightBrandTabs = document.querySelectorAll('[data-highlight-brand-tab]');
+      var highlightClassificationTabs = document.querySelectorAll('[data-highlight-classification-tab]');
       var highlightTabs = document.querySelectorAll('[data-highlight-category-tab]');
       function paginateHighlightPanel(panel, nextPage) {
         if (!panel) return;
@@ -209,8 +218,10 @@
         if (next) next.disabled = currentPage >= pageCount;
       }
       function activateHighlightCategory(tab, focus) {
-        for (var highlightIndex = 0; highlightIndex < highlightTabs.length; highlightIndex += 1) {
-          var candidate = highlightTabs[highlightIndex];
+        var owner = tab.closest('[data-highlight-classification-panel]') || tab.closest('[data-highlight-brand-panel]');
+        var scopedTabs = owner ? owner.querySelectorAll('[data-highlight-category-tab]') : highlightTabs;
+        for (var highlightIndex = 0; highlightIndex < scopedTabs.length; highlightIndex += 1) {
+          var candidate = scopedTabs[highlightIndex];
           var selected = candidate === tab;
           var panel = document.getElementById(candidate.getAttribute('data-highlight-category-target'));
           candidate.setAttribute('aria-selected', selected ? 'true' : 'false');
@@ -227,11 +238,86 @@
             var direction = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
             if (event.key === 'Home' || event.key === 'End' || direction[event.key]) {
               event.preventDefault();
-              var next = event.key === 'Home' ? 0 : event.key === 'End' ? highlightTabs.length - 1 : (tabIndex + direction[event.key] + highlightTabs.length) % highlightTabs.length;
-              activateHighlightCategory(highlightTabs[next], true);
+              var owner = tab.closest('[data-highlight-classification-panel]') || tab.closest('[data-highlight-brand-panel]');
+              var scopedTabs = owner ? owner.querySelectorAll('[data-highlight-category-tab]') : highlightTabs;
+              var localIndex = Array.prototype.indexOf.call(scopedTabs, tab);
+              var next = event.key === 'Home' ? 0 : event.key === 'End' ? scopedTabs.length - 1 : (localIndex + direction[event.key] + scopedTabs.length) % scopedTabs.length;
+              activateHighlightCategory(scopedTabs[next], true);
             }
           });
         }(highlightTabs[highlightIndex], highlightIndex));
+      }
+      function activateHighlightClassification(tab, focus) {
+        var owner = tab.closest('[data-highlight-brand-panel]');
+        var scopedTabs = owner ? owner.querySelectorAll('[data-highlight-classification-tab]') : highlightClassificationTabs;
+        for (var classificationIndex = 0; classificationIndex < scopedTabs.length; classificationIndex += 1) {
+          var candidate = scopedTabs[classificationIndex];
+          var selected = candidate === tab;
+          var panel = document.getElementById(candidate.getAttribute('data-highlight-classification-target'));
+          candidate.setAttribute('aria-selected', selected ? 'true' : 'false');
+          candidate.tabIndex = selected ? 0 : -1;
+          if (panel) {
+            panel.hidden = !selected;
+            if (selected) {
+              var firstCategory = panel.querySelector('[data-highlight-category-tab][aria-selected="true"]') || panel.querySelector('[data-highlight-category-tab]');
+              if (firstCategory) activateHighlightCategory(firstCategory, false);
+            }
+          }
+        }
+        if (focus) tab.focus();
+      }
+      for (var classificationIndex = 0; classificationIndex < highlightClassificationTabs.length; classificationIndex += 1) {
+        (function (tab, tabIndex) {
+          tab.addEventListener('click', function () {
+            if (!tab.disabled) activateHighlightClassification(tab, false);
+          });
+          tab.addEventListener('keydown', function (event) {
+            var direction = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+            if (event.key === 'Home' || event.key === 'End' || direction[event.key]) {
+              event.preventDefault();
+              var owner = tab.closest('[data-highlight-brand-panel]');
+              var scopedTabs = owner ? owner.querySelectorAll('[data-highlight-classification-tab]:not([disabled])') : highlightClassificationTabs;
+              if (!scopedTabs.length) return;
+              var localIndex = Array.prototype.indexOf.call(scopedTabs, tab);
+              var next = event.key === 'Home' ? 0 : event.key === 'End' ? scopedTabs.length - 1 : (localIndex + direction[event.key] + scopedTabs.length) % scopedTabs.length;
+              activateHighlightClassification(scopedTabs[next], true);
+            }
+          });
+        }(highlightClassificationTabs[classificationIndex], classificationIndex));
+      }
+      function activateHighlightBrand(tab, focus) {
+        for (var brandIndex = 0; brandIndex < highlightBrandTabs.length; brandIndex += 1) {
+          var candidate = highlightBrandTabs[brandIndex];
+          var selected = candidate === tab;
+          var panel = document.getElementById(candidate.getAttribute('data-highlight-brand-target'));
+          candidate.setAttribute('aria-selected', selected ? 'true' : 'false');
+          candidate.tabIndex = selected ? 0 : -1;
+          if (panel) {
+            panel.hidden = !selected;
+            if (selected) {
+              var firstClassification = panel.querySelector('[data-highlight-classification-tab]:not([disabled])');
+              if (firstClassification) activateHighlightClassification(firstClassification, false);
+              else {
+                var firstCategory = panel.querySelector('[data-highlight-category-tab]');
+                if (firstCategory) activateHighlightCategory(firstCategory, false);
+              }
+            }
+          }
+        }
+        if (focus) tab.focus();
+      }
+      for (var brandIndex = 0; brandIndex < highlightBrandTabs.length; brandIndex += 1) {
+        (function (tab, tabIndex) {
+          tab.addEventListener('click', function () { activateHighlightBrand(tab, false); });
+          tab.addEventListener('keydown', function (event) {
+            var direction = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+            if (event.key === 'Home' || event.key === 'End' || direction[event.key]) {
+              event.preventDefault();
+              var next = event.key === 'Home' ? 0 : event.key === 'End' ? highlightBrandTabs.length - 1 : (tabIndex + direction[event.key] + highlightBrandTabs.length) % highlightBrandTabs.length;
+              activateHighlightBrand(highlightBrandTabs[next], true);
+            }
+          });
+        }(highlightBrandTabs[brandIndex], brandIndex));
       }
       document.querySelectorAll('[data-highlight-pagination]').forEach(function (pagination) {
         pagination.addEventListener('click', function (event) {
@@ -259,6 +345,40 @@
         sync(button.getAttribute('aria-expanded') !== 'false');
         button.addEventListener('click', function () {
           sync(button.getAttribute('aria-expanded') !== 'true');
+        });
+      });
+
+      function copyScriptValue(button, value) {
+        var copyValue = String(value || '');
+        if (!copyValue) return;
+        var defaultLabel = button.getAttribute('data-copy-label') || button.textContent || '复制';
+        button.setAttribute('data-copy-label', defaultLabel);
+        function showStatus(label) {
+          button.textContent = label;
+          window.clearTimeout(button._copyStatusTimer);
+          button._copyStatusTimer = window.setTimeout(function () { button.textContent = defaultLabel; }, 1400);
+        }
+        function fallbackCopy() {
+          var textarea = document.createElement('textarea');
+          textarea.value = copyValue;
+          textarea.setAttribute('readonly', '');
+          textarea.style.position = 'fixed';
+          textarea.style.left = '-9999px';
+          document.body.append(textarea);
+          textarea.select();
+          try { showStatus(document.execCommand('copy') ? '已复制' : '复制失败'); }
+          catch (error) { showStatus('复制失败'); }
+          finally { textarea.remove(); }
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(copyValue).then(function () { showStatus('已复制'); }).catch(fallbackCopy);
+        } else {
+          fallbackCopy();
+        }
+      }
+      document.querySelectorAll('[data-script-copy]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          copyScriptValue(button, button.getAttribute('data-script-copy'));
         });
       });
 
@@ -375,6 +495,18 @@
           return article;
         }
 
+        function formatExposure(record) {
+          var exposure = record && record.exposure;
+          if (typeof exposure === 'string' && exposure.trim()) return exposure.trim();
+          if (exposure && typeof exposure === 'object') {
+            if (typeof exposure.raw === 'string' && exposure.raw.trim()) return exposure.raw.trim();
+            var minimum = Number(exposure.min);
+            var maximum = Number(exposure.max);
+            if (Number.isFinite(minimum) && Number.isFinite(maximum)) return minimum + '-' + maximum;
+          }
+          return '未提供';
+        }
+
         function renderAudiencePreferencePanel(groupName, selectedRecords) {
           var panel = document.createElement('aside');
           panel.className = 'audience-drill-panel';
@@ -400,6 +532,9 @@
             var rank = document.createElement('span');
             rank.className = 'preference-rank';
             rank.textContent = 'TOP ' + (index + 1);
+            var exposure = document.createElement('span');
+            exposure.className = 'preference-exposure';
+            exposure.textContent = '曝光量：' + formatExposure(record);
             var button = document.createElement('button');
             button.className = 'material-link';
             button.type = 'button';
@@ -408,7 +543,7 @@
             button.addEventListener('click', function () {
               activateMaterialById(record.material_id);
             });
-            row.append(rank, button);
+            row.append(rank, exposure, button);
             list.append(row);
           });
           if (!materials.length) {
@@ -428,8 +563,13 @@
           if (!dimension.buckets.length) return emptyChart(title);
           var article = document.createElement('article');
           article.className = 'chart-card audience-chart audience-chart-crowd column-chart-card';
+          var titleRow = document.createElement('div');
+          titleRow.className = 'section-title-row';
           var heading = document.createElement('h3');
           heading.textContent = title + '分布';
+          var hint = document.createElement('p');
+          hint.className = 'chart-interaction-hint audience-crowd-hint';
+          hint.textContent = '点击柱状图查看对应人群 TOP3 素材';
           var chart = document.createElement('div');
           chart.className = 'script-dashboard-overview';
           var columnChart = document.createElement('div');
@@ -449,9 +589,6 @@
           var plot = document.createElement('div');
           plot.className = 'audience-column-plot';
           plot.style.gridTemplateColumns = 'repeat(' + dimension.buckets.length + ',minmax(0,1fr))';
-          var hint = document.createElement('p');
-          hint.className = 'audience-crowd-hint';
-          hint.textContent = '点击柱状图查看对应人群 TOP3 素材';
 
           dimension.buckets.forEach(function (bucket, index) {
             var item = document.createElement('div');
@@ -484,8 +621,9 @@
             plot.append(item);
           });
           columnChart.append(axis, plot);
-          chart.append(hint, columnChart);
-          article.append(heading, chart);
+          titleRow.append(heading, hint);
+          chart.append(columnChart);
+          article.append(titleRow, chart);
           return article;
         }
 
@@ -612,11 +750,13 @@
             renderAudiencePieChart('age', '年龄', computeAudienceDimension(selected, ageLabels)),
             renderAudiencePieChart('gender', '性别', computeAudienceDimension(selected, genderLabels))
           );
+          dashboard.dispatchEvent(new CustomEvent('audience-topn-change', { detail: { records: selected } }));
         }
 
         if (range) range.addEventListener('input', function () { renderAudienceTopN(range.value); });
         if (input) input.addEventListener('change', function () { renderAudienceTopN(input.value); });
         if (input) input.addEventListener('input', function () {
+          if (input.value.trim() === '') return;
           var value = Number(input.value);
           if (Number.isFinite(value)) renderAudienceTopN(value);
         });
@@ -624,22 +764,69 @@
       });
 
       document.querySelectorAll('[data-marketing-categories]').forEach(function (dashboard) {
-        var categories;
+        var initialCategories;
         try {
-          categories = JSON.parse(dashboard.getAttribute('data-marketing-categories') || '[]');
+          initialCategories = JSON.parse(dashboard.getAttribute('data-marketing-categories') || '[]');
         } catch (error) {
-          categories = [];
+          initialCategories = [];
         }
-        if (!Array.isArray(categories) || !categories.length) return;
+        if (!Array.isArray(initialCategories) || !initialCategories.length) return;
+        var categories = initialCategories;
         var view = dashboard.querySelector('[data-marketing-view]');
+        var summary = dashboard.querySelector('.script-dashboard-hint');
+        var audienceDashboard = dashboard.closest('[data-audience-records]');
         var colors = ['#9b6a37', '#d79a4b', '#6f7f5f', '#a14f38', '#6d5d4d', '#c7a36a', '#7d8f9a', '#b77d54'];
 
-        function renderMarketingOverview() {
+        function parseMarketingTag(rawTag) {
+          var raw = typeof rawTag === 'string' ? rawTag : '';
+          var tag = raw.trim();
+          var separator = tag.indexOf('_');
+          if (separator < 0) return { category: '其他', tag: tag, rawTag: raw };
+          return {
+            category: tag.slice(0, separator).trim() || '其他',
+            tag: tag.slice(separator + 1).trim(),
+            rawTag: raw
+          };
+        }
+
+        function computeMarketingCategories(selectedRecords) {
+          var categoryCounts = {};
+          var categoryTags = {};
+          selectedRecords.forEach(function (record) {
+            var tags = Array.isArray(record.material_tags) ? record.material_tags : [];
+            tags.forEach(function (rawTag) {
+              if (typeof rawTag !== 'string' || !rawTag.trim()) return;
+              var parsed = parseMarketingTag(rawTag);
+              var category = parsed.category;
+              categoryCounts[category] = (categoryCounts[category] || 0) + 1;
+              categoryTags[category] = categoryTags[category] || {};
+              categoryTags[category][parsed.rawTag] = categoryTags[category][parsed.rawTag] || { tag: parsed.tag, rawTag: parsed.rawTag, count: 0 };
+              categoryTags[category][parsed.rawTag].count += 1;
+            });
+          });
+          return Object.keys(categoryCounts).map(function (category) {
+            var tags = Object.keys(categoryTags[category]).map(function (rawTag) {
+              return categoryTags[category][rawTag];
+            }).sort(function (left, right) {
+              return Number(right.count) - Number(left.count) || String(left.tag).localeCompare(String(right.tag));
+            });
+            return { category: category, occurrenceCount: categoryCounts[category], tagCount: tags.length, tags: tags, topTags: tags.slice(0, 8) };
+          }).sort(function (left, right) {
+            return Number(right.occurrenceCount) - Number(left.occurrenceCount) || String(left.category).localeCompare(String(right.category));
+          });
+        }
+
+        function renderMarketingOverview(nextCategories) {
+          categories = Array.isArray(nextCategories) ? nextCategories : categories;
+          if (summary) {
+            summary.textContent = '点击一级标签柱状图可查看二级标签分布';
+          }
           var maximum = Math.max.apply(null, categories.map(function (item) { return Number(item.occurrenceCount || 0); })) || 1;
           var chart = document.createElement('div');
           chart.className = 'chart-grid script-dashboard-overview marketing-column-chart';
-          chart.setAttribute('role', 'group');
-          chart.setAttribute('aria-label', '营销卖点一级类别柱状图');
+          chart.setAttribute('role', 'region');
+          chart.setAttribute('tabindex', '0');
+          chart.setAttribute('aria-label', '营销卖点汇总柱状图');
           categories.forEach(function (item) {
             var column = document.createElement('button');
             column.type = 'button';
@@ -662,6 +849,12 @@
             chart.append(column);
           });
           view.replaceChildren(chart);
+        }
+
+        if (audienceDashboard && dashboard.getAttribute('data-marketing-taxonomy-version') === '2') {
+          audienceDashboard.addEventListener('audience-topn-change', function (event) {
+            renderMarketingOverview(computeMarketingCategories(event.detail.records || []));
+          });
         }
 
         function returnToMarketingOverview() {
@@ -768,6 +961,7 @@
             row.className = 'marketing-tag-detail-row';
             var label = document.createElement('span');
             label.textContent = tag.tag || '未命名标签';
+            label.title = tag.rawTag || tag.tag || '未命名标签';
             var value = document.createElement('span');
             value.textContent = Number(tag.count || 0) + ' 次';
             row.append(label, value);
@@ -922,28 +1116,387 @@
             item.tabIndex = selected ? 0 : -1;
           });
           detailPanels.forEach(function (item) { item.hidden = item.id !== target; });
+          if (target !== panel.querySelector('[data-material-detail-tab="script"]')?.getAttribute('data-material-detail-target')) {
+            clearScriptEvidence(panel);
+          }
         }
-        tabs.forEach(function (tab) { tab.addEventListener('click', function () { selectDetailTab(tab); }); });
+        tabs.forEach(function (tab, tabIndex) {
+          tab.addEventListener('click', function () { selectDetailTab(tab); });
+          tab.addEventListener('keydown', function (event) {
+            var direction = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+            if (event.key === 'Home' || event.key === 'End' || direction[event.key]) {
+              event.preventDefault();
+              var next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (tabIndex + direction[event.key] + tabs.length) % tabs.length;
+              selectDetailTab(tabs[next]);
+              tabs[next].focus();
+            }
+          });
+        });
 
-        var checkboxes = panel.querySelectorAll('[data-deep-frame-checkbox]');
-        var observations = panel.querySelectorAll('[data-deep-frame-observation]');
-        function syncFrameObservations() {
-          checkboxes.forEach(function (checkbox) {
-            var card = checkbox.closest('[data-deep-frame-card]');
-            var frameRef = checkbox.getAttribute('data-frame-ref');
-            var observation = Array.prototype.find.call(observations, function (item) {
-              return item.getAttribute('data-frame-ref') === frameRef;
-            });
-            if (card) card.classList.toggle('is-selected', checkbox.checked);
-            if (observation) observation.hidden = !checkbox.checked;
+        var checkboxes = Array.prototype.slice.call(panel.querySelectorAll('[data-deep-frame-checkbox]'));
+        var observations = panel.querySelector('[data-deep-frame-observations]');
+        var emptyState = panel.querySelector('[data-deep-frame-observation-empty]');
+        var selectAll = panel.querySelector('[data-deep-frame-select-all]');
+        var selectNone = panel.querySelector('[data-deep-frame-clear]');
+        var selectionControls = panel.querySelector('.deep-frame-selection-controls');
+        var selectedRefs = new Set(checkboxes.filter(function (checkbox) { return checkbox.checked; }).map(function (checkbox) { return checkbox.getAttribute('data-frame-ref'); }));
+        var observationByRef = new Map();
+        var selectionHint = document.createElement('p');
+        selectionHint.className = 'highlight-selection-hint';
+        if (selectionControls) {
+          selectionControls.classList.add('highlight-selection-actions');
+          selectionControls.prepend(selectionHint);
+        }
+        if (selectAll) selectAll.classList.add('highlight-selection-button');
+        if (selectNone) selectNone.classList.add('highlight-selection-button');
+        if (observations) {
+          Array.prototype.slice.call(observations.querySelectorAll('[data-deep-frame-observation]')).forEach(function (item) {
+            observationByRef.set(item.getAttribute('data-frame-ref'), item.cloneNode(true));
           });
         }
-        checkboxes.forEach(function (checkbox) { checkbox.addEventListener('change', syncFrameObservations); });
-        var selectAll = panel.querySelector('[data-deep-frame-select-all]');
-        var clear = panel.querySelector('[data-deep-frame-clear]');
-        if (selectAll) selectAll.addEventListener('click', function () { checkboxes.forEach(function (checkbox) { checkbox.checked = true; }); syncFrameObservations(); });
-        if (clear) clear.addEventListener('click', function () { checkboxes.forEach(function (checkbox) { checkbox.checked = false; }); syncFrameObservations(); });
-        syncFrameObservations();
+
+        checkboxes.forEach(function (checkbox) {
+          var card = checkbox.closest('[data-deep-frame-card]');
+          var label = checkbox.closest('.deep-frame-select-label');
+          var caption = card && card.querySelector('figcaption');
+          if (label && caption) {
+            label.textContent = '';
+            label.appendChild(checkbox);
+            caption.prepend(label);
+            caption.addEventListener('click', function (event) {
+              if (event.target.closest('.deep-frame-select-label')) return;
+              var reference = checkbox.getAttribute('data-frame-ref');
+              setSelection(reference, !selectedRefs.has(reference));
+            });
+          }
+        });
+
+        function renderObservations() {
+          if (!observations) return;
+          observations.replaceChildren();
+          checkboxes.forEach(function (checkbox) {
+            var reference = checkbox.getAttribute('data-frame-ref');
+            var observation = observationByRef.get(reference);
+            if (selectedRefs.has(reference) && observation) observations.append(observation.cloneNode(true));
+          });
+          if (emptyState) emptyState.hidden = selectedRefs.size !== 0;
+        }
+
+        function syncSelection() {
+          checkboxes.forEach(function (checkbox) {
+            var reference = checkbox.getAttribute('data-frame-ref');
+            var selected = selectedRefs.has(reference);
+            var card = checkbox.closest('[data-deep-frame-card]');
+            checkbox.checked = selected;
+            if (card) card.classList.toggle('is-selected', selected);
+          });
+          if (selectAll) selectAll.disabled = selectedRefs.size === checkboxes.length;
+          if (selectNone) selectNone.disabled = selectedRefs.size === 0;
+          selectionHint.textContent = '已选择 ' + selectedRefs.size + ' / ' + checkboxes.length + ' 帧';
+          renderObservations();
+        }
+
+        function setSelection(reference, selected) {
+          if (selected) selectedRefs.add(reference);
+          else selectedRefs.delete(reference);
+          syncSelection();
+        }
+
+        checkboxes.forEach(function (checkbox) {
+          checkbox.addEventListener('change', function () {
+            setSelection(checkbox.getAttribute('data-frame-ref'), checkbox.checked);
+          });
+        });
+        if (selectAll) selectAll.addEventListener('click', function () {
+          checkboxes.forEach(function (checkbox) { selectedRefs.add(checkbox.getAttribute('data-frame-ref')); });
+          syncSelection();
+        });
+        if (selectNone) selectNone.addEventListener('click', function () {
+          selectedRefs.clear();
+          syncSelection();
+        });
+        syncSelection();
+
+        function scriptPrefersReducedMotion() {
+          return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        }
+
+        function clearScriptEvidence(scriptPanel) {
+          if (!scriptPanel) return;
+          scriptPanel.querySelectorAll('.script-evidence-highlight.is-evidence-active').forEach(function (item) {
+            item.classList.remove('is-evidence-active');
+            item.setAttribute('aria-pressed', 'false');
+          });
+          scriptPanel.querySelectorAll('[data-script-formula][aria-pressed="true"]').forEach(function (item) {
+            item.setAttribute('aria-pressed', 'false');
+          });
+          var status = scriptPanel.querySelector('[data-script-evidence-status]');
+          if (status) status.textContent = '';
+        }
+
+        function highlightScriptEvidence(scriptPanel, evidenceRefs) {
+          if (!scriptPanel) return;
+          var refs = Array.isArray(evidenceRefs) ? evidenceRefs : [evidenceRefs];
+          refs = refs.filter(function (ref) { return typeof ref === 'string' && ref; });
+          clearScriptEvidence(scriptPanel);
+          var matches = Array.prototype.slice.call(scriptPanel.querySelectorAll('[data-script-evidence-ref]')).filter(function (item) {
+            var spanRefs = [];
+            try { spanRefs = JSON.parse(item.getAttribute('data-script-span-refs') || '[]'); } catch (error) {}
+            if (!spanRefs.length) spanRefs = [item.getAttribute('data-script-evidence-ref')];
+            return spanRefs.some(function (ref) { return refs.indexOf(ref) >= 0; });
+          });
+          matches.forEach(function (item) {
+            item.classList.add('is-evidence-active');
+            item.setAttribute('aria-pressed', 'true');
+          });
+          scriptPanel.querySelectorAll('[data-script-formula]').forEach(function (button) {
+            var targets = [];
+            try { targets = JSON.parse(button.getAttribute('data-script-evidence-refs') || '[]'); } catch (error) { targets = []; }
+            if (targets.some(function (ref) { return refs.indexOf(ref) >= 0; })) button.setAttribute('aria-pressed', 'true');
+          });
+          var status = scriptPanel.querySelector('[data-script-evidence-status]');
+          if (status) status.textContent = matches.length ? '已定位当前素材证据文字。' : '证据文字无法在当前文案中定位。';
+          if (matches[0] && !scriptPrefersReducedMotion()) matches[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+
+        var scriptTab = panel.querySelector('[data-material-detail-tab="script"]');
+        var scriptTarget = scriptTab && scriptTab.getAttribute('data-material-detail-target');
+        // The tab button also carries data-material-detail-target; resolve the actual panel by its id.
+        var scriptPanel = scriptTarget ? document.getElementById(scriptTarget) : null;
+        if (scriptPanel) {
+          scriptPanel.querySelectorAll('[data-script-formula]').forEach(function (button) {
+            function activateFormula() {
+              var refs = [];
+              try { refs = JSON.parse(button.getAttribute('data-script-evidence-refs') || '[]'); } catch (error) { refs = []; }
+              highlightScriptEvidence(scriptPanel, refs);
+            }
+            button.addEventListener('click', activateFormula);
+            button.addEventListener('keydown', function (event) {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
+              activateFormula();
+            });
+          });
+          scriptPanel.querySelectorAll('[data-script-evidence-ref]').forEach(function (item) {
+            function activateEvidence() {
+              var refs = [];
+              try { refs = JSON.parse(item.getAttribute('data-script-span-refs') || '[]'); } catch (error) {}
+              highlightScriptEvidence(scriptPanel, refs.length ? refs : [item.getAttribute('data-script-evidence-ref')]);
+            }
+            item.setAttribute('aria-pressed', 'false');
+            item.addEventListener('click', activateEvidence);
+            item.addEventListener('keydown', function (event) {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
+              activateEvidence();
+            });
+          });
+        }
+      });
+    }());
+  </script>
+  <script data-script-formula-script="true">
+    (function () {
+      function scriptFormulaPrefersReducedMotion() {
+        return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      }
+
+      function scriptFormulaDetailLabels(item) {
+        var raw = Array.isArray(item && item.detailLabels) ? item.detailLabels : [];
+        var labels = [];
+        raw.forEach(function (value) {
+          String(value || '').replace(/，/g, '、').split('、').forEach(function (label) {
+            label = label.trim();
+            if (label && labels.indexOf(label) < 0) labels.push(label);
+          });
+        });
+        return labels;
+      }
+
+      function scriptFormulaDisplayLabel(item) {
+        var label = String(item && (item.displayLabel || item.label) || '').trim();
+        return label && !/^\d+$/.test(label) ? label : '内容公式不可用';
+      }
+
+      function scriptFormulaSecondaryLabel(item) {
+        var label = String(item && (item.label || item.displayLabel) || '').trim();
+        return label && !/^\d+$/.test(label) ? label : '二级内容公式不可用';
+      }
+
+      function renderScriptFormulaPie(children, primaryItem) {
+        var colors = ['#9b6a37', '#d79a4b', '#6f7f5f', '#a14f38', '#6d5d4d', '#c7a36a', '#7d8f9a', '#b77d54'];
+        var total = children.reduce(function (sum, item) { return sum + Number(item.count || 0); }, 0) || 1;
+        var cursor = 0;
+        var slices = children.map(function (item, index) {
+          var count = Number(item.count || 0);
+          var share = count / total;
+          var slice = {
+            label: scriptFormulaSecondaryLabel(item),
+            count: count,
+            share: Number((share * 100).toFixed(1)),
+            start: cursor * 360,
+            end: (cursor + share) * 360,
+            color: colors[index % colors.length]
+          };
+          cursor += share;
+          return slice;
+        });
+        var layout = document.createElement('div');
+        layout.className = 'script-formula-pie-layout pie-layout';
+        var pie = document.createElement('div');
+        pie.className = 'pie-chart script-formula-pie';
+        pie.setAttribute('data-pie-slices', JSON.stringify(slices));
+        pie.setAttribute('role', 'img');
+        pie.setAttribute('aria-label', scriptFormulaDisplayLabel(primaryItem) + '二级内容公式占比饼图');
+        pie.style.background = 'conic-gradient(' + slices.map(function (slice) {
+          return slice.color + ' ' + slice.start.toFixed(4) + 'deg ' + slice.end.toFixed(4) + 'deg';
+        }).join(', ') + ')';
+        var tooltip = document.createElement('div');
+        tooltip.className = 'chart-tooltip';
+        tooltip.setAttribute('role', 'tooltip');
+        pie.append(tooltip);
+        var legend = document.createElement('ul');
+        legend.className = 'pie-legend script-formula-pie-legend';
+        slices.forEach(function (slice) {
+          var item = document.createElement('li');
+          item.className = 'legend-item';
+          item.title = slice.label + '：' + slice.count + ' 个素材，占比 ' + slice.share + '%';
+          var name = document.createElement('span');
+          name.className = 'legend-label';
+          var swatch = document.createElement('i');
+          swatch.className = 'legend-swatch';
+          swatch.style.background = slice.color;
+          name.append(swatch, document.createTextNode(slice.label));
+          var value = document.createElement('span');
+          value.className = 'legend-share';
+          value.textContent = slice.count + ' 个素材 · ' + slice.share + '%';
+          item.append(name, value);
+          legend.append(item);
+        });
+        layout.append(pie, legend);
+        return layout;
+      }
+
+      function renderScriptFormulaDrill(dashboard, primaryItem) {
+        var view = dashboard.querySelector('[data-script-formula-view]');
+        if (!view) return;
+        var secondary = dashboard.__scriptFormulaData.secondary || {};
+        var children = Array.isArray(secondary[primaryItem.id]) ? secondary[primaryItem.id] : [];
+        var wrapper = document.createElement('div');
+        wrapper.className = 'script-formula-drill';
+        var primary = document.createElement('section');
+        primary.className = 'script-formula-drill-primary';
+        var back = document.createElement('button');
+        back.type = 'button';
+        back.className = 'script-formula-back';
+        back.textContent = '返回一级公式总览';
+        back.addEventListener('click', function () { renderScriptFormulaOverview(dashboard, primaryItem.id); });
+        var title = document.createElement('strong');
+        title.textContent = scriptFormulaDisplayLabel(primaryItem);
+        var count = document.createElement('span');
+        count.className = 'script-dashboard-hint';
+        count.textContent = primaryItem.count + ' 个素材';
+        var bar = document.createElement('span');
+        bar.className = 'script-formula-drill-primary-bar';
+        primary.append(back, title, count, bar);
+        var chart = document.createElement('section');
+        chart.className = 'script-formula-drill-chart';
+        var heading = document.createElement('h4');
+        heading.textContent = '二级内容公式占比';
+        chart.append(heading);
+        if (!children.length) {
+          var empty = document.createElement('p');
+          empty.className = 'data-note';
+          empty.textContent = '该一级公式暂无二级内容公式，数据不足以判断。';
+          chart.append(empty);
+        } else {
+          chart.append(renderScriptFormulaPie(children, primaryItem));
+        }
+        wrapper.append(primary, chart);
+        wrapper.setAttribute('aria-live', 'polite');
+        if (!scriptFormulaPrefersReducedMotion()) {
+          wrapper.classList.add('is-entering');
+          window.setTimeout(function () { wrapper.classList.add('is-visible'); }, 0);
+        }
+        view.replaceChildren(wrapper);
+      }
+
+      function renderScriptFormulaOverview(dashboard, focusId) {
+        var view = dashboard.querySelector('[data-script-formula-view]');
+        if (!view) return;
+        var data = dashboard.__scriptFormulaData;
+        var primary = Array.isArray(data.primary) ? data.primary : [];
+        var chart = document.createElement('div');
+        chart.className = 'script-formula-overview';
+        chart.setAttribute('role', 'region');
+        chart.setAttribute('aria-label', '一级内容公式柱状图');
+        if (!primary.length) {
+          var empty = document.createElement('div');
+          empty.className = 'data-state';
+          empty.innerHTML = '<span>内容公式：不可用</span><p>未提供可用的一二级内容公式标签，数据不足以判断。</p>';
+          chart.append(empty);
+        } else {
+          var maximum = Math.max.apply(null, primary.map(function (item) { return Number(item.count || 0); })) || 1;
+          primary.forEach(function (item) {
+            var button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'script-formula-primary-column';
+            button.setAttribute('data-script-formula-primary', '');
+            button.setAttribute('data-primary-id', item.id);
+            button.setAttribute('aria-controls', view.id);
+            var displayLabel = scriptFormulaDisplayLabel(item);
+            button.setAttribute('aria-label', '查看' + displayLabel + '的二级内容公式占比');
+            var plot = document.createElement('span');
+            plot.className = 'script-formula-column-plot';
+            var bar = document.createElement('i');
+            bar.style.height = (Number(item.count || 0) / maximum * 100).toFixed(2) + '%';
+            plot.append(bar);
+            var label = document.createElement('strong');
+            label.className = 'script-formula-display-label';
+            label.textContent = displayLabel;
+            var count = document.createElement('small');
+            count.textContent = item.count + ' 个素材';
+            button.append(plot, label, count);
+            button.addEventListener('click', function () {
+              dashboard.__scriptFormulaActiveButton = button;
+              renderScriptFormulaDrill(dashboard, item);
+            });
+            chart.append(button);
+          });
+        }
+        view.replaceChildren(chart);
+        if (focusId) {
+          var target = Array.prototype.slice.call(chart.querySelectorAll('[data-script-formula-primary]')).find(function (button) {
+            return button.getAttribute('data-primary-id') === String(focusId);
+          }) || dashboard.__scriptFormulaActiveButton;
+          if (target && typeof target.focus === 'function') target.focus({ preventScroll: true });
+        }
+      }
+
+      document.querySelectorAll('[data-script-brand-dashboard]').forEach(function (root) {
+        var tabs = Array.from(root.querySelectorAll('[data-script-brand-tab]'));
+        var panels = Array.from(root.querySelectorAll('[data-script-brand-panel]'));
+        function activate(tab) {
+          tabs.forEach(function (item) { var selected = item === tab; item.setAttribute('aria-selected', String(selected)); item.tabIndex = selected ? 0 : -1; });
+          panels.forEach(function (panel) { panel.hidden = panel.id !== tab.getAttribute('data-script-brand-tab'); });
+        }
+        tabs.forEach(function (tab, index) {
+          tab.addEventListener('click', function () { activate(tab); });
+          tab.addEventListener('keydown', function (event) {
+            var next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
+            if (next >= 0) { event.preventDefault(); activate(tabs[next]); tabs[next].focus(); }
+          });
+        });
+      });
+      document.querySelectorAll('[data-script-formula]').forEach(function (dashboard) {
+        try {
+          dashboard.__scriptFormulaData = JSON.parse(dashboard.getAttribute('data-script-formula') || '{}');
+        } catch (error) {
+          dashboard.__scriptFormulaData = { primary: [], secondary: {} };
+        }
+        var formulaView = dashboard.querySelector('[data-script-formula-view]');
+        if (formulaView) formulaView.setAttribute('aria-live', 'polite');
+        renderScriptFormulaOverview(dashboard);
       });
     }());
   </script>

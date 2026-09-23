@@ -1,8 +1,8 @@
 # 云图报告优化交接摘要：Phase 01 已完成
 
-**交接日期：** 2026-08-11  
-**当前分支：** `main`  
-**最新提交：** `1f694ce 修正报告首章数据口径`  
+**交接日期：** 2026-08-11
+**当前分支：** `main`
+**最新提交：** `1f694ce 修正报告首章数据口径`
 **本阶段状态：** `01｜TOP 素材组合结论` 已完成，等待用户审阅验收报告后再继续第 02 部分。
 
 ## 本阶段完成内容
@@ -44,7 +44,7 @@
 
 最新报告：
 
-`/Users/shuzida/Desktop/FDE客户/小仙炖/yuntu-industry-content-rankings-analysis/RPA数据汇总/yuntu-rankings-analysis-20260730-20260805-top5-real-e2e-20260809-203000/generated-report-latest-code-20260810-final/phase01-two-scope-rework-20260811/final-report/final-report.html`
+`/Users/shuzida/Desktop/FDE客户/目标品牌/yuntu-industry-content-rankings-analysis/RPA数据汇总/yuntu-rankings-analysis-20260730-20260805-top5-real-e2e-20260809-203000/generated-report-latest-code-20260810-final/phase01-two-scope-rework-20260811/final-report/final-report.html`
 
 对应产物：
 

@@ -123,6 +123,94 @@
     }, true);
   }
 
+  function bindBatchDistributionTooltips() {
+    if (!document.body.classList.contains('unified-yuntu')) return;
+
+    var activeReposition = null;
+    function repositionActiveTooltip() {
+      if (activeReposition) activeReposition();
+    }
+
+    document.querySelectorAll('.highlight-batch-distribution [data-highlight-batch-tooltip]').forEach(function (item) {
+      if (item.getAttribute('data-highlight-batch-tooltip-ready') === 'true') return;
+      var tooltip = item.querySelector('.chart-tooltip');
+      if (!tooltip) return;
+
+      item.setAttribute('data-highlight-batch-tooltip-ready', 'true');
+      var placeholder = document.createComment('highlight-batch-tooltip');
+      var pointerActive = false;
+      var focusActive = false;
+      var portalActive = false;
+
+      function positionTooltip() {
+        if (!portalActive || tooltip.parentNode !== document.body) return;
+        var anchor = item.getBoundingClientRect();
+        var tooltipBounds = tooltip.getBoundingClientRect();
+        var margin = 8;
+        var gap = 12;
+        var left = anchor.left + anchor.width / 2 - tooltipBounds.width / 2;
+        var top = anchor.top - tooltipBounds.height - gap;
+        if (top < margin) top = anchor.bottom + gap;
+        left = Math.max(margin, Math.min(left, window.innerWidth - tooltipBounds.width - margin));
+        top = Math.max(margin, Math.min(top, window.innerHeight - tooltipBounds.height - margin));
+        tooltip.style.left = left + 'px';
+        tooltip.style.top = top + 'px';
+      }
+
+      function showTooltip() {
+        if (!portalActive) {
+          if (tooltip.parentNode === item) item.replaceChild(placeholder, tooltip);
+          document.body.append(tooltip);
+          portalActive = true;
+        }
+        tooltip.style.position = 'fixed';
+        tooltip.style.left = '0px';
+        tooltip.style.top = '0px';
+        tooltip.style.bottom = 'auto';
+        tooltip.style.transform = 'none';
+        tooltip.classList.add('is-portal', 'is-visible');
+        activeReposition = positionTooltip;
+        positionTooltip();
+      }
+
+      function hideTooltip() {
+        if (pointerActive || focusActive) return;
+        tooltip.classList.remove('is-visible', 'is-portal');
+        tooltip.style.position = '';
+        tooltip.style.left = '';
+        tooltip.style.top = '';
+        tooltip.style.bottom = '';
+        tooltip.style.transform = '';
+        if (portalActive) {
+          if (placeholder.parentNode === item) item.insertBefore(tooltip, placeholder);
+          placeholder.remove();
+          portalActive = false;
+        }
+        if (activeReposition === positionTooltip) activeReposition = null;
+      }
+
+      item.addEventListener('pointerenter', function () {
+        pointerActive = true;
+        showTooltip();
+      });
+      item.addEventListener('pointerleave', function () {
+        pointerActive = false;
+        hideTooltip();
+      });
+      item.addEventListener('focus', function () {
+        focusActive = true;
+        showTooltip();
+      });
+      item.addEventListener('blur', function () {
+        focusActive = false;
+        hideTooltip();
+      });
+    });
+
+    window.addEventListener('resize', repositionActiveTooltip);
+    window.addEventListener('scroll', repositionActiveTooltip, true);
+  }
+
   function createUnifiedHighlightLightbox() {
     var existingOverlay = document.getElementById('unified-highlight-lightbox');
     if (existingOverlay) return existingOverlay;
@@ -520,6 +608,7 @@
   normalizeQianchuanPresentation();
   normalizeYuntuHighlightPagination();
   bindStaticYuntuHighlightPagination();
+  bindBatchDistributionTooltips();
   bindUnifiedHighlightLightbox();
   observePieCharts();
 }());

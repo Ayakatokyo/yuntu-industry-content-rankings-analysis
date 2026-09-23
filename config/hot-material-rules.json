@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "hotMaterialRule": {
+    "metric": "exposure_interval_min",
+    "comparison": "gte",
+    "threshold": 200000
+  }
+}

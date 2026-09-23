@@ -2,7 +2,7 @@
 
 ## 背景
 
-当前云图技能已经可将 RPA 榜单与素材详情 CSV 规范化，生成面向小仙炖的六章商业分析报告。详情数据包含秒级趋势和云图标记的 `highPoint` / `lossPoint` 区间，但报告尚未下载素材视频、提取画面或在 HTML 中呈现高光帧；现有 HTML 也只是将 Markdown 转义后直接输出，缺少可交付的报告样式。
+当前云图技能已经可将 RPA 榜单与素材详情 CSV 规范化，生成面向目标品牌的六章商业分析报告。详情数据包含秒级趋势和云图标记的 `highPoint` / `lossPoint` 区间，但报告尚未下载素材视频、提取画面或在 HTML 中呈现高光帧；现有 HTML 也只是将 Markdown 转义后直接输出，缺少可交付的报告样式。
 
 本设计在当前 `main` 分支的技能内完成高光帧提取与样式化 HTML。不创建通用企业版本，也不改变既有 RPA 采集、数据分析口径、六章结构或 AI 结论契约。
 
@@ -68,7 +68,7 @@ Markdown 保持现有六章和文本契约。HTML 改由语义化章节渲染，
 - 米白正文与暖金章节编号，使用现有六章的标题和排序。
 - 证据内容、素材对比与实验矩阵保留结构化信息；实验矩阵在小屏幕可横向滚动而不挤压字段。
 - “单素材秒级诊断”按素材渲染高光帧画廊。`0s` 帧标识为“封面”，其他帧按秒标识并显示命中指标和值；没有可用帧时只显示原有文字诊断。
-- 样式仅参考 `/Users/shuzida/Desktop/FDE客户/小仙炖/qianchuan-video-peak-frames/templates/final-report-template.html` 的深棕、暖金、米白与章节卡片语言，不迁移其业务内容。
+- 样式仅参考 `/Users/shuzida/Desktop/FDE客户/目标品牌/qianchuan-video-peak-frames/templates/final-report-template.html` 的深棕、暖金、米白与章节卡片语言，不迁移其业务内容。
 
 ## 错误处理
 

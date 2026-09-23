@@ -16,6 +16,21 @@ def load_module():
 
 
 class YuntuRunStateTests(unittest.TestCase):
+    def summary(self, state, filters=None):
+        return state.new_collection_summary(
+            state.collection_contract(
+                shop_id="shop-42",
+                list_params=filters or {},
+                detail_date_params={"date_range_type": "LAST_7_DAYS"},
+                target_top_n=1,
+                candidate_top_n=2,
+            )
+        )
+
+    def test_legacy_run_summary_constructor_is_removed(self):
+        state = load_module()
+        self.assertFalse(hasattr(state, "new_run_summary"))
+
     def test_parameter_fingerprint_is_stable_for_equivalent_filters(self):
         state = load_module()
 
@@ -25,33 +40,11 @@ class YuntuRunStateTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(first), 64)
 
-    def test_new_run_summary_includes_collection_contract(self):
+    def test_new_collection_summary_has_ranking_run_lifecycle_slot(self):
         state = load_module()
-        filters = {"industry": "食品饮料"}
+        summary = self.summary(state)
 
-        summary = state.new_run_summary(Path("/tmp/yuntu-run"), filters)
-
-        self.assertEqual(summary["schemaVersion"], 1)
-        self.assertEqual(len(summary["runId"]), 32)
-        self.assertEqual(summary["parameterFingerprint"], state.parameter_fingerprint(filters))
-        self.assertEqual(summary["filters"], filters)
-        self.assertEqual(summary["status"], "collecting")
-        self.assertEqual(summary["artifacts"], {})
-        self.assertEqual(summary["nextAction"], {"command": "fetch", "allowsRpa": True})
-
-    def test_new_run_summary_snapshots_nested_filters_for_fingerprint(self):
-        state = load_module()
-        filters = {"industry": {"name": "食品饮料"}}
-
-        summary = state.new_run_summary(Path("/tmp/yuntu-run"), filters)
-        filters["industry"]["name"] = "美妆"
-
-        expected_filters = {"industry": {"name": "食品饮料"}}
-        self.assertEqual(summary["filters"], expected_filters)
-        self.assertEqual(
-            summary["parameterFingerprint"],
-            state.parameter_fingerprint(expected_filters),
-        )
+        self.assertEqual(summary["rankingRuns"], {})
 
     def test_register_artifact_writes_relative_path_checksum_and_size(self):
         state = load_module()
@@ -60,7 +53,7 @@ class YuntuRunStateTests(unittest.TestCase):
             source = root / "raw-csv" / "list.csv"
             source.parent.mkdir()
             source.write_text("material_id\n101\n", encoding="utf-8")
-            summary = state.new_run_summary(root, {"industry": "食品饮料"})
+            summary = self.summary(state, {"industry": "食品饮料"})
 
             state.register_artifact(summary, root, "ranking_list", source, "local_artifact")
 
@@ -76,7 +69,7 @@ class YuntuRunStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "run"
             root.mkdir()
-            summary = state.new_run_summary(root, {})
+            summary = self.summary(state)
             empty = root / "empty.csv"
             empty.touch()
             outside = Path(directory) / "outside.csv"
@@ -92,7 +85,7 @@ class YuntuRunStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             path = root / "run-summary.json"
-            summary = state.new_run_summary(root, {"industry": "食品饮料"})
+            summary = self.summary(state, {"industry": "食品饮料"})
 
             saved_path = state.save_run_state(summary, path)
 
@@ -107,7 +100,7 @@ class YuntuRunStateTests(unittest.TestCase):
             source = root / "raw-csv" / "list.csv"
             source.parent.mkdir()
             source.write_text("material_id\n101\n", encoding="utf-8")
-            summary = state.new_run_summary(root, {})
+            summary = self.summary(state)
             state.register_artifact(summary, root, "ranking_list", source, "local_artifact")
 
             self.assertEqual(state.validate_artifact(summary, root, "ranking_list"), source)

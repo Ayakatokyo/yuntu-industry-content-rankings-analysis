@@ -1,6 +1,8 @@
 import importlib.util
+import hashlib
 import unittest
 from pathlib import Path
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +17,98 @@ def load_module():
 
 
 class YuntuNormalizerTests(unittest.TestCase):
+    def test_normalize_detail_records_preserves_new_nested_connector_sections(self):
+        normalizer = load_module()
+        raw = {
+            "materialId": "101",
+            "dateType": "LAST_7_DAYS",
+            "videoUrl": "https://video.example/101.mp4",
+            "coreData": {
+                "objectId": "101",
+                "title": "新连接器嵌套素材",
+                "videoDuration": 12,
+                "convertCnt": "17",
+                "orderCnt": "3",
+            },
+            "audiencePortrait": {"八大人群": ["新锐白领"], "年龄特征": ["24-30"], "性别特征": ["女"]},
+            "secondTrend": {
+                "点击指数": {
+                    "trendType": 3,
+                    "tendList": [{"x": 0, "y": 0}, {"x": 1, "y": 0.4}],
+                    "highPoint": {"start_point": "1", "end_point": "2"},
+                    "lossPoint": {"start_point": "0", "end_point": "1", "loss_percent": 0.2},
+                }
+            },
+            "contentFormula": {
+                "本视频内容公式": {"labels": [{"level_1_label": 10, "level_2_labels": [40]}]},
+                "视频标题": {"text": "标题词", "detail": {"40": ["标题词"]}},
+                "视频画面": {"text": "画面词", "detail": {"40": ["画面词"]}},
+                "视频脚本": {"text": "脚本词", "detail": {"40": ["脚本词"]}},
+            },
+            "creativeBreakdown": {"使用场景": ["早餐"], "营销活动": []},
+            "bizDate": "20260907",
+            "accountId": "account-1",
+        }
+
+        record = normalizer.normalize_detail_records(
+            raw, material_id="101", source_path="raw-json/details/101.json"
+        )
+
+        self.assertEqual(record["normalization_version"], 3)
+        self.assertEqual(record["source_schema"], "new_nested_detail")
+        self.assertEqual(record["title"], "新连接器嵌套素材")
+        self.assertEqual(record["metrics"]["convertCnt"], 17)
+        self.assertEqual(record["audience_portrait"]["八大人群"], ["新锐白领"])
+        self.assertEqual(record["trend_series"][0]["trend_name"], "点击指数")
+        self.assertEqual(record["script_text"], "脚本词")
+        self.assertEqual(record["content_formula"]["sources"]["script"]["detail"], {"40": ["脚本词"]})
+        self.assertEqual(record["creative_breakdown"]["raw"]["使用场景"], ["早餐"])
+        self.assertEqual(record["business_date"], "20260907")
+        self.assertEqual(record["account_id"], "account-1")
+
+    def test_normalize_detail_records_maps_connector_aliases_to_canonical_facts(self):
+        normalizer = load_module()
+        raw = {
+            "materialId": "101",
+            "coreData": {"objectId": "101"},
+            "secondTrend": {
+                "likeIndex": {"tendList": [{"x": 0, "y": 0.1}], "trendType": 1},
+                "lossIndex": {"tendList": [{"x": 0, "y": 0.2}], "trendType": 2},
+                "clickIndex": {"tendList": [{"x": 0, "y": 0.3}], "trendType": 3},
+                "interactIndex": {"tendList": [{"x": 0, "y": 0.4}], "trendType": 4},
+                "commentIndex": {"tendList": [{"x": 0, "y": 0.5}], "trendType": 5},
+            },
+            "contentFormula": {
+                "videoContentFormula": {"labels": [{"level_1_label": 10}]},
+                "videoTitle": {"text": "标题"},
+                "videoVisual": {"text": "画面"},
+                "videoScript": {"text": "仅此脚本应成为脚本事实"},
+            },
+            "creativeBreakdown": {"marketingCampaigns": ["周年庆"], "presentationForm": ["真人口播"]},
+        }
+
+        record = normalizer.normalize_detail_records(
+            raw, material_id="101", source_path="raw-csv/details/101.csv"
+        )
+
+        self.assertEqual(
+            [item["trend_name"] for item in record["trend_series"]],
+            ["点赞指数", "流失指数", "点击指数", "互动指数", "评论指数"],
+        )
+        self.assertEqual(record["script_text"], "仅此脚本应成为脚本事实")
+        self.assertEqual(record["content_formula"]["sources"]["script"]["text"], "仅此脚本应成为脚本事实")
+        self.assertEqual(record["creative_breakdown"]["tags"], ["周年庆", "真人口播"])
+
+    def test_normalize_detail_records_marks_parser_failure_explicitly(self):
+        normalizer = load_module()
+        record = normalizer.normalize_detail_records(
+            {"materialId": "101", "secondTrend": "{'clickIndex': invalid}", "__parse_failed_fields__": ["secondTrend"]},
+            material_id="101",
+            source_path="raw-csv/details/101.csv",
+        )
+
+        self.assertEqual(record["data_availability"]["trends"]["missing_reason"], "parse_failed")
+
     def test_normalize_list_records_preserves_material_identity_and_business_date(self):
         normalizer = load_module()
         record = normalizer.normalize_list_records(
@@ -36,6 +130,44 @@ class YuntuNormalizerTests(unittest.TestCase):
         self.assertEqual(record["material_uri"], "aweme://101")
         self.assertEqual(record["account_id"], "shop-1")
         self.assertEqual(record["list_context"]["industry"], "食品饮料")
+
+    def test_normalize_list_records_preserves_exposure_interval_facts(self):
+        normalizer = load_module()
+        records = normalizer.normalize_list_records(
+            [
+                {"material_id": "101", "exposure": "199999", "show_cnt": "9999999"},
+                {"material_id": "102", "exposure": "20万-25万", "show_cnt": "9999999"},
+                {"material_id": "103", "exposure": "200000", "show_cnt": "9999999"},
+                {"material_id": "104", "exposure": "无法解析", "show_cnt": "9999999"},
+            ],
+            source_path="raw-csv/list.csv",
+        )
+
+        self.assertEqual(records[0]["exposure"], {"min": 199999, "max": 199999, "raw": "199999"})
+        self.assertEqual(records[1]["exposure"], {"min": 200000, "max": 250000, "raw": "20万-25万"})
+        self.assertEqual(records[2]["exposure"], {"min": 200000, "max": 200000, "raw": "200000"})
+        self.assertEqual(records[3]["exposure"], {"min": None, "max": None, "raw": "无法解析"})
+        self.assertEqual(records[3]["data_availability"]["exposure"]["missing_reason"], "unparsed_source_value")
+
+    def test_normalize_list_records_does_not_substitute_show_count_for_exposure(self):
+        normalizer = load_module()
+        record = normalizer.normalize_list_records(
+            [{"material_id": "105", "show_cnt": "9999999"}],
+            source_path="raw-csv/list.csv",
+        )[0]
+
+        self.assertEqual(record["exposure"], {"min": None, "max": None, "raw": ""})
+        self.assertNotIn("exposure", record["data_availability"])
+
+    def test_normalize_list_records_reads_display_exposure_range_from_show_cnt(self):
+        normalizer = load_module()
+        record = normalizer.normalize_list_records(
+            [{"material_id": "106", "show_cnt": "200-300w", "object_index": {"show_cnt": "2456789"}}],
+            source_path="raw-csv/list.csv",
+        )[0]
+
+        self.assertEqual(record["exposure"], {"min": 2000000, "max": 3000000, "raw": "200-300w"})
+        self.assertEqual(record["metrics"]["show_cnt"], 2456789)
 
     def test_normalize_list_records_extracts_metrics_tags_and_rank(self):
         normalizer = load_module()
@@ -251,6 +383,98 @@ class YuntuNormalizerTests(unittest.TestCase):
             [{"start_ms": 0, "end_ms": 3000, "text": "肠胃总不舒服？"}],
         )
         self.assertTrue(record["data_availability"]["script_segments"]["available"])
+
+    def test_normalize_detail_records_accepts_flat_csv_detail_schema(self):
+        normalizer = load_module()
+        raw = {
+            "coreData.materialId": "7659409261740343346",
+            "coreData.dateType": "LAST_7_DAYS",
+            "coreData.customStartDate": "",
+            "coreData.customEndDate": "",
+            "coreData.videoUrl": "https://video.example/flat-a.mp4",
+            "coreData.title": "最新详情素材标题",
+            "coreData.convertCnt": "17",
+            "coreData.orderCnt": "3",
+            "secondTrend.点赞指数.tendList": [{"x": 0, "y": 0.1}],
+            "secondTrend.点赞指数.highPoint": {"start_point": 1, "end_point": 2},
+            "secondTrend.流失指数.tendList": [{"x": 0, "y": 0.2}],
+            "secondTrend.点击指数.tendList": [{"x": 0, "y": 0.3}],
+            "secondTrend.互动指数.tendList": [{"x": 0, "y": 0.4}],
+            "secondTrend.评论指数.tendList": [{"x": 0, "y": 0.5}],
+            "contentFormula.视频脚本.text": "前3秒提出使用场景，再展示商品卖点。",
+            "contentFormula.内容公式.labels": ["痛点引入", "场景演示"],
+            "contentFormula.内容公式.detail.商品卖点": "低糖、便携",
+            "creativeBreakdown.素材形式": "口播、产品展示",
+            "creativeBreakdown.使用场景": "早餐、通勤",
+        }
+
+        record = normalizer.normalize_detail_records(
+            raw,
+            material_id="7659409261740343346",
+            source_path="raw-csv/details/7659409261740343346.csv",
+        )
+
+        self.assertEqual(record["source_schema"], "flat_detail_csv")
+        self.assertEqual(record["date_range"]["type"], "LAST_7_DAYS")
+        self.assertEqual(record["video_url"], "https://video.example/flat-a.mp4")
+        self.assertEqual(record["title"], "最新详情素材标题")
+        self.assertEqual(len(record["trend_series"]), 5)
+        self.assertEqual(record["high_points"][0]["trend_name"], "点赞指数")
+        self.assertEqual(record["script_text"], "前3秒提出使用场景，再展示商品卖点。")
+        self.assertEqual(record["content_formula"]["labels"], ["痛点引入", "场景演示"])
+        self.assertEqual(
+            record["content_formula"]["sources"]["script"]["text"],
+            "前3秒提出使用场景，再展示商品卖点。",
+        )
+        self.assertEqual(record["creative_breakdown"]["raw"]["素材形式"], "口播、产品展示")
+        self.assertEqual(record["creative_breakdown"]["tags"], ["口播", "产品展示", "早餐", "通勤"])
+        self.assertEqual(record["metrics"]["convertCnt"], 17)
+        self.assertEqual(record["metrics"]["orderCnt"], 3)
+        self.assertFalse(record["data_availability"]["script_segments"]["available"])
+
+    def test_normalize_detail_records_preserves_source_hash_when_provided(self):
+        normalizer = load_module()
+        with tempfile.NamedTemporaryFile() as source:
+            source.write(b"materialId,videoUrl\n101,https://example.test/101.mp4\n")
+            source.flush()
+            expected_hash = hashlib.sha256(Path(source.name).read_bytes()).hexdigest()
+            record = normalizer.normalize_detail_records(
+                {"materialId": "101"},
+                material_id="101",
+                source_path="raw-csv/details/101.csv",
+                source_hash=expected_hash,
+            )
+
+        self.assertEqual(record["source_paths"]["detail"], "raw-csv/details/101.csv")
+        self.assertEqual(record["source_hashes"]["detail"], expected_hash)
+
+    def test_normalize_detail_rejects_conflicting_root_and_core_material_ids(self):
+        normalizer = load_module()
+
+        with self.assertRaisesRegex(normalizer.YuntuNormalizeError, "conflicts"):
+            normalizer.normalize_detail_records(
+                {"materialId": "101", "coreData": {"objectId": "202"}},
+                material_id="101",
+                source_path="raw-json/details/101.json",
+            )
+
+    def test_normalize_detail_verifies_new_connector_period_without_inventing_dates(self):
+        normalizer = load_module()
+        record = normalizer.normalize_detail_records(
+            {"materialId": "101", "dateType": "LAST_7_DAYS", "trends": []},
+            material_id="101",
+            source_path="raw-json/details/101.json",
+            expected_context={"date_type": "LAST_7_DAYS"},
+        )
+
+        self.assertEqual(record["period_verification"]["mode"], "relative_type_only")
+        with self.assertRaisesRegex(normalizer.YuntuNormalizeError, "period"):
+            normalizer.normalize_detail_records(
+                {"materialId": "101", "dateType": "LAST_30_DAYS", "trends": []},
+                material_id="101",
+                source_path="raw-json/details/101.json",
+                expected_context={"date_type": "LAST_7_DAYS"},
+            )
 
 
 if __name__ == "__main__":

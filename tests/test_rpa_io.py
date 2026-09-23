@@ -40,6 +40,20 @@ class FakeSession:
 
 
 class RpaIoTests(unittest.TestCase):
+    def test_unpack_gateway_result_accepts_completed_async_task_files(self):
+        io = load_module()
+
+        unpacked = io.unpack_gateway_result(
+            {
+                "task_group_id": "task-123",
+                "status": "completed",
+                "files": [{"fileUrl": "https://download.example/detail.csv"}],
+            }
+        )
+
+        self.assertEqual(unpacked.kind, "files")
+        self.assertEqual(unpacked.file_url, "https://download.example/detail.csv")
+
     def test_unpack_gateway_result_accepts_files_envelope(self):
         io = load_module()
         result = {
@@ -214,6 +228,40 @@ class RpaIoTests(unittest.TestCase):
             self.assertEqual(records[0]["object_index"], {"ctr": 0.5})
             self.assertEqual(records[0]["tags"], ["轻食", "便携"])
 
+    def test_parse_csv_records_preserves_flat_detail_dotted_headers(self):
+        io = load_module()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "detail.csv"
+            source.write_text(
+                "coreData.materialId,secondTrend.点击指数.tendList,contentFormula.视频脚本.text\n"
+                '101,"[{""x"": 0, ""y"": 0.5}]",前3秒提出痛点\n',
+                encoding="utf-8",
+            )
+
+            records = io.parse_csv_records(source)
+
+        self.assertEqual(records[0]["coreData.materialId"], "101")
+        self.assertEqual(records[0]["secondTrend.点击指数.tendList"], [{"x": 0, "y": 0.5}])
+        self.assertEqual(records[0]["contentFormula.视频脚本.text"], "前3秒提出痛点")
+
+    def test_parse_csv_records_ignores_delimiter_only_trailing_row(self):
+        io = load_module()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "list.csv"
+            source.write_text(
+                "material_id\x01title\x01show_cnt\n"
+                "101\x01有效素材\x01100\n"
+                "\x02,,,,\n",
+                encoding="utf-8",
+            )
+
+            records = io.parse_csv_records(source)
+
+        self.assertEqual(
+            records,
+            [{"material_id": "101", "title": "有效素材", "show_cnt": "100"}],
+        )
+
     def test_parse_csv_records_decodes_yuntu_python_literal_cells_from_fixture(self):
         io = load_module()
 
@@ -245,6 +293,18 @@ class RpaIoTests(unittest.TestCase):
             records = io.parse_csv_records(source)
 
             self.assertEqual(records[0]["object_index"], "{'ctr': invalid}")
+            self.assertEqual(records[0]["__parse_failed_fields__"], ["object_index"])
+
+    def test_structured_cell_decoder_recursively_decodes_python_literal_structures(self):
+        io = load_module()
+        decoded, parse_failed = io.decode_structured_cell(
+            "{'clickIndex': '[{\"x\": 0, \"y\": 1}]'}"
+        )
+
+        self.assertEqual(
+            decoded, {"clickIndex": [{"x": 0, "y": 1}]}
+        )
+        self.assertFalse(parse_failed)
 
     def test_parse_csv_records_rejects_bad_headers_and_empty_files(self):
         io = load_module()

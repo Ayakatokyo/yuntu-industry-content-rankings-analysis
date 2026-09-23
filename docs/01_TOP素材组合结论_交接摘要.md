@@ -6,7 +6,7 @@
 
 ## 当前工作区
 
-- 仓库：`/Users/shuzida/Desktop/FDE客户/小仙炖/yuntu-industry-content-rankings-analysis`
+- 仓库：`/Users/shuzida/Desktop/FDE客户/目标品牌/yuntu-industry-content-rankings-analysis`
 - 当前分支：`main`
 - 最近与第一部分相关的提交：
   - `32905d8 fix: restore report sidebar navigation`
@@ -60,7 +60,7 @@
 
 ### 数据事实
 
-[scripts/yuntu_top_materials.py](/Users/shuzida/Desktop/FDE客户/小仙炖/yuntu-industry-content-rankings-analysis/scripts/yuntu_top_materials.py) 是纯后处理模块，负责：
+[scripts/yuntu_top_materials.py](/Users/shuzida/Desktop/FDE客户/目标品牌/yuntu-industry-content-rankings-analysis/scripts/yuntu_top_materials.py) 是纯后处理模块，负责：
 
 - 以曝光量、排名、素材 ID 的稳定顺序选取 TOP30。
 - 汇总整体和品牌 TOP30 的曝光结构、指标均值/中位数、TOP3 集中度。
@@ -70,9 +70,9 @@
 
 ### 分析输入与校验
 
-[scripts/yuntu_analysis.py](/Users/shuzida/Desktop/FDE客户/小仙炖/yuntu-industry-content-rankings-analysis/scripts/yuntu_analysis.py) 将第一部分事实写入分析包和模型提示。
+[scripts/yuntu_analysis.py](/Users/shuzida/Desktop/FDE客户/目标品牌/yuntu-industry-content-rankings-analysis/scripts/yuntu_analysis.py) 将第一部分事实写入分析包和模型提示。
 
-[scripts/yuntu_report.py](/Users/shuzida/Desktop/FDE客户/小仙炖/yuntu-industry-content-rankings-analysis/scripts/yuntu_report.py) 强制以下合同：
+[scripts/yuntu_report.py](/Users/shuzida/Desktop/FDE客户/目标品牌/yuntu-industry-content-rankings-analysis/scripts/yuntu_report.py) 强制以下合同：
 
 - `topMaterialCombination.overallConclusions` 必须且只能有 `data`、`people`、`marketing` 三项。
 - 每个 `brandConclusions` 项必须有 `dataSummary`、`peopleSummary`、`marketingSummary`。
@@ -119,9 +119,9 @@ Markdown 不支持真实 Tab，因此按品牌顺序展示，品牌之间使用 
 
 模板与报告渲染的关键文件：
 
-- [scripts/templates/final-report-template.html](/Users/shuzida/Desktop/FDE客户/小仙炖/yuntu-industry-content-rankings-analysis/scripts/templates/final-report-template.html)
-- [scripts/yuntu_report.py](/Users/shuzida/Desktop/FDE客户/小仙炖/yuntu-industry-content-rankings-analysis/scripts/yuntu_report.py)
-- [tests/test_yuntu_report.py](/Users/shuzida/Desktop/FDE客户/小仙炖/yuntu-industry-content-rankings-analysis/tests/test_yuntu_report.py)
+- [scripts/templates/final-report-template.html](/Users/shuzida/Desktop/FDE客户/目标品牌/yuntu-industry-content-rankings-analysis/scripts/templates/final-report-template.html)
+- [scripts/yuntu_report.py](/Users/shuzida/Desktop/FDE客户/目标品牌/yuntu-industry-content-rankings-analysis/scripts/yuntu_report.py)
+- [tests/test_yuntu_report.py](/Users/shuzida/Desktop/FDE客户/目标品牌/yuntu-industry-content-rankings-analysis/tests/test_yuntu_report.py)
 
 ## 已修复的结构问题
 

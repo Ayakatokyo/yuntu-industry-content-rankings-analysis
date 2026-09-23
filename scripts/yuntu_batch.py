@@ -1,12 +1,14 @@
 """Batch fetch orchestration for Yuntu rankings analysis."""
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import time
 
 from rpa_io import (
     download_file,
+    file_sha256,
     parse_csv_records,
     unpack_gateway_result,
     write_json_atomically,
@@ -25,20 +27,128 @@ class YuntuBatchError(RuntimeError):
     """Raised when a Yuntu batch cannot be started."""
 
 
-DETAIL_WAVE_CONCURRENCY = 2
+DETAIL_WAVE_CONCURRENCY = 3
 HIGHLIGHT_CONCURRENCY = 3
+RANKING_RUN_ORDER = ("query", "previous_period", "industry")
+SELECTION_GROUP_FIELDS = {
+    "selectionGroupId": "id",
+    "brandId": "brand_id",
+    "brandName": "brand_name",
+    "touchpointCode": "touchpoint_code",
+    "touchpointName": "touchpoint_name",
+}
 
 
 class ConnectorInvoker:
-    def __init__(self, invoke_list, invoke_detail):
+    def __init__(self, invoke_list, invoke_detail, *, submit_detail=None, wait_detail=None):
         self._invoke_list = invoke_list
         self._invoke_detail = invoke_detail
+        self._submit_detail = submit_detail
+        self._wait_detail = wait_detail
 
     def invoke_list(self, shop_id, list_params):
         return self._invoke_list(shop_id, list_params)
 
     def invoke_detail(self, shop_id, detail_params):
         return self._invoke_detail(shop_id, detail_params)
+
+    @property
+    def supports_detail_task_recovery(self):
+        return callable(self._submit_detail) and callable(self._wait_detail)
+
+    def submit_detail(self, shop_id, detail_params):
+        if not self.supports_detail_task_recovery:
+            raise YuntuBatchError("detail task submission recovery is unavailable")
+        return self._submit_detail(shop_id, detail_params)
+
+    def wait_detail(self, task_group_id):
+        if not self.supports_detail_task_recovery:
+            raise YuntuBatchError("detail task status recovery is unavailable")
+        return self._wait_detail(task_group_id)
+
+
+def _supports_detail_task_recovery(invoker):
+    """Keep lightweight test/legacy invokers on the synchronous adapter path."""
+    return bool(getattr(invoker, "supports_detail_task_recovery", False))
+
+
+def _parse_period_date(value):
+    text = str(value or "")
+    for fmt in ("%Y%m%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _iso_date_range(start, end):
+    if not start or not end:
+        return None
+    return {"startDate": start.isoformat(), "endDate": end.isoformat()}
+
+
+def _compact_date(value):
+    return value.strftime("%Y%m%d")
+
+
+def _list_period_type(params):
+    if "date_type" in params:
+        return params.get("date_type")
+    return params.get("time_range_type")
+
+
+def _list_period_key(params):
+    return "date_type" if "date_type" in params else "time_range_type"
+
+
+def build_ranking_run_specs(list_params, *, resolved_date_range=None):
+    """Build immutable query, previous-period, and industry list request specs."""
+    if not isinstance(list_params, dict):
+        raise YuntuBatchError("list_params must be an object")
+    query_params = dict(list_params)
+    start = end = None
+    if _list_period_type(query_params) == "CUSTOM":
+        start = _parse_period_date(query_params.get("custom_start_date"))
+        end = _parse_period_date(query_params.get("custom_end_date"))
+    elif isinstance(resolved_date_range, dict):
+        start = _parse_period_date(resolved_date_range.get("startDate"))
+        end = _parse_period_date(resolved_date_range.get("endDate"))
+
+    query_range = _iso_date_range(start, end)
+    previous_params = None
+    previous_range = None
+    if start and end:
+        period_days = (end - start).days + 1
+        previous_end = start - timedelta(days=1)
+        previous_start = previous_end - timedelta(days=period_days - 1)
+        previous_params = {
+            **query_params,
+            _list_period_key(query_params): "CUSTOM",
+            "custom_start_date": _compact_date(previous_start),
+            "custom_end_date": _compact_date(previous_end),
+        }
+        previous_range = _iso_date_range(previous_start, previous_end)
+
+    industry_params = {
+        key: value
+        for key, value in query_params.items()
+        if key not in {"brand_scope_type", "brands"}
+    }
+    industry_params["brand_scope_type"] = "ALL_INDUSTRY"
+    return {
+        "query": {"params": query_params, "resolvedDateRange": query_range},
+        "previous_period": {
+            "params": previous_params,
+            "resolvedDateRange": previous_range,
+            "unavailableReason": (
+                "query actual date range is unavailable; previous period cannot be derived"
+                if previous_params is None
+                else ""
+            ),
+        },
+        "industry": {"params": industry_params, "resolvedDateRange": query_range},
+    }
 
 
 class FileDownloader:
@@ -95,43 +205,43 @@ def _candidate_materials_from_list(records, candidate_top_n):
 
 
 def _manifest_material(item):
-    result = {"rank": item["rank"], "material_id": item["material_id"]}
-    if item["selectionGroupId"] != "default":
-        result["selectionGroupId"] = item["selectionGroupId"]
-        result["brandId"] = item["selectionGroup"]["brand_id"]
-        result["brandName"] = item["selectionGroup"]["brand_name"]
-        result["touchpointCode"] = item["selectionGroup"]["touchpoint_code"]
-        result["touchpointName"] = item["selectionGroup"]["touchpoint_name"]
-    return result
+    return {
+        "rank": item["rank"],
+        "material_id": item["material_id"],
+        **_selection_group_fields(item),
+    }
+
+
+def _selection_group_fields(item):
+    """Return the durable manifest shape for an optional selection group."""
+    group_id = item.get("selectionGroupId")
+    if not group_id or group_id == "default":
+        return {}
+    group = item.get("selectionGroup")
+    if isinstance(group, dict):
+        return {
+            field: group.get(key, "")
+            for field, key in SELECTION_GROUP_FIELDS.items()
+        }
+    return {
+        field: item.get(field, "")
+        for field in SELECTION_GROUP_FIELDS
+    }
+
+
+def _expected_selection_group(item):
+    fields = _selection_group_fields(item)
+    if not fields:
+        return None
+    return {key: fields[field] for field, key in SELECTION_GROUP_FIELDS.items()}
 
 
 def _detail_request(item, detail_date_params):
-    request = {"material_id": item["material_id"], **detail_date_params}
-    if item["selectionGroupId"] != "default":
-        request.update(
-            {
-                "selectionGroupId": item["selectionGroupId"],
-                "brandId": item["selectionGroup"]["brand_id"],
-                "brandName": item["selectionGroup"]["brand_name"],
-                "touchpointCode": item["selectionGroup"]["touchpoint_code"],
-                "touchpointName": item["selectionGroup"]["touchpoint_name"],
-            }
-        )
-    return request
-
-
-def _retry_detail_request(item, detail_date_params):
-    request = {"material_id": item["material_id"], **detail_date_params}
-    for key in (
-        "selectionGroupId",
-        "brandId",
-        "brandName",
-        "touchpointCode",
-        "touchpointName",
-    ):
-        if key in item:
-            request[key] = item[key]
-    return request
+    return {
+        "material_id": item["material_id"],
+        **detail_date_params,
+        **_selection_group_fields(item),
+    }
 
 
 def _target_satisfied(manifest):
@@ -167,12 +277,14 @@ def _new_manifest(
     summary,
 ):
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 4,
         "runId": summary["runId"],
         "parameterFingerprint": summary["parameterFingerprint"],
         "collectionContract": summary["collectionContract"],
         "status": "running",
-        "filters": list_params,
+        "rankingRuns": {},
+        "taskRuns": {},
+        "filters": _manifest_filters(list_params),
         "detailDateRange": detail_date_params,
         "targetTopN": target_top_n,
         "candidateTopN": candidate_top_n,
@@ -213,7 +325,7 @@ def _open_or_new_manifest(
     except (OSError, ValueError) as exc:
         raise YuntuBatchError("existing batch manifest is unreadable") from exc
     if (
-        manifest.get("filters") != list_params
+        _manifest_filters(manifest.get("filters")) != _manifest_filters(list_params)
         or manifest.get("detailDateRange") != detail_date_params
         or manifest.get("targetTopN") != target_top_n
         or manifest.get("candidateTopN") != candidate_top_n
@@ -223,14 +335,17 @@ def _open_or_new_manifest(
         )
     manifest.update(
         {
-            "schemaVersion": 2,
+            "schemaVersion": 4,
             "runId": summary["runId"],
             "parameterFingerprint": summary["parameterFingerprint"],
             "collectionContract": summary["collectionContract"],
             "status": "running",
+            "filters": _manifest_filters(list_params),
         }
     )
     for key in (
+        "rankingRuns",
+        "taskRuns",
         "candidateMaterials",
         "selectionGroups",
         "submittedMaterials",
@@ -241,6 +356,10 @@ def _open_or_new_manifest(
     ):
         manifest.setdefault(key, [])
     manifest.setdefault("timingsSec", {})
+    if not isinstance(manifest.get("rankingRuns"), dict):
+        manifest["rankingRuns"] = {}
+    if not isinstance(manifest.get("taskRuns"), dict):
+        manifest["taskRuns"] = {}
     return manifest
 
 
@@ -306,6 +425,15 @@ def _mark_unresolved_submissions(manifest, candidates):
         item = candidate_by_id.get(material_id)
         if item is None or material_id in terminal_ids:
             continue
+        task_run = manifest.get("taskRuns", {}).get(f"detail:{material_id}")
+        attempts = task_run.get("attempts", []) if isinstance(task_run, dict) else []
+        active_attempt = attempts[-1] if attempts and isinstance(attempts[-1], dict) else {}
+        if active_attempt.get("taskGroupId") and active_attempt.get("remoteStatus") in {
+            "pending", "running", "submitted"
+        }:
+            # A persisted task ID is recoverable.  fetch_batch will poll it
+            # below; it must not become an explicit re-submit candidate.
+            continue
         unresolved.append(
             {
                 **_manifest_material(item),
@@ -314,6 +442,80 @@ def _mark_unresolved_submissions(manifest, candidates):
         )
         terminal_ids.add(material_id)
     manifest["unresolvedMaterials"] = unresolved
+
+
+def _task_run(manifest, *, item, detail_date_params):
+    """Return the v4 detail task ledger entry owned by the manifest."""
+    material_id = item["material_id"]
+    task_runs = manifest.setdefault("taskRuns", {})
+    return task_runs.setdefault(
+        f"detail:{material_id}",
+        {
+            "operation": "detail",
+            "functionCode": "rpa.conn.juliang.yt.industry.content.rankings.details",
+            "businessParams": {
+                "material_id": material_id,
+                **detail_date_params,
+            },
+            "attempts": [],
+        },
+    )
+
+
+def _active_detail_task_attempt(manifest, material_id):
+    task_run = manifest.get("taskRuns", {}).get(f"detail:{material_id}")
+    attempts = task_run.get("attempts", []) if isinstance(task_run, dict) else []
+    if not attempts or not isinstance(attempts[-1], dict):
+        return None
+    attempt = attempts[-1]
+    if (
+        isinstance(attempt.get("taskGroupId"), str)
+        and attempt["taskGroupId"]
+        and attempt.get("remoteStatus") in {"pending", "running", "submitted"}
+    ):
+        return attempt
+    return None
+
+
+def _now_iso():
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _submit_detail_task(*, manifest, item, shop_id, detail_date_params, invoker):
+    """Submit once. The caller checkpoints before and after this side effect."""
+    task_run = _task_run(manifest, item=item, detail_date_params=detail_date_params)
+    attempt = {
+        "attempt": len(task_run["attempts"]) + 1,
+        "requestStatus": "submitting",
+        "remoteStatus": "submitted",
+        "artifactStatus": "pending",
+        "submittedAt": _now_iso(),
+        "lastObservedAt": _now_iso(),
+        "errors": [],
+        "artifactPaths": [],
+    }
+    task_run["attempts"].append(attempt)
+    return attempt
+
+
+def _wait_detail_task_result(*, item, task_group_id, invoker):
+    started = time.monotonic()
+    try:
+        return {
+            "item": item,
+            "result": invoker.wait_detail(task_group_id),
+            "started": started,
+            "taskGroupId": task_group_id,
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "item": item,
+            "result": None,
+            "started": started,
+            "taskGroupId": task_group_id,
+            "error": exc,
+        }
 
 
 def _has_existing_collection_artifacts(root):
@@ -389,6 +591,41 @@ def _brand_tokens(value):
     }
 
 
+def _brand_values(value):
+    """Normalize the connector's string multi-value formats for comparison."""
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if not isinstance(value, str):
+        return []
+    text = value.strip()
+    if not text:
+        return []
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        decoded = None
+    if isinstance(decoded, list):
+        return [str(item).strip() for item in decoded if str(item).strip()]
+    return [part.strip() for part in text.replace("/", ",").split(",") if part.strip()]
+
+
+def _manifest_filters(list_params):
+    """Store analysis filters in their canonical local representation."""
+    if not isinstance(list_params, dict):
+        return list_params
+    filters = dict(list_params)
+    if "brands" in filters:
+        filters["brands"] = _brand_values(filters["brands"])
+    return filters
+
+
+def _display_date(value):
+    text = str(value or "")
+    if len(text) == 8 and text.isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    return text
+
+
 def _validate_list_context(list_records, list_params):
     if not list_records:
         return {"valid": False, "issues": ["list records are empty"], "observed": {}}
@@ -397,9 +634,10 @@ def _validate_list_context(list_records, list_params):
     issues = []
     if "industry" in list_params and context.get("industry") != list_params["industry"]:
         issues.append("industry")
-    if list_params.get("time_range_type") == "CUSTOM":
+    if _list_period_type(list_params) == "CUSTOM":
         expected = (
-            f"{list_params['custom_start_date']} ~ {list_params['custom_end_date']}"
+            f"{_display_date(list_params['custom_start_date'])} ~ "
+            f"{_display_date(list_params['custom_end_date'])}"
         )
         if context.get("custom_date_range") != expected:
             issues.append("custom_date_range")
@@ -410,7 +648,7 @@ def _validate_list_context(list_records, list_params):
         if not isinstance(actual_brands, list):
             actual_brands = []
         actual_tokens = [_brand_tokens(brand) for brand in actual_brands]
-        for brand in list_params.get("brands", []):
+        for brand in _brand_values(list_params.get("brands")):
             if not any(_brand_tokens(brand) & tokens for tokens in actual_tokens):
                 issues.append("brands")
                 break
@@ -437,11 +675,162 @@ def _reusable_list_artifact(root, list_params, detail_date_params):
     except (OSError, ValueError):
         return None
     if (
-        previous.get("filters") != list_params
+        _manifest_filters(previous.get("filters")) != _manifest_filters(list_params)
         or previous.get("detailDateRange") != detail_date_params
     ):
         return None
     return list_path
+
+
+def _ranking_list_paths(root, run_key):
+    if run_key == "query":
+        return (
+            root / "raw-csv" / "list.csv",
+            root / "raw-json" / "list-response.json",
+            root / "normalized" / "list-records.json",
+        )
+    suffix = "previous-period" if run_key == "previous_period" else "industry"
+    return (
+        root / "raw-csv" / f"list-{suffix}.csv",
+        root / "raw-json" / f"list-response-{suffix}.json",
+        root / "normalized" / f"list-records-{suffix}.json",
+    )
+
+
+def _ranking_run_snapshot(*, root, run_key, spec, status="pending"):
+    raw_csv, raw_json, normalized = _ranking_list_paths(root, run_key)
+    return {
+        "runKey": run_key,
+        "requestParams": spec.get("params"),
+        "actualDateRange": spec.get("resolvedDateRange"),
+        "status": status,
+        "rawPath": _relative(root, raw_csv),
+        "rawJsonPath": _relative(root, raw_json),
+        "normalizedPath": _relative(root, normalized),
+        "sampleCount": 0,
+        "contextVerification": {"valid": False, "issues": [], "observed": {}},
+    }
+
+
+def _invoke_ranking_result(*, run_key, shop_id, spec, invoker):
+    """Run only one ranking gateway request in a worker thread."""
+    started = time.monotonic()
+    try:
+        return {
+            "runKey": run_key,
+            "result": invoker.invoke_list(shop_id, spec["params"]),
+            "duration": _elapsed(started),
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "runKey": run_key,
+            "result": None,
+            "duration": _elapsed(started),
+            "error": exc,
+        }
+
+
+def _persist_ranking_response(
+    *, root, manifest, summary, run_key, spec, response, downloader
+):
+    """Materialize and normalize one worker response on the main thread."""
+    entry = manifest["rankingRuns"][run_key]
+    if response["error"] is not None:
+        entry.update(
+            {
+                "status": "failed",
+                "error": str(response["error"]),
+                "timingsSec": {"listFetchSec": response["duration"]},
+            }
+        )
+        return None, entry
+
+    raw_csv, raw_json, normalized_path = _ranking_list_paths(root, run_key)
+    try:
+        raw_list, list_source = _materialize_records(
+            response["result"],
+            csv_path=raw_csv,
+            json_path=raw_json,
+            downloader=downloader,
+        )
+        list_records = normalize_list_records(
+            raw_list, source_path=_relative(root, list_source)
+        )
+        write_json_atomically(list_records, normalized_path)
+        verification = _validate_list_context(list_records, spec["params"])
+        entry.update(
+            {
+                "status": "success" if verification["valid"] else "context_mismatch",
+                "sampleCount": len(list_records),
+                "contextVerification": verification,
+                "actualDateRange": _actual_date_range_from_records(list_records)
+                or spec.get("resolvedDateRange"),
+                "timingsSec": {"listFetchSec": response["duration"]},
+            }
+        )
+        _record_artifact(
+            summary,
+            root,
+            f"rankingList:{run_key}",
+            normalized_path,
+            f"normalized_ranking_{run_key}",
+        )
+        return list_records, entry
+    except Exception as exc:
+        entry.update({"status": "failed", "error": str(exc)})
+        return None, entry
+
+
+def _reusable_ranking_records(root, manifest, run_key):
+    """Return a verified normalized ranking list from a previous checkpoint."""
+    entry = manifest.get("rankingRuns", {}).get(run_key)
+    if not isinstance(entry, dict) or entry.get("status") != "success":
+        return None
+    relative_path = entry.get("normalizedPath")
+    if not isinstance(relative_path, str) or not relative_path:
+        return None
+    path = root / relative_path
+    try:
+        records = _load_json(path)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(records, list) or not records:
+        return None
+    return records
+
+
+def _persist_ranking_run(
+    *, root, manifest, summary, run_key, shop_id, spec, invoker, downloader
+):
+    entry = _ranking_run_snapshot(root=root, run_key=run_key, spec=spec)
+    manifest["rankingRuns"][run_key] = entry
+    summary["rankingRuns"] = manifest["rankingRuns"]
+    summary["stages"]["list"].setdefault("runs", {})[run_key] = entry
+    _save_summary(root, summary)
+    response = _invoke_ranking_result(
+        run_key=run_key, shop_id=shop_id, spec=spec, invoker=invoker
+    )
+    return _persist_ranking_response(
+        root=root,
+        manifest=manifest,
+        summary=summary,
+        run_key=run_key,
+        spec=spec,
+        response=response,
+        downloader=downloader,
+    )
+
+
+def _actual_date_range_from_records(records):
+    if not records:
+        return None
+    context = records[0].get("list_context", {})
+    if not isinstance(context, dict):
+        return None
+    start = _parse_period_date(context.get("actual_start_date"))
+    end = _parse_period_date(context.get("actual_end_date"))
+    return _iso_date_range(start, end)
 
 
 def _selected_ids(manifest):
@@ -469,6 +858,40 @@ def _refresh_ready_materials(root, manifest):
     )
 
 
+def _finalize_details(
+    root,
+    manifest,
+    summary,
+    manifest_path,
+    *,
+    incomplete_status="partial",
+    require_no_unresolved=True,
+):
+    """Write the shared collection handoff after collection."""
+    _refresh_ready_materials(root, manifest)
+    succeeded = (
+        not manifest.get("rejectedMaterials")
+        and (not require_no_unresolved or not manifest.get("unresolvedMaterials"))
+        and _target_satisfied(manifest)
+        and (
+            not manifest.get("rankingRuns")
+            or all(
+                isinstance(run, dict) and run.get("status") == "success"
+                for run in manifest["rankingRuns"].values()
+            )
+        )
+    )
+    manifest["status"] = "success" if succeeded else incomplete_status
+    summary["status"] = manifest["status"]
+    summary["stages"]["details"]["requestStatus"] = (
+        "completed" if succeeded else "partial"
+    )
+    _sync_stage_counts(summary, manifest, root)
+    write_json_atomically(manifest, manifest_path)
+    _save_summary(root, summary)
+    return 0 if succeeded else 1
+
+
 def _invoke_detail_result(*, item, shop_id, detail_date_params, invoker):
     """Run only the gateway call in a worker; the scheduler owns all writes."""
     started = time.monotonic()
@@ -483,6 +906,51 @@ def _invoke_detail_result(*, item, shop_id, detail_date_params, invoker):
         }
     except Exception as exc:
         return {"item": item, "result": None, "started": started, "error": exc}
+
+
+def _persist_detail(
+    *, root, summary, item, gateway_result, downloader, detail_fetch_sec,
+    expected_context=None,
+):
+    """Normalize a successful detail response and build its durable manifest entry."""
+    material_id = item["material_id"]
+    raw_detail, detail_source = _materialize_records(
+        gateway_result,
+        csv_path=root / "raw-csv" / "details" / f"{material_id}.csv",
+        json_path=root / "raw-json" / "details" / f"{material_id}.json",
+        downloader=downloader,
+    )
+    detail_record = normalize_detail_records(
+        raw_detail,
+        material_id=material_id,
+        source_path=_relative(root, detail_source),
+        source_hash=file_sha256(detail_source),
+        expected_selection_group=_expected_selection_group(item),
+        # Only new requests carry date_type. Historical test fixtures and
+        # read-only legacy batches retain date_range_type without being
+        # reinterpreted under the new connector contract.
+        expected_context=(
+            expected_context
+            if isinstance(expected_context, dict) and "date_type" in expected_context
+            else None
+        ),
+    )
+    detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
+    write_json_atomically(detail_record, detail_output)
+    _record_artifact(
+        summary,
+        root,
+        f"detailRecord:{material_id}",
+        detail_output,
+        "normalized_detail",
+    )
+    return detail_record, {
+        **_manifest_material(item),
+        "listRecordPath": "normalized/list-records.json",
+        "detailRecordPath": _relative(root, detail_output),
+        "rawDetailPath": _relative(root, detail_source),
+        "timingsSec": {"detailFetchSec": detail_fetch_sec},
+    }
 
 
 def _generate_highlight_result(detail, root):
@@ -611,50 +1079,221 @@ def fetch_batch(
     write_json_atomically(manifest, manifest_path)
 
     started = time.monotonic()
-    try:
-        reusable_list = _reusable_list_artifact(root, list_params, detail_date_params)
-        if reusable_list is not None:
-            raw_list, list_source = parse_csv_records(reusable_list), str(reusable_list)
-            summary["stages"]["list"]["requestStatus"] = "reused"
-        else:
-            summary["stages"]["list"]["requestStatus"] = "requested"
-            _save_summary(root, summary)
-            raw_list, list_source = _materialize_records(
-                invoker.invoke_list(shop_id, list_params),
-                csv_path=root / "raw-csv" / "list.csv",
-                json_path=root / "raw-json" / "list-response.json",
-                downloader=downloader,
+    legacy_single_run = (
+        not any(key in list_params for key in ("date_type", "time_range_type"))
+        or (
+            summary.get("schemaVersion", 0) < 3
+            and _reusable_list_artifact(root, list_params, detail_date_params) is not None
+        )
+    )
+    if legacy_single_run:
+        try:
+            reusable_list = _reusable_list_artifact(root, list_params, detail_date_params)
+            if reusable_list is not None:
+                raw_list = parse_csv_records(reusable_list)
+                list_source = reusable_list
+                request_status = "reused"
+            else:
+                raw_list, list_source = _materialize_records(
+                    invoker.invoke_list(shop_id, list_params),
+                    csv_path=root / "raw-csv" / "list.csv",
+                    json_path=root / "raw-json" / "list-response.json",
+                    downloader=downloader,
+                )
+                request_status = "requested"
+            list_records = normalize_list_records(
+                raw_list, source_path=_relative(root, list_source)
             )
-        list_records = normalize_list_records(raw_list, source_path=_relative(root, list_source))
-        list_record_path = root / "normalized" / "list-records.json"
-        write_json_atomically(list_records, list_record_path)
-        _record_artifact(summary, root, "listRecords", list_record_path, "normalized_list")
-        summary["stages"]["list"]["normalized"] = True
-        context_verification = _validate_list_context(list_records, list_params)
-        summary["stages"]["list"]["contextVerified"] = context_verification["valid"]
-        summary["stages"]["list"]["contextIssues"] = context_verification["issues"]
-        summary["stages"]["list"]["observedContext"] = context_verification["observed"]
-        if not context_verification["valid"]:
-            manifest["status"] = "list_context_mismatch"
-            manifest["error"] = "list context does not match requested filters: " + ", ".join(
-                context_verification["issues"]
+            write_json_atomically(list_records, root / "normalized" / "list-records.json")
+            context_verification = _validate_list_context(list_records, list_params)
+            summary["stages"]["list"].update(
+                {
+                    "requestStatus": request_status,
+                    "normalized": True,
+                    "contextVerified": context_verification["valid"],
+                    "contextIssues": context_verification["issues"],
+                    "observedContext": context_verification["observed"],
+                }
             )
-            manifest["timingsSec"]["totalSec"] = _elapsed(started)
-            summary["status"] = "list_context_mismatch"
+            if not context_verification["valid"]:
+                manifest["status"] = "list_context_mismatch"
+                manifest["error"] = "list context does not match requested filters: " + ", ".join(
+                    context_verification["issues"]
+                )
+                summary["status"] = manifest["status"]
+                _sync_stage_counts(summary, manifest, root)
+                write_json_atomically(manifest, manifest_path)
+                _save_summary(root, summary)
+                return 1
+        except Exception as exc:
+            manifest["status"] = "list_failed"
+            manifest["error"] = str(exc)
+            summary["status"] = "list_failed"
+            summary["stages"]["list"]["requestStatus"] = "failed"
             _sync_stage_counts(summary, manifest, root)
             write_json_atomically(manifest, manifest_path)
             _save_summary(root, summary)
             return 1
-    except Exception as exc:
-        manifest["status"] = "list_failed"
-        manifest["error"] = str(exc)
-        manifest["timingsSec"]["totalSec"] = _elapsed(started)
-        summary["status"] = "list_failed"
-        summary["stages"]["list"]["requestStatus"] = "failed"
-        _sync_stage_counts(summary, manifest, root)
+    else:
+        specs = build_ranking_run_specs(list_params)
+        ranking_records = {}
+        existing_ranking_runs = manifest.get("rankingRuns", {})
+        manifest["rankingRuns"] = {}
+        pending_specs = {}
+        reused_records = {}
+        for run_key in RANKING_RUN_ORDER:
+            spec = specs[run_key]
+            reusable = _reusable_ranking_records(
+                root, {"rankingRuns": existing_ranking_runs}, run_key
+            )
+            if reusable is not None:
+                entry = dict(existing_ranking_runs[run_key])
+                entry["requestStatus"] = "reused"
+                manifest["rankingRuns"][run_key] = entry
+                reused_records[run_key] = reusable
+            elif not spec.get("params"):
+                entry = _ranking_run_snapshot(
+                    root=root, run_key=run_key, spec=spec, status="unavailable"
+                )
+                entry["error"] = spec.get("unavailableReason") or "actual date range unavailable"
+                manifest["rankingRuns"][run_key] = entry
+            else:
+                entry = _ranking_run_snapshot(
+                    root=root, run_key=run_key, spec=spec, status="running"
+                )
+                entry["requestStatus"] = "requested"
+                manifest["rankingRuns"][run_key] = entry
+                pending_specs[run_key] = spec
+
+        summary["rankingRuns"] = manifest["rankingRuns"]
+        summary["stages"]["list"]["runs"] = manifest["rankingRuns"]
         write_json_atomically(manifest, manifest_path)
         _save_summary(root, summary)
-        return 1
+
+        def persist_ranking_result(run_key, spec, response):
+            records, entry = _persist_ranking_response(
+                root=root,
+                manifest=manifest,
+                summary=summary,
+                run_key=run_key,
+                spec=spec,
+                response=response,
+                downloader=downloader,
+            )
+            if records is not None and entry["status"] == "success":
+                ranking_records[run_key] = records
+            write_json_atomically(manifest, manifest_path)
+            _save_summary(root, summary)
+            return records, entry
+
+        for run_key, records in reused_records.items():
+            ranking_records[run_key] = records
+
+        # Relative periods cannot be derived until the query response exposes
+        # its actual closed date range. Query and industry still run together;
+        # the previous-period request is submitted as soon as that range is
+        # available, without moving any persistence into a worker.
+        if (
+            not specs["previous_period"].get("params")
+            and "query" in reused_records
+            and manifest["rankingRuns"]["query"].get("actualDateRange")
+        ):
+            specs = build_ranking_run_specs(
+                list_params,
+                resolved_date_range=manifest["rankingRuns"]["query"]["actualDateRange"],
+            )
+            previous_spec = specs["previous_period"]
+            entry = _ranking_run_snapshot(
+                root=root, run_key="previous_period", spec=previous_spec, status="running"
+            )
+            entry["requestStatus"] = "requested"
+            manifest["rankingRuns"]["previous_period"] = entry
+            pending_specs["previous_period"] = previous_spec
+
+        with ThreadPoolExecutor(max_workers=3) as ranking_executor:
+            pending = {
+                ranking_executor.submit(
+                    _invoke_ranking_result,
+                    run_key=run_key,
+                    shop_id=shop_id,
+                    spec=spec,
+                    invoker=invoker,
+                ): run_key
+                for run_key, spec in pending_specs.items()
+            }
+            while pending:
+                done, _ = wait(set(pending), return_when=FIRST_COMPLETED)
+                for future in sorted(
+                    done, key=lambda item: RANKING_RUN_ORDER.index(pending[item])
+                ):
+                    run_key = pending.pop(future)
+                    response = future.result()
+                    records, entry = persist_ranking_result(
+                        run_key, pending_specs[run_key], response
+                    )
+                    if (
+                        run_key == "query"
+                        and records is not None
+                        and entry["status"] == "success"
+                        and not specs["previous_period"].get("params")
+                    ):
+                        query_range = entry.get("actualDateRange")
+                        if query_range:
+                            specs = build_ranking_run_specs(
+                                list_params, resolved_date_range=query_range
+                            )
+                            previous_spec = specs["previous_period"]
+                            previous_entry = _ranking_run_snapshot(
+                                root=root,
+                                run_key="previous_period",
+                                spec=previous_spec,
+                                status="running",
+                            )
+                            previous_entry["requestStatus"] = "requested"
+                            manifest["rankingRuns"]["previous_period"] = previous_entry
+                            pending_specs["previous_period"] = previous_spec
+                            pending[
+                                ranking_executor.submit(
+                                    _invoke_ranking_result,
+                                    run_key="previous_period",
+                                    shop_id=shop_id,
+                                    spec=previous_spec,
+                                    invoker=invoker,
+                                )
+                            ] = "previous_period"
+
+        list_records = ranking_records.get("query")
+        query_entry = manifest["rankingRuns"]["query"]
+        if list_records is None or query_entry["status"] != "success":
+            manifest["status"] = (
+                "list_context_mismatch"
+                if query_entry["status"] == "context_mismatch"
+                else "list_failed"
+            )
+            manifest["error"] = query_entry.get("error") or (
+                "query list context does not match requested filters"
+            )
+            manifest["timingsSec"]["totalSec"] = _elapsed(started)
+            summary["status"] = manifest["status"]
+            summary["stages"]["list"]["requestStatus"] = "failed"
+            _sync_stage_counts(summary, manifest, root)
+            write_json_atomically(manifest, manifest_path)
+            _save_summary(root, summary)
+            return 1
+        summary["stages"]["list"].update(
+            {
+                "requestStatus": "completed"
+                if all(
+                    item.get("status") == "success"
+                    for item in manifest["rankingRuns"].values()
+                )
+                else "partial",
+                "normalized": True,
+                "contextVerified": True,
+                "runs": manifest["rankingRuns"],
+            }
+        )
+        _save_summary(root, summary)
 
     candidates = _candidate_materials_from_list(list_records, candidate_top_n)
     manifest["candidateMaterials"] = [_manifest_material(item) for item in candidates]
@@ -687,9 +1326,6 @@ def fetch_batch(
     summary["stages"]["details"]["requestStatus"] = "running"
     _sync_stage_counts(summary, manifest, root)
     _save_summary(root, summary)
-    list_by_id = {record["material_id"]: record for record in list_records}
-
-    had_rejection = bool(manifest["rejectedMaterials"])
     selected_by_group = {}
     selected_ids = _selected_ids(manifest)
     rejected_ids = {
@@ -726,6 +1362,7 @@ def fetch_batch(
             for item in manifest["selectedMaterials"]
         )
         _sync_stage_counts(summary, manifest, root)
+        summary["taskRuns"] = manifest.get("taskRuns", {})
         write_json_atomically(manifest, manifest_path)
         _save_summary(root, summary)
 
@@ -754,6 +1391,27 @@ def fetch_batch(
         for detail in details_missing_standard_highlights(restored_details, root):
             submit_highlight(highlight_executor, detail)
 
+        # A previously submitted asynchronous task is resumed by polling the
+        # persisted ID.  It is never submitted again merely because this
+        # process was interrupted after the gateway accepted it.
+        if _supports_detail_task_recovery(invoker):
+            candidate_by_id = {item["material_id"]: item for item in candidates}
+            for material_id, item in candidate_by_id.items():
+                attempt = _active_detail_task_attempt(manifest, material_id)
+                if attempt is None:
+                    continue
+                attempt["lastObservedAt"] = _now_iso()
+                pending_details[
+                    detail_executor.submit(
+                        _wait_detail_task_result,
+                        item=item,
+                        task_group_id=attempt["taskGroupId"],
+                        invoker=invoker,
+                    )
+                ] = material_id
+            if pending_details:
+                checkpoint()
+
         while True:
             if not pending_details and not pending_highlights:
                 wave, next_index = _next_detail_wave(
@@ -770,13 +1428,64 @@ def fetch_batch(
                     break
                 for item in wave:
                     manifest["submittedMaterials"].append(_manifest_material(item))
-                    future = detail_executor.submit(
-                        _invoke_detail_result,
-                        item=item,
-                        shop_id=shop_id,
-                        detail_date_params=detail_date_params,
-                        invoker=invoker,
-                    )
+                    if _supports_detail_task_recovery(invoker):
+                        attempt = _submit_detail_task(
+                            manifest=manifest,
+                            item=item,
+                            shop_id=shop_id,
+                            detail_date_params=detail_date_params,
+                            invoker=invoker,
+                        )
+                        # Persist the intent before submitting; if submission
+                        # itself is ambiguous, it remains visible for manual
+                        # resolution and is not silently retried.
+                        checkpoint()
+                        try:
+                            task_group_id = invoker.submit_detail(
+                                shop_id, _detail_request(item, detail_date_params)
+                            )
+                            attempt.update(
+                                {
+                                    "taskGroupId": task_group_id,
+                                    "requestStatus": "submitted",
+                                    "remoteStatus": "pending",
+                                    "lastObservedAt": _now_iso(),
+                                }
+                            )
+                            checkpoint()
+                            future = detail_executor.submit(
+                                _wait_detail_task_result,
+                                item=item,
+                                task_group_id=task_group_id,
+                                invoker=invoker,
+                            )
+                        except Exception as exc:
+                            attempt.update(
+                                {
+                                    "requestStatus": "submit_unknown",
+                                    "remoteStatus": "submitted",
+                                    "lastObservedAt": _now_iso(),
+                                    "errors": [str(exc)],
+                                }
+                            )
+                            unresolved_ids.add(item["material_id"])
+                            manifest["unresolvedMaterials"].append(
+                                {
+                                    **_manifest_material(item),
+                                    "reason": "submit_unknown",
+                                    "error": str(exc),
+                                }
+                            )
+                            checkpoint()
+                            continue
+                    else:
+                        future = detail_executor.submit(
+                            _invoke_detail_result,
+                            item=item,
+                            shop_id=shop_id,
+                            detail_date_params=detail_date_params,
+                            invoker=invoker,
+                        )
                     pending_details[future] = item["material_id"]
                 checkpoint()
 
@@ -790,52 +1499,82 @@ def fetch_batch(
                     pending_details.pop(future)
                     item = result["item"]
                     material_id = item["material_id"]
+                    task_attempt = _active_detail_task_attempt(manifest, material_id)
                     try:
                         if result["error"] is not None:
+                            if task_attempt is not None:
+                                task_attempt.update(
+                                    {
+                                        "lastObservedAt": _now_iso(),
+                                        "errors": task_attempt.get("errors", []) + [str(result["error"])],
+                                    }
+                                )
+                                # A poll timeout or transport failure does not
+                                # establish a remote failure. Keep the task ID
+                                # resumable instead of issuing another detail
+                                # request on the next process invocation.
+                                if "RPA task failed" not in str(result["error"]):
+                                    unresolved_ids.add(material_id)
+                                    if not any(
+                                        item.get("material_id") == material_id
+                                        for item in manifest["unresolvedMaterials"]
+                                        if isinstance(item, dict)
+                                    ):
+                                        manifest["unresolvedMaterials"].append(
+                                            {
+                                                **_manifest_material(item),
+                                                "reason": "poll_unconfirmed",
+                                                "error": str(result["error"]),
+                                            }
+                                        )
+                                    continue
                             raise result["error"]
-                        raw_detail, detail_source = _materialize_records(
-                            result["result"],
-                            csv_path=root / "raw-csv" / "details" / f"{material_id}.csv",
-                            json_path=root / "raw-json" / "details" / f"{material_id}.json",
+                        if task_attempt is not None:
+                            task_attempt.update(
+                                {
+                                    "remoteStatus": result["result"].get("status", "completed"),
+                                    "lastObservedAt": _now_iso(),
+                                }
+                            )
+                        detail_record, selected_entry = _persist_detail(
+                            root=root,
+                            summary=summary,
+                            item=item,
+                            gateway_result=result["result"],
                             downloader=downloader,
+                            detail_fetch_sec=_elapsed(result["started"]),
+                            expected_context=detail_date_params,
                         )
-                        detail_record = normalize_detail_records(
-                            raw_detail,
-                            material_id=material_id,
-                            source_path=_relative(root, detail_source),
-                            expected_selection_group=(
-                                item["selectionGroup"]
-                                if item["selectionGroupId"] != "default"
-                                else None
-                            ),
-                        )
-                        detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
-                        write_json_atomically(detail_record, detail_output)
-                        _record_artifact(
-                            summary,
-                            root,
-                            f"detailRecord:{material_id}",
-                            detail_output,
-                            "normalized_detail",
-                        )
-                        manifest["selectedMaterials"].append(
-                            {
-                                **_manifest_material(item),
-                                "listRecordPath": "normalized/list-records.json",
-                                "detailRecordPath": _relative(root, detail_output),
-                                "rawDetailPath": _relative(root, detail_source),
-                                "timingsSec": {"detailFetchSec": _elapsed(result["started"])},
-                                "postprocessStatus": "pending",
-                            }
-                        )
+                        if task_attempt is not None:
+                            task_attempt.update(
+                                {
+                                    "artifactStatus": "normalized",
+                                    "artifactPaths": [
+                                        selected_entry["rawDetailPath"],
+                                        selected_entry["detailRecordPath"],
+                                    ],
+                                    "lastObservedAt": _now_iso(),
+                                }
+                            )
+                        selected_entry["postprocessStatus"] = "pending"
+                        manifest["selectedMaterials"].append(selected_entry)
                         selected_ids.add(material_id)
                         selected_by_group[item["selectionGroupId"]] = (
                             selected_by_group.get(item["selectionGroupId"], 0) + 1
                         )
                         submit_highlight(highlight_executor, detail_record)
                     except Exception as exc:
-                        had_rejection = True
                         rejected_ids.add(material_id)
+                        if task_attempt is not None:
+                            task_attempt.update(
+                                {
+                                    "remoteStatus": "failed"
+                                    if "RPA task failed" in str(exc)
+                                    else task_attempt.get("remoteStatus", "submitted"),
+                                    "artifactStatus": "failed",
+                                    "lastObservedAt": _now_iso(),
+                                }
+                            )
                         manifest["rejectedMaterials"].append(
                             {
                                 **_manifest_material(item),
@@ -864,26 +1603,14 @@ def fetch_batch(
     manifest["selectedMaterials"] = sorted(
         manifest["selectedMaterials"], key=lambda item: item.get("rank", 0)
     )
-    ready_materials = [
-        list_by_id[item["material_id"]] for item in manifest["selectedMaterials"]
-    ]
-    write_json_atomically(
-        {"materials": ready_materials},
-        root / "normalized" / "top-materials-rpa-ready.json",
-    )
-    if _target_satisfied(manifest) and not had_rejection:
-        manifest["status"] = "success"
-    else:
-        manifest["status"] = "partial"
     manifest["timingsSec"]["totalSec"] = _elapsed(started)
-    summary["status"] = manifest["status"]
-    summary["stages"]["details"]["requestStatus"] = (
-        "completed" if manifest["status"] == "success" else "partial"
+    return _finalize_details(
+        root,
+        manifest,
+        summary,
+        manifest_path,
+        require_no_unresolved=False,
     )
-    _sync_stage_counts(summary, manifest, root)
-    write_json_atomically(manifest, manifest_path)
-    _save_summary(root, summary)
-    return 0 if manifest["status"] == "success" else 1
 
 
 def collection_status(*, output_dir):
@@ -919,6 +1646,7 @@ def collection_status(*, output_dir):
         "runId": summary.get("runId") or manifest.get("runId"),
         "parameterFingerprint": summary.get("parameterFingerprint"),
         "collectionContract": summary.get("collectionContract"),
+        "rankingRuns": summary.get("rankingRuns") or manifest.get("rankingRuns", {}),
         "stages": {
             "list": {
                 "requestStatus": list_stage.get("requestStatus", "unknown"),
@@ -949,168 +1677,6 @@ def collection_status(*, output_dir):
             "detailRecordsDir": str(detail_dir) if detail_dir.is_dir() else None,
         },
     }
-
-
-def _retry_batch_items(*, shop_id, output_dir, invoker, item_key, downloader=None):
-    if not isinstance(shop_id, str) or not shop_id.strip():
-        raise YuntuBatchError("shop_id is required")
-    downloader = FileDownloader() if downloader is None else downloader
-    root = Path(output_dir)
-    manifest_path = root / "batch-manifest.json"
-    summary_path = root / run_state.RUN_SUMMARY_NAME
-    if not summary_path.is_file():
-        raise YuntuBatchError(
-            "output directory contains an unverifiable existing batch; choose a new output directory"
-        )
-    try:
-        summary = run_state.load_run_state(summary_path)
-    except run_state.YuntuRunStateError as exc:
-        raise YuntuBatchError(
-            "output directory contains an unverifiable existing batch; choose a new output directory"
-        ) from exc
-    contract = summary.get("collectionContract")
-    if not isinstance(contract, dict) or not run_state.collection_contract_matches(
-        summary, contract
-    ):
-        raise YuntuBatchError(
-            "output directory contains an unverifiable existing batch; choose a new output directory"
-        )
-    if contract.get("shopId") != shop_id.strip():
-        raise YuntuBatchError(
-            "output directory belongs to a different collection contract; choose a new output directory"
-        )
-    manifest = _load_json(manifest_path)
-    detail_date_params = contract["detailDateRange"]
-    if manifest.get("detailDateRange") != detail_date_params:
-        raise YuntuBatchError("batch manifest detailDateRange does not match collection contract")
-    retry_items = list(manifest.get(item_key, []))
-    if not retry_items:
-        _refresh_ready_materials(root, manifest)
-        manifest["status"] = (
-            "success"
-            if (
-                not manifest.get("rejectedMaterials")
-                and not manifest.get("unresolvedMaterials")
-                and _target_satisfied(manifest)
-            )
-            else manifest.get("status", "partial")
-        )
-        summary["status"] = manifest["status"]
-        summary["stages"]["details"]["requestStatus"] = "completed"
-        _sync_stage_counts(summary, manifest, root)
-        write_json_atomically(manifest, manifest_path)
-        _save_summary(root, summary)
-        return 0 if manifest["status"] == "success" else 1
-
-    selected_ids = _selected_ids(manifest)
-    still_retry_items = []
-    for item in retry_items:
-        material_id = item.get("material_id")
-        if not isinstance(material_id, str) or not material_id.isdigit():
-            still_retry_items.append(item)
-            continue
-        rank = item.get("rank")
-        detail_started = time.monotonic()
-        try:
-            raw_detail, detail_source = _materialize_records(
-                invoker.invoke_detail(
-                    shop_id, _retry_detail_request(item, detail_date_params)
-                ),
-                csv_path=root / "raw-csv" / "details" / f"{material_id}.csv",
-                json_path=root / "raw-json" / "details" / f"{material_id}.json",
-                downloader=downloader,
-            )
-            detail_record = normalize_detail_records(
-                raw_detail,
-                material_id=material_id,
-                source_path=_relative(root, detail_source),
-                expected_selection_group=(
-                    {
-                        "id": item.get("selectionGroupId"),
-                        "brand_id": item.get("brandId"),
-                        "brand_name": item.get("brandName"),
-                        "touchpoint_code": item.get("touchpointCode"),
-                        "touchpoint_name": item.get("touchpointName"),
-                    }
-                    if item.get("selectionGroupId")
-                    else None
-                ),
-            )
-            detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
-            write_json_atomically(detail_record, detail_output)
-            _record_artifact(
-                summary,
-                root,
-                f"detailRecord:{material_id}",
-                detail_output,
-                "normalized_detail",
-            )
-            if material_id not in selected_ids:
-                manifest.setdefault("selectedMaterials", []).append(
-                    {
-                        "rank": rank,
-                        "material_id": material_id,
-                        **(
-                            {key: item[key] for key in ("selectionGroupId", "brandId", "brandName", "touchpointCode", "touchpointName") if key in item}
-                        ),
-                        "listRecordPath": "normalized/list-records.json",
-                        "detailRecordPath": _relative(root, detail_output),
-                        "rawDetailPath": _relative(root, detail_source),
-                        "timingsSec": {"detailFetchSec": _elapsed(detail_started)},
-                    }
-                )
-                selected_ids.add(material_id)
-        except Exception as exc:
-            retry_count = int(item.get("retryCount", 0)) + 1
-            updated = dict(item)
-            updated["reason"] = exc.__class__.__name__
-            updated["error"] = str(exc)
-            updated["retryCount"] = retry_count
-            updated["timingsSec"] = {"detailFetchSec": _elapsed(detail_started)}
-            still_retry_items.append(updated)
-
-    manifest["selectedMaterials"] = sorted(
-        manifest.get("selectedMaterials", []), key=lambda item: item.get("rank", 0)
-    )
-    manifest[item_key] = still_retry_items
-    _refresh_ready_materials(root, manifest)
-    manifest["status"] = (
-        "success"
-        if (
-            not manifest.get("rejectedMaterials")
-            and not manifest.get("unresolvedMaterials")
-            and _target_satisfied(manifest)
-        )
-        else "partial"
-    )
-    summary["status"] = manifest["status"]
-    summary["stages"]["details"]["requestStatus"] = (
-        "completed" if manifest["status"] == "success" else "partial"
-    )
-    _sync_stage_counts(summary, manifest, root)
-    write_json_atomically(manifest, manifest_path)
-    _save_summary(root, summary)
-    return 0 if manifest["status"] == "success" else 1
-
-
-def retry_failed_batch(*, shop_id, output_dir, invoker, downloader=None):
-    return _retry_batch_items(
-        shop_id=shop_id,
-        output_dir=output_dir,
-        invoker=invoker,
-        item_key="rejectedMaterials",
-        downloader=downloader,
-    )
-
-
-def retry_unresolved_batch(*, shop_id, output_dir, invoker, downloader=None):
-    return _retry_batch_items(
-        shop_id=shop_id,
-        output_dir=output_dir,
-        invoker=invoker,
-        item_key="unresolvedMaterials",
-        downloader=downloader,
-    )
 
 
 def _relative(root, path):

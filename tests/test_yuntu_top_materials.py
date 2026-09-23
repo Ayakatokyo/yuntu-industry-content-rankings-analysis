@@ -47,6 +47,24 @@ class YuntuTopMaterialsTests(unittest.TestCase):
             {"value": "未知品牌", "source": "unclassified"},
         )
 
+    def test_classify_brand_preserves_all_matching_brands(self):
+        subject = load_module()
+        result = subject.classify_brand(
+            "九阳豆浆和万益蓝wonderlab联名",
+            brands=["Joyoung soymilk/九阳豆浆", "WONDERLAB/万益蓝"],
+        )
+        self.assertEqual(result["value"], ["Joyoung soymilk/九阳豆浆", "WONDERLAB/万益蓝"])
+        self.assertEqual(result["matchedBrands"], result["value"])
+        self.assertEqual(result["source"], "runtime_title_rule")
+
+    def test_classify_brand_allows_observed_controlled_parent_alias(self):
+        subject = load_module()
+        result = subject.classify_brand(
+            "#九阳自律豆浆",
+            brands=["Joyoung soymilk/九阳豆浆"],
+        )
+        self.assertEqual(result["value"], "Joyoung soymilk/九阳豆浆")
+
     def test_classify_brand_uses_confirmed_title_rules(self):
         subject = load_module()
 
@@ -112,14 +130,14 @@ class YuntuTopMaterialsTests(unittest.TestCase):
         self.assertTrue(overall["people"]["coverageIsOverlapping"])
         self.assertEqual(overall["people"]["age"][0]["label"], "24-30")
         self.assertEqual(overall["people"]["age"][0]["exposureCoverage"], 600 / 1100)
-        self.assertEqual(overall["marketing"]["成分/原料"][0]["rawTag"], "成分配方原料_铁元素")
-        self.assertEqual(overall["marketing"]["内容形式"][0]["rawTag"], "单人口播")
-        self.assertEqual(result["brands"]["五个女博士"]["identifiedMaterialCount"], 1)
+        self.assertEqual(overall["marketing"]["成分配方原料"][0]["rawTag"], "成分配方原料_铁元素")
+        self.assertEqual(overall["marketing"]["其他"][0]["rawTag"], "单人口播")
+        self.assertEqual(result["brands"]["五个女博士"]["identifiedMaterialCount"], 2)
         self.assertEqual(
             [item["material_id"] for item in result["brands"]["五个女博士"]["topMaterials"]],
-            ["1"],
+            ["1", "4"],
         )
-        self.assertIn("ambiguous_brand_title", result["warnings"])
+        self.assertNotIn("ambiguous_brand_title", result["warnings"])
 
     def test_build_combination_uses_runtime_brands_and_full_pool(self):
         subject = load_module()
@@ -204,6 +222,61 @@ class YuntuTopMaterialsTests(unittest.TestCase):
             {"label": "新锐白领", "materialCount": 2, "materialShare": 2 / 3, "chartShare": 2 / 3},
             {"label": "精致妈妈", "materialCount": 1, "materialShare": 1 / 3, "chartShare": 1 / 3},
         ])
+
+    def test_parse_marketing_tag_splits_once_and_preserves_raw_tag(self):
+        subject = load_module()
+
+        self.assertEqual(
+            subject.parse_marketing_tag("功效功能_补充营养_日常养护"),
+            {
+                "category": "功效功能",
+                "tag": "补充营养_日常养护",
+                "rawTag": "功效功能_补充营养_日常养护",
+            },
+        )
+        self.assertEqual(
+            subject.parse_marketing_tag("未分层营销标签"),
+            {
+                "category": "其他",
+                "tag": "未分层营销标签",
+                "rawTag": "未分层营销标签",
+            },
+        )
+
+    def test_marketing_dashboard_aggregates_first_level_and_second_level_tags(self):
+        subject = load_module()
+        result = subject.build_marketing_dashboard([
+            record("1", 300, 1, tags=["功效功能_补充营养_日常养护", "未分层营销标签"]),
+            record("2", 200, 2, tags=["功效功能_补充营养_日常养护"]),
+        ])
+
+        categories = {item["category"]: item for item in result["categories"]}
+        self.assertEqual(set(categories), {"功效功能", "其他"})
+        self.assertEqual(categories["功效功能"]["tags"], [{
+            "tag": "补充营养_日常养护",
+            "rawTag": "功效功能_补充营养_日常养护",
+            "count": 2,
+            "materialCount": 2,
+        }])
+        self.assertEqual(categories["其他"]["tags"], [{
+            "tag": "未分层营销标签",
+            "rawTag": "未分层营销标签",
+            "count": 1,
+            "materialCount": 1,
+        }])
+        self.assertEqual(result["topTags"][0]["category"], "功效功能")
+        self.assertEqual(result["topTags"][0]["rawTag"], "功效功能_补充营养_日常养护")
+        self.assertEqual(result["taxonomyVersion"], 2)
+
+    def test_marketing_summary_uses_hierarchical_categories_without_keyword_fallbacks(self):
+        subject = load_module()
+        result = subject.build_top_material_combination([
+            record("1", 300, 1, "五个女博士", tags=["促销优惠_买一送一", "单人口播"]),
+        ])
+
+        self.assertEqual(result["overall"]["marketing"]["促销优惠"][0]["tag"], "买一送一")
+        self.assertEqual(result["overall"]["marketing"]["促销优惠"][0]["rawTag"], "促销优惠_买一送一")
+        self.assertEqual(result["overall"]["marketing"]["其他"][0]["tag"], "单人口播")
 
 
 if __name__ == "__main__":

@@ -4,4 +4,6 @@ __pycache__/
 .env.*
 !.env.example
 .DS_Store
+# Historical batches remain read-only and ignored.
 /RPA数据汇总
+/云图数据资源

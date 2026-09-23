@@ -1,22 +1,36 @@
-"""Build auditable Xiaoxian Dun analysis fact packs from normalized records."""
+"""Build auditable industry content analysis fact packs from normalized records."""
 
 import json
+from yuntu_analysis_quality import apply_schema, QUALITY_VERSION
 from pathlib import Path
+import re
 from statistics import median
 
-from rpa_io import write_json_atomically
+try:
+    import jieba.posseg as pseg
+except ImportError:  # pragma: no cover - the production environment provides jieba
+    pseg = None
+
+from rpa_io import file_sha256, write_json_atomically
 from yuntu_highlights import (
     ALLOWED_HIGHLIGHT_TRENDS,
     details_missing_standard_highlights,
     generate_standard_highlights_for_detail,
     load_highlights_manifest,
+    load_video_asset_records,
+    find_local_video_asset,
     write_highlights_manifest,
 )
+from yuntu_highlight_export import match_brands_from_title
 from yuntu_top_materials import (
     build_audience_dashboard,
     build_marketing_dashboard,
     build_top_material_combination,
     select_top_materials,
+)
+from yuntu_hot_material_config import (
+    HotMaterialConfigError,
+    load_hot_material_rule,
 )
 
 
@@ -26,6 +40,51 @@ class YuntuAnalysisError(RuntimeError):
 
 SECOND_LEVEL_TRENDS = ALLOWED_HIGHLIGHT_TRENDS
 RANKING_FACT_METRICS = ("show_cnt", "ctr", "cvr", "play_3s_rate")
+RANKING_MATERIAL_METRICS = ("ctr", "cvr", "play_3s_rate")
+SCRIPT_FORMULA_PRIMARY_LABELS = {
+    "9": "商品卖点",
+    "10": "品牌印象",
+    "13": "人群",
+    "15": "使用场景",
+}
+SCRIPT_FORMULA_SECONDARY_LABELS = {
+    "34": "功效功能",
+    "39": "使用感受和服务体验",
+    "40": "产品代名词",
+    "42": "成分配方原料",
+    "44": "工艺科技",
+    "52": "人群",
+    "55": "身份认同",
+    "56": "市场地位和权威背书",
+    "57": "品牌调性和故事",
+    "87": "使用场景",
+}
+REPORT_DATA_FIELDS = (
+    "schemaVersion",
+    "analysisQualityVersion",
+    "filters",
+    "selectedMaterials",
+    "rejectedMaterials",
+    "summaryMetrics",
+    "candidatePool",
+    "reportScopes",
+    "audienceDashboard",
+    "tagInsights",
+    "trendSummary",
+    "dataAvailabilitySummary",
+    "materialFacts",
+    "chapter02Facts",
+    "chapter02AiFacts",
+    "industryTop1000Facts",
+    "brandRankingFacts",
+    "current",
+    "previousPeriod",
+    "industryBenchmark",
+    "comparisonFacts",
+    "hotMaterialRule",
+    "hotMaterialFacts",
+    "scriptFacts",
+)
 
 
 def _load_json(path):
@@ -93,22 +152,154 @@ def _report_scopes(pool_records, selected, rejected):
 
 
 def _ranking_material_fact(record):
+    exposure = record.get("exposure") if isinstance(record.get("exposure"), dict) else {}
+    interval = exposure.get("raw")
+    interval_available = isinstance(interval, str) and bool(interval.strip())
     return {
         "material_id": str(record.get("material_id", "")),
         "rank": record.get("rank"),
         "title": record.get("title", ""),
         "metrics": {
             name: record.get("metrics", {}).get(name)
-            for name in RANKING_FACT_METRICS
-            if name in record.get("metrics", {})
+            for name in RANKING_MATERIAL_METRICS
+        },
+        "exposure": {
+            "raw": interval.strip() if interval_available else "",
+            "available": interval_available,
+            **({} if interval_available else {"missingReason": "exposure_interval_unavailable"}),
         },
         "people_tags": list(record.get("people_tags", [])),
         "material_tags": list(record.get("material_tags", [])),
     }
 
 
-def _ranking_scope_facts(records, *, source_scope, requested_top_n):
-    selected = select_top_materials(records, limit=requested_top_n)
+def _ranking_aggregate(records, *, source_scope, actual_date_range=None, available=True, missing_reason=""):
+    metrics = {}
+    for name in RANKING_FACT_METRICS:
+        summary = _metric_summary(records, name)
+        if name == "show_cnt":
+            metrics[name] = {
+                "count": summary["count"] if summary else 0,
+                "total": sum(_numeric_metric_values(records, name)),
+                "mean": summary["mean"] if summary else None,
+                "median": summary["median"] if summary else None,
+            }
+        else:
+            metrics[name] = summary or {
+                "count": 0,
+                "mean": None,
+                "median": None,
+            }
+    return {
+        "source_scope": source_scope,
+        "actualDateRange": actual_date_range,
+        "sampleCount": len(records),
+        "metrics": metrics,
+        "materials": [_ranking_material_fact(record) for record in records],
+        "available": bool(available),
+        "missingReason": missing_reason,
+    }
+
+
+def _comparison_fact(current, baseline, *, baseline_name):
+    current_sample = current.get("sampleCount", 0)
+    baseline_sample = baseline.get("sampleCount", 0)
+    sample_delta = current_sample - baseline_sample
+    sample_rate = sample_delta / baseline_sample if baseline_sample else None
+    metric_changes = {}
+    for name in RANKING_FACT_METRICS:
+        summary_key = "total" if name == "show_cnt" else "median"
+        current_value = (current.get("metrics", {}).get(name) or {}).get(summary_key)
+        baseline_value = (baseline.get("metrics", {}).get(name) or {}).get(summary_key)
+        if isinstance(current_value, (int, float)) and isinstance(baseline_value, (int, float)):
+            delta = current_value - baseline_value
+            rate = delta / baseline_value if baseline_value else None
+            metric_changes[name] = {
+                "current": current_value,
+                "baseline": baseline_value,
+                "delta": delta,
+                "rate": rate,
+                "available": True,
+                "missingReason": "",
+            }
+        else:
+            metric_changes[name] = {
+                "current": current_value,
+                "baseline": baseline_value,
+                "delta": None,
+                "rate": None,
+                "available": False,
+                "missingReason": "current_or_baseline_metric_unavailable",
+            }
+    return {
+        "baseline": baseline_name,
+        "currentDateRange": current.get("actualDateRange"),
+        "baselineDateRange": baseline.get("actualDateRange"),
+        "currentSampleCount": current_sample,
+        "baselineSampleCount": baseline_sample,
+        "sampleCountDelta": sample_delta,
+        "sampleCountRate": sample_rate,
+        "metrics": metric_changes,
+        "available": bool(current.get("available") and baseline.get("available")),
+        "missingReason": (
+            ""
+            if current.get("available") and baseline.get("available")
+            else baseline.get("missingReason") or "comparison_data_unavailable"
+        ),
+    }
+
+
+def _hot_material_scope_facts(records, *, scope, hot_material_rule):
+    threshold = hot_material_rule["threshold"]
+    qualifying = [
+        record
+        for record in records
+        if isinstance(record.get("exposure"), dict)
+        and isinstance(record["exposure"].get("min"), (int, float))
+        and not isinstance(record["exposure"].get("min"), bool)
+        and record["exposure"]["min"] >= threshold
+    ]
+    qualifying.sort(
+        key=lambda record: (
+            -record["exposure"]["min"],
+            record.get("rank", 0),
+            str(record.get("material_id", "")),
+        )
+    )
+    usable_count = sum(
+        isinstance(record.get("exposure"), dict)
+        and isinstance(record["exposure"].get("min"), (int, float))
+        and not isinstance(record["exposure"].get("min"), bool)
+        for record in records
+    )
+    return {
+        "scope": scope,
+        "thresholdExposureMin": threshold,
+        "rule": dict(hot_material_rule),
+        "qualifyingCount": len(qualifying),
+        "materials": [
+            {
+                "material_id": str(record.get("material_id", "")),
+                "rank": record.get("rank"),
+                "title": record.get("title", ""),
+                "exposure": dict(record["exposure"]),
+                "metrics": {
+                    name: record.get("metrics", {}).get(name)
+                    for name in RANKING_FACT_METRICS
+                    if name in record.get("metrics", {})
+                },
+            }
+            for record in qualifying
+        ],
+        "sortRule": "exposure.min descending, rank ascending, material_id ascending",
+        "available": bool(usable_count),
+        "missing_reason": "" if usable_count else "exposure_interval_unavailable",
+        "sampleCount": len(records),
+    }
+
+
+def _ranking_scope_facts(records, *, source_scope):
+    selected = select_top_materials(records, limit=len(records))
     metrics = {
         name: _metric_summary(selected, name)
         for name in RANKING_FACT_METRICS
@@ -121,31 +312,12 @@ def _ranking_scope_facts(records, *, source_scope, requested_top_n):
         "mean": show_summary["mean"] if show_summary else None,
         "median": show_summary["median"] if show_summary else None,
     }
-    metrics["cpm"] = {
-        "available": False,
-        "missing_reason": "rpa_not_provided",
-    }
     return {
         "source_scope": source_scope,
-        "requested_top_n": requested_top_n,
         "sample_count": len(selected),
         "metrics": metrics,
         "materials": [_ranking_material_fact(record) for record in selected],
     }
-
-
-def _audience_topn_records(records, *, limit=1000):
-    return [
-        {
-            "material_id": str(record.get("material_id", "")),
-            "rank": record.get("rank"),
-            "people_tags": [
-                tag for tag in record.get("people_tags", [])
-                if isinstance(tag, str) and tag
-            ],
-        }
-        for record in select_top_materials(records, limit=limit)
-    ]
 
 
 def _metric_comparison(record, pool_records):
@@ -192,6 +364,225 @@ def _tag_insights(records, selected_ids):
         "eligibleForAssociation": eligible,
         "materialTags": material_tags,
         "peopleTags": people_tags,
+    }
+
+
+def _script_fact_tokens(value):
+    values = value if isinstance(value, list) else [value]
+    tokens = []
+    for item in values:
+        if isinstance(item, dict):
+            if item.get("level_1_label") not in (None, ""):
+                tokens.append(f"level_1_label:{item['level_1_label']}")
+            for label in item.get("level_2_labels", []) if isinstance(item.get("level_2_labels"), list) else []:
+                if label not in (None, ""):
+                    tokens.append(f"level_2_label:{label}")
+            continue
+        for token in re.split(r"[、，,；;\\n]+", str(item or "")):
+            token = token.strip()
+            if token and token not in tokens:
+                tokens.append(token)
+    return tokens
+
+
+def _script_frequency_add(frequencies, dimension, values, material_id):
+    for value in _script_fact_tokens(values):
+        entry = frequencies[dimension].setdefault(value, {"count": 0, "material_ids": []})
+        if material_id not in entry["material_ids"]:
+            entry["material_ids"].append(material_id)
+            entry["count"] += 1
+
+
+_SCRIPT_KEYWORD_MIN_FREQUENCY = 2
+_SCRIPT_KEYWORD_POS_PREFIXES = ("n", "v", "a", "eng")
+
+
+def _script_keyword_tokens(text):
+    """Extract content words from script text without using titles or labels."""
+    value = str(text or "").strip()
+    if not value:
+        return []
+    if pseg is None:
+        return [
+            token
+            for token in re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z]{2,}", value)
+            if not token.isdigit()
+        ]
+
+    tokens = []
+    previous = None
+    for item in pseg.cut(value):
+        token = str(item.word or "").strip()
+        flag = str(item.flag or "")
+        if not token or not flag.startswith(_SCRIPT_KEYWORD_POS_PREFIXES):
+            previous = None
+            continue
+        if token.isascii():
+            normalized = token.lower() if len(token) >= 2 and not token.isdigit() else ""
+        else:
+            normalized = token if re.search(r"[\u4e00-\u9fff]", token) else ""
+        if normalized:
+            if len(normalized) >= 2:
+                tokens.append(normalized)
+            if previous and len(previous) == 1 and len(normalized) == 1:
+                tokens.append(previous + normalized)
+            previous = normalized
+    return tokens
+
+
+def _script_keyword_cloud(materials):
+    stats = {}
+    for material in materials:
+        if not isinstance(material, dict):
+            continue
+        material_id = str(material.get("material_id") or "").strip()
+        for keyword in _script_keyword_tokens(material.get("script_text")):
+            entry = stats.setdefault(keyword, {"frequency": 0, "material_ids": set()})
+            entry["frequency"] += 1
+            if material_id:
+                entry["material_ids"].add(material_id)
+
+    keywords = []
+    for keyword, item in sorted(stats.items(), key=lambda pair: (-pair[1]["frequency"], pair[0])):
+        if item["frequency"] < _SCRIPT_KEYWORD_MIN_FREQUENCY:
+            continue
+        material_ids = sorted(item["material_ids"])
+        keywords.append({
+            "keyword": keyword,
+            "frequency": item["frequency"],
+            "materialIds": material_ids,
+            "evidenceRefs": [
+                f"script:{material_id}:text:{keyword}" for material_id in material_ids
+            ],
+        })
+    return {
+        "source": "facts.scripts.materials[*].script_text",
+        "keywords": keywords,
+    }
+
+
+def _script_frequencies_for_detail(detail, material_id, frequencies):
+    formula = detail.get("content_formula")
+    if isinstance(formula, dict):
+        for key, value in formula.items():
+            key_text = str(key)
+            if key_text == "labels" or key_text.endswith(".labels"):
+                _script_frequency_add(frequencies, "formula_labels", value, material_id)
+            if any(token in key_text for token in ("卖点", "selling_point", "sellingPoint")):
+                _script_frequency_add(frequencies, "selling_points", value, material_id)
+            if any(token in key_text for token in ("场景", "scene")):
+                _script_frequency_add(frequencies, "scenes", value, material_id)
+            if any(token in key_text for token in ("营销", "促销", "活动", "promotion")):
+                _script_frequency_add(frequencies, "promotions", value, material_id)
+            if any(token in key_text for token in ("形式", "format")):
+                _script_frequency_add(frequencies, "marketing_formats", value, material_id)
+    creative = detail.get("creative_breakdown")
+    if isinstance(creative, dict):
+        raw = creative.get("raw", creative)
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                key_text = str(key)
+                if any(token in key_text for token in ("卖点", "selling_point", "sellingPoint")):
+                    _script_frequency_add(frequencies, "selling_points", value, material_id)
+                if any(token in key_text for token in ("场景", "scene")):
+                    _script_frequency_add(frequencies, "scenes", value, material_id)
+                if any(token in key_text for token in ("营销", "促销", "活动", "promotion")):
+                    _script_frequency_add(frequencies, "promotions", value, material_id)
+                if any(token in key_text for token in ("形式", "format")):
+                    _script_frequency_add(frequencies, "marketing_formats", value, material_id)
+
+
+def _script_detail_equivalence(detail):
+    return {
+        "script_text": detail.get("script_text", ""),
+        "script_segments": detail.get("script_segments", []),
+        "content_formula": detail.get("content_formula"),
+        "creative_breakdown": detail.get("creative_breakdown"),
+        "metrics": detail.get("metrics", {}),
+    }
+
+
+def build_script_facts(details, selected_materials):
+    """Build a deduplicated, source-only fact pack for chapter 03."""
+    if not isinstance(details, list) or not isinstance(selected_materials, list):
+        raise YuntuAnalysisError("script facts inputs must be lists")
+    detail_by_id = {}
+    urls_by_id = {}
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        material_id = str(detail.get("material_id") or "").strip()
+        if not material_id:
+            continue
+        if material_id in detail_by_id:
+            if _script_detail_equivalence(detail_by_id[material_id]) != _script_detail_equivalence(detail):
+                raise YuntuAnalysisError(f"conflicting detail facts for material {material_id}")
+        else:
+            detail_by_id[material_id] = detail
+        url = str(detail.get("video_url") or "").strip()
+        if url and url not in urls_by_id.setdefault(material_id, []):
+            urls_by_id[material_id].append(url)
+
+    selected = []
+    selected_ids = set()
+    for item in selected_materials:
+        if not isinstance(item, dict):
+            continue
+        material_id = str(item.get("material_id") or item.get("materialId") or "").strip()
+        if not material_id or material_id in selected_ids:
+            continue
+        selected_ids.add(material_id)
+        selected.append((material_id, item))
+
+    frequencies = {
+        "formula_labels": {},
+        "selling_points": {},
+        "scenes": {},
+        "promotions": {},
+        "marketing_formats": {},
+    }
+    materials = []
+    for material_id, selected_item in selected:
+        detail = detail_by_id.get(material_id, {})
+        availability = detail.get("data_availability", {})
+        material = {
+            "material_id": material_id,
+            "rank": selected_item.get("rank"),
+            "script_text": str(detail.get("script_text") or ""),
+            "script_segments": detail.get("script_segments", []) if isinstance(detail.get("script_segments", []), list) else [],
+            "content_formula": detail.get("content_formula"),
+            "creative_breakdown": detail.get("creative_breakdown"),
+            "metrics": dict(detail.get("metrics", {})) if isinstance(detail.get("metrics"), dict) else {},
+            "source_paths": dict(detail.get("source_paths", {})) if isinstance(detail.get("source_paths"), dict) else {},
+            "source_hashes": dict(detail.get("source_hashes", {})) if isinstance(detail.get("source_hashes"), dict) else {},
+            "video_url_variants": urls_by_id.get(material_id, []),
+            "data_availability": dict(availability) if isinstance(availability, dict) else {},
+        }
+        if not material["data_availability"]:
+            material["data_availability"] = {
+                "script_text": {"available": bool(material["script_text"]), "missing_reason": "" if material["script_text"] else "source_empty"},
+                "script_segments": {"available": bool(material["script_segments"]), "missing_reason": "" if material["script_segments"] else "source_empty"},
+                "content_formula": {"available": material["content_formula"] is not None, "missing_reason": "" if material["content_formula"] is not None else "source_empty"},
+                "creative_breakdown": {"available": material["creative_breakdown"] is not None, "missing_reason": "" if material["creative_breakdown"] is not None else "source_empty"},
+            }
+        materials.append(material)
+        _script_frequencies_for_detail(detail, material_id, frequencies)
+
+    script_count = sum(bool(item["script_text"].strip()) for item in materials)
+    total = len(materials)
+    for dimension in frequencies:
+        frequencies[dimension] = dict(sorted(frequencies[dimension].items()))
+    return {
+        "schemaVersion": 1,
+        "scope": "selected_detail_materials",
+        "coverage": {"total": total, "script": script_count, "rate": script_count / total if total else 0},
+        "frequencies": frequencies,
+        "keywordCloud": _script_keyword_cloud(materials),
+        "materials": materials,
+        "limitations": [
+            "脚本时间戳段落未提供，不能建立秒点或高光帧与话术的对应关系。",
+            "该事实包只覆盖已获取详情素材，不代表行业 TOP1000 普遍规律。",
+        ],
     }
 
 
@@ -349,9 +740,12 @@ def _data_limitations(material_facts):
 
 def _chapter02_scope_fact(records, *, label, limit):
     selected = select_top_materials(records, limit=limit)
+    sample_count = len(selected)
     return {
         "label": label,
-        "sampleCount": len(selected),
+        "sampleCount": sample_count,
+        "availability": "available" if sample_count else "unavailable",
+        "missingReason": "" if sample_count else "no_matching_material_in_scope",
         "topMaterials": [_ranking_material_fact(record) for record in selected],
         "audienceDashboard": build_audience_dashboard(selected, limit=len(selected) or 1),
         "marketingDashboard": build_marketing_dashboard(selected, limit=len(selected) or 1),
@@ -363,11 +757,11 @@ def _model_input_sections(
     pool_records,
     brand_facts,
     chapter02_ai_facts,
-    candidate_pool,
-    audience_dashboard,
-    tag_insights,
-    trend_summary,
-    report_scopes,
+    brands,
+    ranking_period_facts=None,
+    comparison_facts=None,
+    hot_material_rule=None,
+    hot_material_facts=None,
 ):
     visual_assets = []
     for fact in material_facts:
@@ -378,6 +772,7 @@ def _model_input_sections(
                 {
                     "material_id": str(fact["material_id"]),
                     "title": fact["title"],
+                    "brand": "、".join(match_brands_from_title(fact["title"], brands)) or "其他品牌",
                     "rank": fact["rank"],
                     "frame_ref": frame.get("frame_ref"),
                     "second": frame.get("second"),
@@ -393,126 +788,921 @@ def _model_input_sections(
                 }
             )
     return {
-        "reportScopes": report_scopes,
-        "rankingFacts": {
-            "candidatePool": candidate_pool,
-            "materials": [
-                {
-                    "material_id": str(fact["material_id"]),
-                    "rank": fact["rank"],
-                    "title": fact["title"],
-                    "metrics": fact["metrics"],
-                    "metricComparison": fact["metricComparison"],
-                }
-                for fact in material_facts
-            ],
-        },
         "industryTop1000Facts": _ranking_scope_facts(
             pool_records,
             source_scope="industry_top1000",
-            requested_top_n=1000,
         ),
-        "brandTopNFacts": brand_facts,
-        "chapter02AiFacts": chapter02_ai_facts,
-        "audienceFacts": {
-            "labelsMayOverlap": True,
-            "notice": "人群标签是重叠标签，不是真实人群分布，不能相加为 100%。",
-            "dashboard": audience_dashboard,
-            "materials": [
-                {
-                    "material_id": str(fact["material_id"]),
-                    "people_tags": fact["people_tags"],
-                }
-                for fact in material_facts
-            ],
-        },
-        "marketingFacts": {
-            "tagInsights": tag_insights,
-            "materials": [
-                {
-                    "material_id": str(fact["material_id"]),
-                    "material_tags": fact["material_tags"],
-                }
-                for fact in material_facts
-            ],
-        },
-        "secondLevelFacts": {
-            "trendSummary": trend_summary,
-            "materials": [
-                {
-                    "material_id": str(fact["material_id"]),
-                    "metrics": fact["secondLevelBreakdown"]["metrics"],
-                }
-                for fact in material_facts
-            ],
-        },
-        "highlightFrameFacts": [
+        "brandRankingFacts": brand_facts,
+        **(
             {
-                key: asset[key]
-                for key in (
-                    "material_id",
-                    "frame_ref",
-                    "second",
-                    "frame_type",
-                    "peak_rank",
-                    "click_value",
-                    "available",
-                    "failure_reason",
-                )
+                "current": (ranking_period_facts or {}).get("current", {}),
+                "previousPeriod": (ranking_period_facts or {}).get("previousPeriod", {}),
+                "industryBenchmark": (ranking_period_facts or {}).get("industryBenchmark", {}),
+                "comparisonFacts": comparison_facts or {},
+                "hotMaterialRule": dict(hot_material_rule or {}),
+                "hotMaterialFacts": hot_material_facts or {},
             }
-            for asset in visual_assets
-        ],
+            if hot_material_facts is not None
+            else {}
+        ),
+        "chapter02AiFacts": chapter02_ai_facts,
         "visualAssets": visual_assets,
         "dataLimitations": _data_limitations(material_facts),
     }
 
 
-def _prompt_text(*, brand_top_n, filters):
-    brands = "、".join(str(brand) for brand in filters.get("brands", []) if brand)
-    scope_labels = "、".join(["all（全量 TOP1000）", *(str(brand) for brand in filters.get("brands", []) if brand)])
-    brand_scope_label = (
-        f"Top {brand_top_n}"
-        if isinstance(brand_top_n, int) and brand_top_n > 0
-        else "全量匹配素材"
+def _report_data(fact_pack):
+    """Project only facts consumed by report validation and rendering."""
+    projected = {key: fact_pack[key] for key in REPORT_DATA_FIELDS if key in fact_pack}
+    industry = fact_pack.get("industryTop1000Facts", {})
+    projected["industryTop1000Facts"] = {
+        key: industry[key]
+        for key in ("source_scope", "sample_count")
+        if key in industry
+    }
+    brand_facts = fact_pack.get("brandRankingFacts", {})
+    projected["brandRankingFacts"] = {
+        "source_scope": brand_facts.get("source_scope"),
+        "brands": {
+            brand: {
+                "source_scope": facts.get("source_scope"),
+                "sample_count": facts.get("sample_count"),
+                "materials": [
+                    {"material_id": str(item["material_id"])}
+                    for item in facts.get("materials", [])
+                    if isinstance(item, dict) and item.get("material_id")
+                ],
+            }
+            for brand, facts in brand_facts.get("brands", {}).items()
+            if isinstance(facts, dict)
+        },
+    }
+    chapter02_ai = fact_pack.get("chapter02AiFacts", {})
+    scope_order = chapter02_ai.get("scopeOrder", [])
+    projected["chapter02AiFacts"] = {
+        "scopeOrder": scope_order,
+        **{str(scope): {} for scope in scope_order},
+    }
+    return projected
+
+
+def _model_visual_assets(visual_assets):
+    projected = []
+    for asset in visual_assets:
+        copied = dict(asset)
+        image_path = str(copied.get("image_path") or "").replace("\\", "/")
+        copied["image_path"] = f"../{image_path}" if image_path else ""
+        projected.append(copied)
+    return projected
+
+
+def _script_formula_label(level, value):
+    labels = (
+        SCRIPT_FORMULA_PRIMARY_LABELS
+        if level == "primary"
+        else SCRIPT_FORMULA_SECONDARY_LABELS
     )
-    return f"""# 小仙炖云图行业内容榜单分析任务
-
-读取同目录的 `yuntu-analysis-data.json`，生成 `yuntu-ai-analysis.json`。
-
-本提示词采用固定提示词模板；本次运行参数动态注入，不随机改写分析规则。本次品牌榜单分析范围为{brand_scope_label}，品牌范围为：{brands or "未指定品牌"}。
-
-事实包同时提供 `industryTop1000Facts`、`brandTopNFacts`、`chapter02Facts`、`chapter02AiFacts`、`rankingFacts`、`audienceFacts`、`marketingFacts`、`secondLevelFacts`、`highlightFrameFacts`、`visualAssets` 与 `dataLimitations`。它们是模型可分析材料：规则只计算事实，模型负责写业务判断。`chapter02Facts` 仅供报告数据展示，品牌范围为全量匹配素材；`chapter02AiFacts` 才是 02 章 AI 二次分析范围，品牌范围与用户输入的 Top N 一致。`visualAssets` 是本地图片清单；必须实际查看每张成功 JPEG（`available=true`），原视频 URL 过期时仍使用已落盘的本地帧，不得以 URL 不可用为由跳过画面分析。
-
-输出必须是 JSON 对象，包含：topMaterialCombination、chapter02Insights、rankingOverview、audienceInsights、materialComparison、materialDiagnoses、competitorPatterns、xiaoxianDunOpportunityMap、experimentMatrix。若事实包中存在成功高光帧，还必须包含 highlightDashboard。若每条素材包含 `secondLevelBreakdown`，还必须包含 materialDeepDives。
-
-`topMaterialCombination` 必须是对象，包含 `executiveSummary`、`overallConclusions`、`brandConclusions` 与 `brandComparisonConclusion`。01 章只负责榜单数据维度：`executiveSummary` 和 `overallConclusions` 只能引用 `industryTop1000Facts`，overallConclusions 只输出 `data` 维度；每个品牌结论只输出 `brand`、`classificationSource`、`dataSummary`、`evidence`、`material_ids`，只能引用 `brandTopNFacts`。品牌名称必须与用户输入的完整参数一致；品牌 Top N 来自同一合并 TOP1000 的运行时品牌匹配，不能引用秒级详情。`brandComparisonConclusion` 只能比较 `brandTopNFacts` 中实际存在的品牌。CPM 未由 RPA 提供时写“数据不足以判断”，不得从其他指标推算。标签与指标只能描述共现关系，不得声称因果。
-
-02 章必须读取 `chapter02AiFacts`，按其 `scopeOrder` 原样输出 `chapter02Insights`。本次 scope 顺序为：{scope_labels}。scope 第一项固定为 `all`（全量 TOP1000），其后逐个输出每个品牌；每个 scope 必须同时包含 `audienceInsights` 和 `marketingInsights`，并只引用该 scope 的 `audienceDashboard` 与 `marketingDashboard`。品牌 scope 的 AI 二次分析只使用用户输入的 Top N 素材；报告下方汇总图表另从 `chapter02Facts` 读取全量匹配素材。营销卖点分析必须围绕类别、Top 标签和命中素材展开，不把 1399 个标签逐项罗列。
-
-`chapter02Insights` 的每个 scope 使用 `scope`、`label`、`audienceInsights`、`marketingInsights` 字段；每条 insight 使用 `dimension`、`summary`、`evidence`、`material_id` 或 `material_ids`。旧版 `audienceInsights` 仅作为兼容字段，不替代各 scope 分析。
-
-`audienceInsights` 与 `chapter02Insights.scopes[*].marketingInsights` 的每项必须含 summary、evidence，以及 material_id 或 material_ids；summary 应以具体标签、素材或内容方向形成可执行洞察，不得复述人群重叠等数据口径。人群重叠口径只保留在事实和 evidence，不进入用户可见正文。前五个章节的每一项必须含 summary、evidence，以及 material_id 或 material_ids。experimentMatrix 的每一项必须含 priority、hypothesis、creative_variable、target_audience、success_metric、control、review_action、evidence；每项 evidence 至少引用事实包中真实存在的 material_id、metric、frame_ref，或趋势及其真实秒数。
-
-所有结论必须引用素材 ID、指标、标签或秒级趋势作为证据。事实不足时写“数据不足以判断”。解释只能描述可能关系，不得声称因果；不得生成未经业务与合规确认的滋补、孕期或健康功效宣称。不得写执行过程、重跑、补位调度、代码状态、排障细节、事实包返回、口径说明、仅限观察等处理过程话术；摘要必须基于该素材的实际指标、标签、趋势或画面写成业务判断。
-
-所有 AI 二次分析字段采用“少量关键事实锚点 + 多句分析判断”的写法：只选最能支撑结论的指标、标签或素材数量作为依据，随后说明事实意味着什么、为什么值得保留或改写、下一步如何验证；不得把指标或标签清单当作结论主体。用户可见的每条业务洞察采用“事实锚点 -> 业务判断 -> 下一步验证”结构。数据维度应优先比较行业基线与品牌{brand_scope_label}的曝光、CTR、CVR 和 3 秒播放率，指出可测试的优势或短板；人群维度应把标签覆盖与内容主题连成目标人群假设；营销卖点维度应说明标签组合的内容取舍并给出拆分测试方向；品牌对比应指出相对优势、短板或指标取舍。解释只能描述可能关系，不得声称因果。`rankingOverview`、`audienceInsights`、`materialComparison`、`materialDiagnoses`、`competitorPatterns` 与 `xiaoxianDunOpportunityMap` 的每个 summary 至少 80 个中文字符，且同一章节不得重复同义文本。`experimentMatrix` 至少 4 条，覆盖放量、改写、验证和风险控制四类动作，每条基于不同的真实事实锚点。
-
-`highlightDashboard` 只使用事实包中 `available=true` 的 highlightFrames。实际查看每张 JPEG 后，将每张成功帧且仅一次归入 portrait、product、scene、text_overlay、other 中的一个主视觉分类，分类顺序固定为 portrait、product、scene、text_overlay、other。每个非空分类包含 frame_refs、common_patterns 和 derivative_directions；方向只能引用本分类的 frame_refs。没有成功帧时不得编造视觉洞察。高光帧为封面帧和点击指数局部峰值。只能描述该帧处于点击指数峰值秒点；不得说该画面导致点击、转化或指标提升，也不能声称其对应某句脚本话术或真实点击次数。
-
-`materialDeepDives` 仅用于支撑 05｜单素材深度分析中的高光帧观察与秒级拆解。每项包含 material_id、frame_observations、second_level_observations；不得输出或生成额外的单素材 AI 二次分析摘要字段。`frame_observations` 必须将该素材每一张 `available=true` 的 highlightFrames 恰好引用一次，每项只含 frame_ref 和至少 40 个中文字符的可观察 observation；不得引用其他素材或失败帧。观察只能描述事实包和实际可见画面，不得生成脚本、内容公式、真实互动量、转化或因果结论。`second_level_observations` 只使用 `点赞指数`、`流失指数`、`点击指数`、`互动指数`、`评论指数`，每项含 trend_name、至少 60 个中文字符的 summary、evidence_seconds；evidence_seconds 只能填写该素材对应趋势 `points` 中实际存在的秒数。该部分在报告中叫“秒级拆解”，不叫“互动时序分析”。
-"""
+    if isinstance(value, dict):
+        explicit = str(value.get("label") or "").strip()
+        value = value.get("value") or value.get("id")
+    else:
+        explicit = ""
+    value = str(value or "").strip()
+    return labels.get(value) or (explicit if explicit and not explicit.isdigit() else value)
 
 
-def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
+def _script_formula_projection(value):
+    """Normalize cloud formula labels without carrying numeric taxonomy IDs."""
+    if isinstance(value, dict):
+        raw_labels = value.get("labels")
+    elif isinstance(value, list):
+        raw_labels = value
+    else:
+        raw_labels = []
+    if not isinstance(raw_labels, list):
+        raw_labels = [raw_labels] if raw_labels else []
+
+    formula = []
+    labels = []
+    for item in raw_labels:
+        if isinstance(item, dict):
+            primary_value = item.get("level1") or item.get("level_1") or item.get("level1_label") or item.get("level_1_label")
+            primary = _script_formula_label("primary", primary_value)
+            secondary_values = item.get("level2") or item.get("level_2") or item.get("level2_labels") or item.get("level_2_labels") or []
+            if not isinstance(secondary_values, list):
+                secondary_values = [secondary_values]
+        else:
+            primary = _script_formula_label("primary", item)
+            secondary_values = []
+        if not primary:
+            continue
+        secondary = [_script_formula_label("secondary", raw) for raw in secondary_values]
+        secondary = list(dict.fromkeys(item for item in secondary if item))
+        if secondary:
+            for level2 in secondary:
+                formula.append({"level1": primary, "level2": level2})
+                labels.append({
+                    "level1": primary,
+                    "level2": level2,
+                    "evidenceRef": "",
+                })
+        else:
+            formula.append({"level1": primary, "level2": ""})
+            labels.append({"level1": primary, "level2": "", "evidenceRef": ""})
+    return formula, labels
+
+
+def _script_evidence_projection(material_id, script_text, formula, raw_evidence=None):
+    prefix = f"script:{material_id}:"
+    evidence = []
+    if isinstance(raw_evidence, list):
+        for item in raw_evidence:
+            if not isinstance(item, dict):
+                continue
+            sentence = str(item.get("sentence") or item.get("text") or "").strip()
+            ref = str(item.get("evidenceRef") or item.get("evidence_ref") or "").strip()
+            if not sentence or (ref and not ref.startswith(prefix)):
+                continue
+            if not ref:
+                ref = f"{prefix}text:{sentence}"
+            evidence.append({
+                "level2": str(item.get("level2") or item.get("level_2") or "").strip(),
+                "sentence": sentence,
+                "evidenceRef": ref,
+            })
+    if not evidence and script_text:
+        sentences = re.findall(r"[^。！？；\n]+[。！？；]?", script_text)
+        # Sentence refs support analysis; they do not imply any formula membership.
+        default_level2 = ""
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if sentence:
+                evidence.append({
+                    "level2": default_level2,
+                    "sentence": sentence,
+                    "evidenceRef": f"{prefix}text:{sentence}",
+                })
+    return list({item["evidenceRef"]: item for item in evidence}.values())
+
+
+def _script_projection(fact):
+    material_id = str(fact.get("material_id") or "").strip()
+    existing = fact.get("script") if isinstance(fact.get("script"), dict) else {}
+    text = str(existing.get("text") or fact.get("script_text") or "").strip()
+    formula_source = existing.get("formula") if existing.get("formula") is not None else fact.get("content_formula")
+    formula, labels = _script_formula_projection(formula_source)
+    existing_labels = existing.get("labels") if isinstance(existing.get("labels"), list) else []
+    if existing_labels:
+        labels = [dict(item) for item in existing_labels if isinstance(item, dict)]
+        formula = [
+            {"level1": str(item.get("level1") or "").strip(), "level2": str(item.get("level2") or "").strip()}
+            for item in labels
+            if str(item.get("level1") or "").strip()
+        ]
+    raw_evidence = existing.get("evidence") if existing.get("evidence") is not None else fact.get("script_evidence")
+    evidence = _script_evidence_projection(material_id, text, formula, raw_evidence)
+    evidence_refs = []
+    for item in labels:
+        level1 = str(item.get("level1") or "").strip()
+        level2 = str(item.get("level2") or "").strip()
+        if not level1:
+            continue
+        ref = str(item.get("evidenceRef") or f"{material_id}:{level1}:{level2}").strip()
+        ref = ref if ref.startswith(f"script:{material_id}:") else f"script:{material_id}:{level1}:{level2}"
+        item["level1"], item["level2"], item["evidenceRef"] = level1, level2, ref
+        evidence_refs.append(ref)
+    evidence_refs.extend(item["evidenceRef"] for item in evidence)
+    evidence_refs = list(dict.fromkeys(ref for ref in evidence_refs if ref.startswith(f"script:{material_id}:")))
+    availability = fact.get("data_availability", {})
+    if not isinstance(availability, dict):
+        availability = {}
+    def state(name, available, fallback):
+        raw = availability.get(name, {})
+        return {
+            "available": bool(raw.get("available")) if isinstance(raw, dict) and "available" in raw else available,
+            "missing_reason": str(raw.get("missing_reason") or "") if isinstance(raw, dict) else ("" if available else fallback),
+        }
+    return {
+        "text": text,
+        "labels": labels,
+        "formula": formula,
+        "evidence": evidence,
+        "availability": {
+            "text": state("script_text", bool(text), "source_empty"),
+            "formula": state("content_formula", bool(formula), "source_empty"),
+            "evidence": state("script_evidence", bool(evidence), "source_empty"),
+        },
+    }, {"script": evidence_refs}
+
+
+def _model_material_facts(material_facts):
+    projected = []
+    for fact in material_facts:
+        copied = {
+            "material_id": str(fact.get("material_id", "")),
+            "secondLevelBreakdown": fact.get("secondLevelBreakdown", {"metrics": []}),
+            "highlightFrames": [],
+        }
+        copied["script"], copied["evidenceIndex"] = _script_projection(fact)
+        for frame in fact.get("highlightFrames", []):
+            frame_copy = {
+                key: frame[key]
+                for key in ("frame_ref", "second", "frame_type", "available")
+                if key in frame
+            }
+            relative_path = str(
+                frame.get("relative_path") or frame.get("image_path") or ""
+            ).replace("\\", "/")
+            if relative_path:
+                frame_copy["image_path"] = (
+                    relative_path
+                    if relative_path.startswith("../")
+                    else f"../{relative_path}"
+                )
+            elif "image_path" not in frame_copy:
+                frame_copy["image_path"] = ""
+            if frame.get("failure_reason"):
+                frame_copy["failure_reason"] = frame["failure_reason"]
+            copied["highlightFrames"].append(frame_copy)
+        projected.append(copied)
+    return projected
+
+
+def _ranking_output_schema(*, include_period_contract=False):
+    hot_material_insight_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "summary", "evidence"],
+        "properties": {
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "evidence": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["scope", "material_ids"],
+                "properties": {
+                    "scope": {"type": "string", "enum": ["all", "brand"]},
+                    "material_ids": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        },
+    }
+    brand_conclusion_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "brand",
+            "classificationSource",
+            "dataSummary",
+            "evidence",
+            "material_ids",
+        ] + (["hotMaterialInsight"] if include_period_contract else []),
+        "properties": {
+            "brand": {"type": "string"},
+            "classificationSource": {
+                "type": "string",
+                "enum": ["title_rule", "runtime_title_rule"],
+            },
+            "dataSummary": {"type": "string"},
+            **({"hotMaterialInsight": hot_material_insight_schema} if include_period_contract else {}),
+            "evidence": {"type": "array", "items": {"type": "string"}},
+            "material_ids": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["brandConclusions", "allBrandsConclusion"]
+        if include_period_contract
+        else ["brandConclusions"],
+        "properties": {
+            "brandConclusions": {
+                "type": "array",
+                "items": brand_conclusion_schema,
+            },
+            "allBrandsConclusion": brand_conclusion_schema,
+        },
+    }
+
+
+def _analysis_insight_schema():
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "summary", "evidence", "material_ids"],
+        "properties": {
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "evidence": {"type": "array", "items": {"type": "string"}},
+            "material_ids": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+
+
+def _keyword_cloud_review_schema():
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["keyword", "decision", "target"],
+        "properties": {
+            "keyword": {"type": "string"},
+            "decision": {"type": "string", "enum": ["accept", "exclude", "merge"]},
+            "target": {"type": "string"},
+        },
+    }
+
+
+def _keyword_cloud_insight_schema():
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["oneSentenceConclusion", "summary", "sellingPoints"],
+        "properties": {
+            "oneSentenceConclusion": {"type": "string"},
+            "summary": {"type": "string"},
+            "sellingPoints": {
+                "type": "array",
+                "maxItems": 4,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["title", "description", "keywordRefs", "evidenceRefs"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "keywordRefs": {"type": "array", "items": {"type": "string"}},
+                        "evidenceRefs": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+            },
+        },
+    }
+
+
+def _chapter02_output_schema(fact_pack):
+    scope_order = [str(scope) for scope in fact_pack["chapter02AiFacts"]["scopeOrder"]]
+    scope_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["audienceSummary", "marketingSummary"],
+        "properties": {
+            "audienceSummary": _analysis_insight_schema(),
+            "marketingSummary": _analysis_insight_schema(),
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["scopeOrder", "scopes"],
+        "properties": {
+            "scopeOrder": {
+                "type": "array",
+                "const": scope_order,
+                "minItems": len(scope_order),
+                "maxItems": len(scope_order),
+                "items": {"type": "string", "enum": scope_order},
+            },
+            "scopes": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": scope_order,
+                "properties": {scope: scope_schema for scope in scope_order},
+            },
+        },
+    }
+
+
+def _highlight_output_schema():
+    understanding_fields = (
+        "frame_ref",
+        "status",
+        "subject",
+        "visual_focus",
+        "human_product_relation",
+        "action",
+        "composition",
+        "information_expression",
+        "failure_reason",
+    )
+    frame_understanding_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(understanding_fields),
+        "properties": {
+            "frame_ref": {"type": "string"},
+            "status": {"type": "string", "enum": ["complete", "unavailable"]},
+            **{
+                field: {"type": "string"}
+                for field in understanding_fields
+                if field not in {"frame_ref", "status"}
+            },
+        },
+    }
+    direction_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "body", "frame_refs"],
+        "properties": {
+            "title": {"type": "string"},
+            "body": {"type": "string"},
+            "frame_refs": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+    group_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["category", "frame_refs", "common_patterns", "derivative_directions"],
+        "properties": {
+            "category": {"type": "string", "enum": ["portrait", "product", "other"]},
+            "frame_refs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+            "common_patterns": {"type": "array", "minItems": 1, "items": direction_schema},
+            "derivative_directions": {"type": "array", "items": direction_schema},
+        },
+    }
+    batch_group_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["category", "label", "rule", "frame_refs"],
+        "properties": {
+            "category": {"type": "string", "minLength": 1},
+            "label": {"type": "string", "minLength": 1},
+            "rule": {"type": "string", "minLength": 1},
+            "frame_refs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+            # Historical analysis files may retain these fields; they are no
+            # longer generated or projected for batch visual themes.
+            "common_patterns": {"type": "array", "items": direction_schema},
+            "derivative_directions": {"type": "array", "items": direction_schema},
+        },
+    }
+    classification_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["status", "missing_reason", "groups"],
+        "properties": {
+            "status": {"type": "string", "enum": ["complete", "unavailable"]},
+            "missing_reason": {"type": "string"},
+            "rule": {"type": "string"},
+            "groups": {"type": "array", "items": group_schema},
+        },
+    }
+    batch_classification_schema = {
+        **classification_schema,
+        "properties": {
+            **classification_schema["properties"],
+            "groups": {"type": "array", "items": batch_group_schema},
+        },
+        "allOf": [{"if": {"properties": {"status": {"const": "complete"}}},
+                   "then": {"properties": {"groups": {"minItems": 2}}},
+                   "else": {"properties": {"groups": {"maxItems": 0}}}}],
+    }
+    brand_scope_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["brand", "groups"],
+        "properties": {
+            "brand": {"type": "string"},
+            "groups": {"type": "array", "minItems": 1, "items": group_schema},
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["brands"],
+        "properties": {
+            "brands": {"type": "array", "minItems": 1, "items": brand_scope_schema},
+            # Compatibility schema for historical analysis units; new prompts must emit brands.
+            "groups": {"type": "array", "minItems": 1, "items": group_schema},
+            "frameUnderstanding": {
+                "type": "array",
+                "items": frame_understanding_schema,
+            },
+            "standardClassification": classification_schema,
+            "batchClassification": batch_classification_schema,
+        },
+    }
+
+
+def _material_deep_dive_output_schema(fact_pack):
+    material_ids = [
+        str(fact["material_id"])
+        for fact in fact_pack["materialFacts"]
+        if fact.get("material_id")
+    ]
+    return {
+        "type": "array",
+        "minItems": len(material_ids),
+        "maxItems": len(material_ids),
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "material_id",
+                "frame_observations",
+            ] + (["scriptAnalysis"] if fact_pack.get("schemaVersion", 0) >= 8 else []),
+            "properties": {
+                "material_id": {"type": "string", "enum": material_ids},
+                "scriptAnalysis": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["conclusion", "evidenceRefs", "availability"],
+                    "properties": {
+                        "conclusion": {"type": "string"},
+                        "evidenceRefs": {"type": "array", "items": {"type": "string"}},
+                        "availability": {"type": "string", "enum": ["available", "unavailable"]},
+                    },
+                },
+                "frame_observations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["frame_ref", "observation"],
+                        "properties": {
+                            "frame_ref": {"type": "string"},
+                            "observation": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+
+def _analysis_output_schema(fact_pack):
+    include_period_contract = "hotMaterialFacts" in fact_pack
+    properties = {
+        "topMaterialCombination": _ranking_output_schema(
+            include_period_contract=include_period_contract
+        ),
+        "chapter02Insights": _chapter02_output_schema(fact_pack),
+    }
+    required = ["topMaterialCombination", "chapter02Insights"]
+    if "scriptFacts" in fact_pack:
+        script_schema = {
+            "type": "array",
+            "items": _analysis_insight_schema(),
+        }
+        script_facts = fact_pack.get("scriptFacts", {})
+        if isinstance(script_facts, dict) and "keywordCloud" in script_facts:
+            script_schema.update({"minItems": 2, "maxItems": 2})
+            properties["keywordCloudReview"] = {
+                "type": "array",
+                "items": _keyword_cloud_review_schema(),
+            }
+            properties["keywordCloudInsight"] = _keyword_cloud_insight_schema()
+            required.extend(["keywordCloudReview", "keywordCloudInsight"])
+        properties["scriptInsights"] = script_schema
+        required.append("scriptInsights")
+    if any(asset.get("available") for asset in fact_pack.get("visualAssets", [])) or any(
+        frame.get("available") for material in fact_pack.get("materialFacts", []) for frame in material.get("highlightFrames", [])
+    ):
+        properties["highlightDashboard"] = _highlight_output_schema()
+        required.append("highlightDashboard")
+    if any("secondLevelBreakdown" in fact for fact in fact_pack.get("materialFacts", [])):
+        properties["materialDeepDives"] = _material_deep_dive_output_schema(fact_pack)
+        required.append("materialDeepDives")
+    return apply_schema({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": False,
+        "required": required,
+        "properties": properties,
+    }, fact_pack)
+
+
+def _write_analysis_units(fact_pack, output):
+    unit_dir = Path(output) / "analysis-units"
+    if "hotMaterialFacts" in fact_pack:
+        ranking_evidence = {
+            "current": fact_pack["current"],
+            "previousPeriod": fact_pack["previousPeriod"],
+            "industryBenchmark": fact_pack["industryBenchmark"],
+            "comparisonFacts": fact_pack["comparisonFacts"],
+            "hotMaterialFacts": fact_pack["hotMaterialFacts"],
+        }
+    else:
+        ranking_evidence = {
+            "reportScope": fact_pack["reportScopes"]["ranking"],
+            "industryTop1000Facts": fact_pack["industryTop1000Facts"],
+            "brandRankingFacts": fact_pack["brandRankingFacts"],
+        }
+    units = (
+        (
+            "ranking-brand-input.json",
+            "ranking_brand",
+            "topMaterialCombination",
+            ranking_evidence,
+        ),
+        (
+            "audience-marketing-input.json",
+            "audience_marketing",
+            "chapter02Insights",
+            {"chapter02AiFacts": fact_pack["chapter02AiFacts"]},
+        ),
+        (
+            "script-input.json",
+            "script_insights",
+            "scriptInsights",
+            {"scriptFacts": fact_pack["scriptFacts"]},
+        ),
+        (
+            "highlight-input.json",
+            "highlight",
+            "highlightDashboard",
+            {
+                "reportScope": fact_pack["reportScopes"]["detail"],
+                "visualAssets": _model_visual_assets(fact_pack["visualAssets"]),
+                "frameUnderstandingContract": {
+                    "stage": "per_frame_visual_understanding_before_batch_classification",
+                    "requiredFields": [
+                        "frame_ref",
+                        "status",
+                        "subject",
+                        "visual_focus",
+                        "human_product_relation",
+                        "action",
+                        "composition",
+                        "information_expression",
+                        "failure_reason",
+                    ],
+                    "successfulFrameRule": "每张 available=true 的 JPEG 必须恰好有一条 understanding；无法可靠理解时 status=unavailable 并填写 failure_reason。",
+                },
+                "dataLimitations": [
+                    item
+                    for item in fact_pack["dataLimitations"]
+                    if str(item.get("field") or "").startswith("highlightFrames.")
+                ],
+            },
+        ),
+        (
+            "material-deep-dive-input.json",
+            "material_deep_dive",
+            "materialDeepDives",
+            {
+                "reportScope": fact_pack["reportScopes"]["detail"],
+                "materialFacts": _model_material_facts(fact_pack["materialFacts"]),
+            },
+        ),
+    )
+    manifest_units = []
+    for filename, unit_name, output_field, evidence in units:
+        path = unit_dir / filename
+        payload = {
+            "schemaVersion": (
+                6 if unit_name == "ranking_brand" and "hotMaterialFacts" in fact_pack
+                else 4 if unit_name == "ranking_brand" else 1
+            ),
+            "unit": unit_name,
+            "outputField": output_field,
+            "evidence": evidence,
+        }
+        if unit_name == "ranking_brand":
+            payload["outputSchema"] = _ranking_output_schema(
+                include_period_contract="hotMaterialFacts" in fact_pack
+            )
+        elif unit_name == "script_insights":
+            schema = _analysis_output_schema(fact_pack)
+            fields = [k for k in ("scriptInsights", "keywordCloudReview", "keywordCloudInsight", "scriptBrandInsights") if k in schema["properties"]]
+            payload["outputSchema"] = {"type": "object", "additionalProperties": False,
+                                       "required": fields, "properties": {k: schema["properties"][k] for k in fields}}
+        write_json_atomically(payload, path, indent=None)
+        manifest_units.append(
+            {
+                "unit": unit_name,
+                "path": f"analysis-units/{filename}",
+                "outputField": output_field,
+                "bytes": path.stat().st_size,
+                "sha256": file_sha256(path),
+            }
+        )
+    output_schema_path = Path(output) / "yuntu-ai-analysis.schema.json"
+    write_json_atomically(_analysis_output_schema(fact_pack), output_schema_path)
+    manifest = {
+        "schemaVersion": 5 if "hotMaterialFacts" in fact_pack else 4,
+        "executionMode": "single_model_call",
+        "sharedContext": {
+            "filters": fact_pack["filters"],
+            "reportScopes": fact_pack["reportScopes"],
+            "dataAvailabilitySummary": fact_pack["dataAvailabilitySummary"],
+            "assetRoot": "..",
+        },
+        "outputSchema": {
+            "path": "yuntu-ai-analysis.schema.json",
+            "bytes": output_schema_path.stat().st_size,
+            "sha256": file_sha256(output_schema_path),
+        },
+        "units": manifest_units,
+    }
+    # Freeze every input actually consumed downstream, including the compact
+    # renderer projection. Older standalone unit builders remain readable.
+    from yuntu_analysis_bundle import file_record
+    prompt_path = Path(output) / "yuntu-analysis-prompt.md"
+    report_path = Path(output) / "report-data.json"
+    if prompt_path.is_file() and report_path.is_file():
+        assets = []
+        for asset in _model_visual_assets(fact_pack.get("visualAssets", [])):
+            if not asset.get("available"):
+                continue
+            path = Path(output) / asset["image_path"]
+            record = file_record(path, output) if path.is_file() else {"path": asset["image_path"]}
+            assets.append({**record, "frame_ref": asset["frame_ref"]})
+        videos = []
+        for fact in fact_pack.get("materialFacts", []):
+            video = fact.get("localVideo", {})
+            if video.get("available"):
+                path = Path(output).parent / video["relative_path"]
+                record = file_record(path, output) if path.is_file() else {"path": f"../{video['relative_path']}"}
+                videos.append({**record, "material_id": str(fact["material_id"])})
+        manifest["analysisContract"] = {
+            "version": 1,
+            "prompt": file_record(prompt_path, output),
+            "reportData": file_record(report_path, output),
+            "visualAssets": assets,
+            "videoAssets": videos,
+        }
+    write_json_atomically(manifest, unit_dir / "analysis-unit-manifest.json")
+    return manifest
+
+
+PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "prompts" / "yuntu-analysis-prompt.md"
+PROMPT_PLACEHOLDERS = (
+    "__BRANDS__",
+    "__SCOPE_LABELS__",
+    "__HOT_MATERIAL_RULE__",
+)
+
+
+def _load_prompt_template():
+    try:
+        template = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise YuntuAnalysisError(
+            f"unable to read prompt template {PROMPT_TEMPLATE_PATH}: {exc}"
+        ) from exc
+    missing = [token for token in PROMPT_PLACEHOLDERS if token not in template]
+    if missing:
+        raise YuntuAnalysisError(
+            "prompt template is missing placeholders: " + ", ".join(missing)
+        )
+    return template
+
+
+def _format_hot_material_rule(hot_material_rule=None):
+    rule = hot_material_rule or load_hot_material_rule()
+    return (
+        f"metric=`{rule['metric']}`，comparison=`{rule['comparison']}`，"
+        f"threshold={rule['threshold']}（本批次配置）"
+    )
+
+
+def _brand_values(value):
+    """Normalize persisted connector brand values before local iteration."""
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if not isinstance(value, str):
+        return []
+    text = value.strip()
+    if not text:
+        return []
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        decoded = None
+    if isinstance(decoded, list):
+        return [str(item).strip() for item in decoded if str(item).strip()]
+    return [part.strip() for part in text.replace("/", ",").split(",") if part.strip()]
+
+
+def _prompt_text(*, filters, hot_material_rule=None):
+    brand_values = _brand_values(filters.get("brands", []))
+    brands = "、".join(brand_values)
+    scope_labels = "、".join(
+        ["all（全量 TOP1000）", *brand_values]
+    )
+    return (
+        _load_prompt_template()
+        .replace("__BRANDS__", brands or "未指定品牌")
+        .replace("__SCOPE_LABELS__", scope_labels)
+        .replace(
+            "__HOT_MATERIAL_RULE__",
+            _format_hot_material_rule(hot_material_rule),
+        )
+    )
+
+
+def _load_ranking_run(root, manifest, run_key, fallback_records=None):
+    runs = manifest.get("rankingRuns", {})
+    run = runs.get(run_key) if isinstance(runs, dict) else None
+    if not isinstance(run, dict) or run.get("status") != "success":
+        return fallback_records if fallback_records is not None else []
+    path = run.get("normalizedPath")
+    if not isinstance(path, str) or not path:
+        return fallback_records if fallback_records is not None else []
+    try:
+        records = _load_json(root / path)
+    except YuntuAnalysisError:
+        return fallback_records if fallback_records is not None else []
+    return records if isinstance(records, list) else []
+
+
+def _scope_records(records, scope, brands):
+    if scope == "all":
+        return list(records)
+    return [
+        record
+        for record in records
+        if scope in match_brands_from_title(record.get("title", ""), brands)
+    ]
+
+
+def _build_period_facts(manifest, query_records, previous_records, industry_records):
+    runs = manifest.get("rankingRuns", {})
+    runs = runs if isinstance(runs, dict) else {}
+
+    def aggregate(records, run_key, source_scope, unavailable_reason=""):
+        run = runs.get(run_key, {}) if isinstance(runs.get(run_key, {}), dict) else {}
+        return _ranking_aggregate(
+            records,
+            source_scope=source_scope,
+            actual_date_range=run.get("actualDateRange"),
+            available=bool(records) and run.get("status") == "success",
+            missing_reason=(
+                unavailable_reason
+                or ("" if records and run.get("status") == "success" else "comparison_data_unavailable")
+            ),
+        )
+
+    current = aggregate(query_records, "query", "query")
+    previous = aggregate(
+        previous_records,
+        "previous_period",
+        "previous_period",
+        "previous_period_not_collected" if not previous_records else "",
+    )
+    industry = aggregate(
+        industry_records,
+        "industry",
+        "industry",
+        "industry_benchmark_not_collected" if not industry_records else "",
+    )
+    return {
+        "current": current,
+        "previousPeriod": previous,
+        "industryBenchmark": industry,
+    }, {
+        "previousPeriod": _comparison_fact(current, previous, baseline_name="previousPeriod"),
+        "industryBenchmark": _comparison_fact(current, industry, baseline_name="industryBenchmark"),
+    }
+
+
+def _scope_period_facts(manifest, records_by_run, *, scope, brands):
+    runs = manifest.get("rankingRuns", {})
+    runs = runs if isinstance(runs, dict) else {}
+    periods = {}
+    for run_key, records in records_by_run.items():
+        run = runs.get(run_key, {}) if isinstance(runs.get(run_key, {}), dict) else {}
+        scoped_records = (
+            records
+            if run_key == "industry"
+            else _scope_records(records, scope, brands)
+        )
+        periods[run_key] = _ranking_aggregate(
+            scoped_records,
+            source_scope=run_key,
+            actual_date_range=run.get("actualDateRange"),
+            available=bool(records) and run.get("status") == "success",
+            missing_reason=("comparison_data_unavailable" if not records else ""),
+        )
+    return periods, {
+        "current": periods["query"],
+        "previousPeriod": _comparison_fact(
+            periods["query"], periods["previous_period"], baseline_name="previousPeriod"
+        ),
+        "industryBenchmark": _comparison_fact(
+            periods["query"], periods["industry"], baseline_name="industryBenchmark"
+        ),
+    }
+
+
+def prepare_analysis(*, input_dir, output_dir, hot_material_config=None, local_only=False):
     root = Path(input_dir)
     output = Path(output_dir)
+    try:
+        hot_material_rule = load_hot_material_rule(hot_material_config)
+    except HotMaterialConfigError as exc:
+        raise YuntuAnalysisError(str(exc)) from exc
     manifest = _load_json(root / "batch-manifest.json")
+    filters = manifest.get("filters")
+    if isinstance(filters, dict) and "brands" in filters:
+        manifest["filters"] = {**filters, "brands": _brand_values(filters["brands"])}
     list_records = _load_json(root / "normalized" / "list-records.json")
     selected = manifest.get("selectedMaterials", [])
     rejected = manifest.get("rejectedMaterials", [])
     if not isinstance(selected, list) or not selected:
         raise YuntuAnalysisError("selectedMaterials must contain at least one material")
     pool_records = [record for record in list_records if isinstance(record, dict)]
+    previous_records = _load_ranking_run(root, manifest, "previous_period")
+    industry_records = _load_ranking_run(root, manifest, "industry")
     list_by_id = {record.get("material_id"): record for record in pool_records}
     selected_ids = {item.get("material_id") for item in selected}
     details = []
@@ -529,13 +1719,19 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
             {
                 "material_id": material_id,
                 "rank": item.get("rank"),
-                "title": list_record.get("title", ""),
+                "title": list_record.get("title") or detail.get("title", ""),
                 "metrics": list_record.get("metrics", {}),
+                "exposure": list_record.get("exposure", {"min": None, "max": None, "raw": ""}),
                 "metricComparison": _metric_comparison(list_record, pool_records),
                 "people_tags": list_record.get("people_tags", []),
                 "material_tags": list_record.get("material_tags", []),
                 "high_points": detail.get("high_points", []),
                 "loss_points": detail.get("loss_points", []),
+                "script_text": detail.get("script_text", ""),
+                "script_segments": detail.get("script_segments", []),
+                "content_formula": detail.get("content_formula"),
+                "creative_breakdown": detail.get("creative_breakdown"),
+                "detailMetrics": detail.get("metrics", {}),
                 "secondLevelBreakdown": _second_level_breakdown(detail),
                 "listDataAvailability": list_record.get("data_availability", {}),
                 "detailDataAvailability": detail.get("data_availability", {}),
@@ -543,47 +1739,84 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
         )
     highlights = load_highlights_manifest(root)
     for detail in details_missing_standard_highlights(details, root):
+        if local_only and find_local_video_asset(root, str(detail["material_id"])) is None:
+            # Preserve recorded failures; a local continuation never downloads assets.
+            continue
         highlights[str(detail["material_id"])] = generate_standard_highlights_for_detail(
             detail, root
         )
     if details:
         write_highlights_manifest(root, highlights)
+    video_assets = load_video_asset_records(
+        root, [fact["material_id"] for fact in material_facts]
+    )
     for fact in material_facts:
         frames = highlights.get(str(fact["material_id"]), [])
         fact["highlightFrames"] = frames
+        fact["localVideo"] = video_assets[str(fact["material_id"])]
         fact["highlightFrameAvailability"] = _highlight_frame_availability(
             frames, requested=True
         )
     candidate_pool = _candidate_pool(pool_records)
     report_scopes = _report_scopes(pool_records, selected, rejected)
     audience_dashboard = build_audience_dashboard(pool_records)
-    audience_topn_records = _audience_topn_records(pool_records)
     tag_insights = _tag_insights(pool_records, selected_ids)
     trend_summary = _trend_summary(details)
+    script_facts = build_script_facts(details, selected)
     brands = manifest.get("filters", {}).get("brands", [])
+    script_facts["brandScopeOrder"] = list(brands)
+    script_facts["brandScopes"] = {}
+    for brand in brands:
+        ids = {f["material_id"] for f in material_facts
+               if brand in match_brands_from_title(f.get("title"), brands)}
+        script_facts["brandScopes"][brand] = build_script_facts(
+            details, [item for item in selected if item["material_id"] in ids])
+    ranking_period_facts, comparison_facts = _build_period_facts(
+        manifest, pool_records, previous_records, industry_records
+    )
+    has_period_contract = bool(manifest.get("rankingRuns"))
     combination = build_top_material_combination(
         pool_records,
-        top_n=brand_top_n,
-        brands=brands,
-    )
-    full_brand_combination = build_top_material_combination(
-        pool_records,
-        top_n=None,
+        top_n=len(pool_records),
         brands=brands,
     )
     list_by_id = {record.get("material_id"): record for record in pool_records}
     brand_facts = {
-        "source_scope": "brand_top_n",
-        "requested_top_n": brand_top_n,
+        "source_scope": "brand_in_top1000",
         "brands": {
-            brand: _ranking_scope_facts(
-                [list_by_id[item["material_id"]] for item in group["topMaterials"]],
-                source_scope="brand_top_n",
-                requested_top_n=brand_top_n,
-            )
+            brand: {
+                **_ranking_scope_facts(
+                    [list_by_id[item["material_id"]] for item in group["topMaterials"]],
+                    source_scope="brand_in_top1000",
+                ),
+            }
             for brand, group in combination.get("brands", {}).items()
         },
     }
+    configured_brands = brands or list(brand_facts["brands"])
+    comparison_facts["scopes"] = {}
+    records_by_run = {
+        "query": pool_records,
+        "previous_period": previous_records,
+        "industry": industry_records,
+    }
+    for scope in ["all", *configured_brands]:
+        _periods, scope_comparisons = _scope_period_facts(
+            manifest, records_by_run, scope=scope, brands=configured_brands
+        )
+        comparison_facts["scopes"][scope] = scope_comparisons
+    hot_material_facts = None
+    if has_period_contract:
+        hot_material_facts = {
+            "all": _hot_material_scope_facts(
+                pool_records, scope="all", hot_material_rule=hot_material_rule
+            )
+        }
+        for brand in configured_brands:
+            brand_records = _scope_records(pool_records, brand, configured_brands)
+            hot_material_facts[brand] = _hot_material_scope_facts(
+                brand_records, scope="brand", hot_material_rule=hot_material_rule
+            )
     scope_order = ["all"]
     chapter02_facts = {
         "scopeOrder": scope_order,
@@ -593,17 +1826,17 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
         "scopeOrder": scope_order,
         "all": _chapter02_scope_fact(pool_records, label="全量 TOP1000", limit=1000),
     }
-    configured_brands = brands or list(brand_facts["brands"])
     for brand in configured_brands:
-        if brand not in brand_facts["brands"] or brand not in full_brand_combination.get("brands", {}):
-            continue
-        full_brand_materials = full_brand_combination["brands"][brand].get("topMaterials", [])
+        # Retain zero-match brands as explicit scopes. They are unavailable,
+        # not a license to borrow evidence from all/another brand.
+        brand_scope = brand_facts["brands"].get(brand, {})
+        full_brand_materials = brand_scope.get("materials", [])
         full_brand_records = [
             list_by_id[item["material_id"]]
             for item in full_brand_materials
             if item.get("material_id") in list_by_id
         ]
-        ai_brand_materials = brand_facts["brands"][brand].get("materials", [])
+        ai_brand_materials = brand_scope.get("materials", [])
         ai_brand_records = [
             list_by_id[item["material_id"]]
             for item in ai_brand_materials
@@ -621,22 +1854,34 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
             limit=len(ai_brand_records) or 1,
         )
     fact_pack = {
-        "schemaVersion": 4,
+        "schemaVersion": 8 if has_period_contract else 7,
+        "analysisQualityVersion": QUALITY_VERSION,
         "filters": manifest.get("filters", {}),
         "selectedMaterials": selected,
         "rejectedMaterials": rejected,
         "summaryMetrics": {"selectedCount": len(selected), "rejectedCount": len(rejected), "candidateCount": len(pool_records)},
         "candidatePool": candidate_pool,
         "reportScopes": report_scopes,
-        "topMaterialCombination": combination,
         "audienceDashboard": audience_dashboard,
-        "audienceTopNRecords": audience_topn_records,
         "tagInsights": tag_insights,
         "trendSummary": trend_summary,
+        "scriptFacts": script_facts,
         "dataAvailabilitySummary": _availability_summary(material_facts),
         "materialFacts": material_facts,
         "chapter02Facts": chapter02_facts,
         "chapter02AiFacts": chapter02_ai_facts,
+        **(
+            {
+                "current": ranking_period_facts["current"],
+                "previousPeriod": ranking_period_facts["previousPeriod"],
+                "industryBenchmark": ranking_period_facts["industryBenchmark"],
+                "comparisonFacts": comparison_facts,
+                "hotMaterialRule": dict(hot_material_rule),
+                "hotMaterialFacts": hot_material_facts,
+            }
+            if has_period_contract
+            else {}
+        ),
     }
     fact_pack.update(
         _model_input_sections(
@@ -644,17 +1889,23 @@ def prepare_analysis(*, input_dir, output_dir, brand_top_n=30):
             pool_records,
             brand_facts,
             chapter02_ai_facts,
-            candidate_pool,
-            audience_dashboard,
-            tag_insights,
-            trend_summary,
-            report_scopes,
+            brands,
+            ranking_period_facts,
+            comparison_facts,
+            hot_material_rule,
+            hot_material_facts,
         )
     )
-    write_json_atomically(fact_pack, output / "yuntu-analysis-data.json")
+    write_json_atomically(
+        _report_data(fact_pack), output / "report-data.json", indent=None
+    )
     output.mkdir(parents=True, exist_ok=True)
     (output / "yuntu-analysis-prompt.md").write_text(
-        _prompt_text(brand_top_n=brand_top_n, filters=manifest.get("filters", {})),
+        _prompt_text(
+            filters=manifest.get("filters", {}),
+            hot_material_rule=hot_material_rule,
+        ),
         encoding="utf-8",
     )
+    _write_analysis_units(fact_pack, output)
     return 0

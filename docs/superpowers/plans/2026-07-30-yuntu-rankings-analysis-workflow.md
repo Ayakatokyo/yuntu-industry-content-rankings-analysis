@@ -1458,7 +1458,7 @@ class YuntuReportTests(unittest.TestCase):
             "trendInsights": ["101 点击指数在 1-2 秒形成高点。"],
             "materialAnalyses": [{"material_id": "101", "summary": "首秒承接点击。"}],
             "creativePatterns": ["价格利益点前置。"],
-            "nextActions": ["测试小仙炖礼盒装价格锚点表达。"],
+            "nextActions": ["测试目标品牌礼盒装价格锚点表达。"],
         }
 
     def test_render_report_writes_data_markdown_and_html(self):
@@ -1542,7 +1542,7 @@ SECTION_TITLES = (
     ("03｜人群与内容标签洞察", "audienceInsights"),
     ("04｜单素材秒级诊断", "materialAnalyses"),
     ("05｜高表现素材共性", "creativePatterns"),
-    ("06｜小仙炖可借鉴创意方向", "tagInsights"),
+    ("06｜目标品牌可借鉴创意方向", "tagInsights"),
     ("07｜下一轮素材建议", "nextActions"),
 )
 

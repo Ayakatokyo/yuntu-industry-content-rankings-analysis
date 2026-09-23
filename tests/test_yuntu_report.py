@@ -1,8 +1,11 @@
 import importlib.util
+import copy
 import json
+import re
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +13,11 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT / "scripts"
 MODULE_PATH = SCRIPTS_DIR / "yuntu_report.py"
+
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from yuntu_report_sections import render_script_insights
 
 
 def load_module():
@@ -22,6 +30,907 @@ def load_module():
 
 
 class YuntuReportTests(unittest.TestCase):
+    def test_chapter01_and_keyword_cloud_have_overflow_safe_geometry_contract(self):
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+        self.assertIn(".unified-yuntu .brand-tabs,", css)
+        self.assertIn(".unified-yuntu .hot-material-card { min-width:0; max-width:100%; }", css)
+        self.assertIn(".unified-yuntu .brand-tab { min-width:0; white-space:normal; overflow-wrap:anywhere; }", css)
+        compact_cloud = css[css.rfind("/* The keyword cloud is intentionally dense"):]
+        self.assertIn("display:flex;", compact_cloud)
+        self.assertIn("flex-wrap:wrap;", compact_cloud)
+        self.assertIn("gap:6px 8px;", compact_cloud)
+        self.assertIn("min-height:0;", compact_cloud)
+
+    def test_keyword_selling_point_is_required_and_bound_to_its_keyword_evidence(self):
+        report = load_module()
+        facts = {"keywordCloud": {"keywords": [{
+            "keyword": "豆浆", "evidenceRefs": ["script:101:text:豆浆"], "materialIds": ["101"],
+        }, {
+            "keyword": "西梅", "evidenceRefs": ["script:102:text:西梅"], "materialIds": ["102"],
+        }]}}
+        analysis = {
+            "keywordCloudReview": [{"keyword": "豆浆", "decision": "accept", "target": ""}, {"keyword": "西梅", "decision": "accept", "target": ""}],
+            "keywordCloudInsight": {"oneSentenceConclusion": "豆浆是可用关键词。", "summary": "脚本文本中存在可回溯的豆浆表达。", "sellingPoints": []},
+        }
+        with self.assertRaisesRegex(report.YuntuReportError, "sellingPoints is required"):
+            report._validate_keyword_cloud_analysis(analysis, facts)
+
+        analysis["keywordCloudInsight"]["sellingPoints"] = [{
+            "title": "豆浆表达", "description": "使用豆浆关键词组织卖点表达。",
+            "keywordRefs": ["豆浆"], "evidenceRefs": ["script:102:text:西梅"],
+        }]
+        with self.assertRaisesRegex(report.YuntuReportError, "must belong to keywordRefs"):
+            report._validate_keyword_cloud_analysis(analysis, facts)
+
+    def test_chapter02_rejects_cross_scope_evidence_and_template_reuse(self):
+        report = load_module()
+        summary = lambda material_id, text: {"title": "事实驱动标题", "summary": text, "evidence": ["tag"], "material_ids": [material_id]}
+        value = {"scopeOrder": ["all", "品牌A"], "scopes": {
+            "all": {"audienceSummary": summary("101", "女性与早餐场景共同出现，建议验证场景表达。"), "marketingSummary": summary("101", "成分类标签集中，建议验证信息取舍。")},
+            "品牌A": {"audienceSummary": summary("102", "女性与早餐场景共同出现，建议验证场景表达。"), "marketingSummary": summary("102", "产品标签不同，建议验证产品表达。")},
+        }}
+        facts = {"chapter02AiFacts": {"scopeOrder": ["all", "品牌A"], "all": {"sampleCount": 1, "topMaterials": [{"material_id": "101"}]}, "品牌A": {"sampleCount": 1, "topMaterials": [{"material_id": "102"}]}}}
+        with self.assertRaisesRegex(report.YuntuReportError, "must differ"):
+            report._validate_chapter02_insights(value, fact_pack=facts)
+        value["scopes"]["品牌A"]["audienceSummary"] = summary("101", "品牌A有独立的人群标签，建议验证表达。")
+        with self.assertRaisesRegex(report.YuntuReportError, "outside scope"):
+            report._validate_chapter02_insights(value, fact_pack=facts)
+
+    def test_unavailable_chapter02_scope_accepts_a_clear_equivalent_reason(self):
+        report = load_module()
+        summary = {"title": "当前范围缺少样本", "summary": "本范围未获取到可用素材。", "evidence": [], "material_ids": []}
+        value = {"scopeOrder": ["all"], "scopes": {"all": {
+            "audienceSummary": dict(summary), "marketingSummary": dict(summary),
+        }}}
+        facts = {"chapter02AiFacts": {"scopeOrder": ["all"], "all": {
+            "sampleCount": 0, "availability": "unavailable", "topMaterials": [],
+        }}}
+
+        report._validate_chapter02_insights(value, fact_pack=facts)
+
+    def test_frame_understanding_rejects_second_only_template_changes_for_current_contract(self):
+        report = load_module()
+        frames = [{"frame_ref": "highlight:101:cover:0"}, {"frame_ref": "highlight:101:click_peak:2"}]
+        item = {"status": "complete", "subject": "产品包装", "visual_focus": "居中产品", "human_product_relation": "无人", "action": "静置展示", "composition": "竖屏近景", "information_expression": "包装文字可见", "failure_reason": ""}
+        dashboard = {"frameUnderstanding": [
+            {"frame_ref": frames[0]["frame_ref"], **item},
+            {"frame_ref": frames[1]["frame_ref"], **item},
+        ], "standardClassification": {"status": "unavailable", "missing_reason": "test", "groups": []}, "batchClassification": {"status": "unavailable", "missing_reason": "test", "groups": []}}
+        with self.assertRaisesRegex(report.YuntuReportError, "observations must differ"):
+            report._validate_highlight_dual_classification(dashboard, frames, strict_semantic_contract=True)
+
+    def test_script_scope_limitations_do_not_trigger_industry_claim_gate(self):
+        report = load_module()
+        for summary in (
+            "当前已获取详情素材中，仅少量素材返回了可用的内容公式或标签结构，覆盖不足以支持行业普遍结论。现有事实更适合用于识别已出现的标签组合。",
+            "当前样本不能代表行业普遍规律。",
+            "数据不足以支持行业规律。",
+        ):
+            with self.subTest(summary=summary):
+                report._validate_script_insights({"scriptInsights": [{
+                    "title": "脚本结构", "summary": summary,
+                    "evidence": ["script_text"], "material_ids": ["101"],
+                }]}, {"scriptFacts": {"materials": [{"material_id": "101"}]}})
+
+    def test_scope_limitation_does_not_exempt_other_unsupported_claims(self):
+        report = load_module()
+        for summary in (
+            "该结构是行业普遍规律。",
+            "覆盖不足以支持行业普遍结论，但该句导致点击提升。",
+            "覆盖不足以支持行业普遍结论。但该结构仍是行业规律。",
+            "覆盖不足以支持行业普遍结论。已建立帧-话术对应关系。",
+            "并非不能代表行业普遍规律。",
+            "不能代表行业普遍规律的说法是错误的。",
+        ):
+            with self.subTest(summary=summary):
+                with self.assertRaisesRegex(report.YuntuReportError, "unsupported claim"):
+                    report._validate_script_insights({"scriptInsights": [{
+                        "title": "脚本结构", "summary": summary,
+                        "evidence": ["script_text"], "material_ids": ["101"],
+                    }]}, {"scriptFacts": {"materials": [{"material_id": "101"}]}})
+
+    LEGACY_UNUSED_ANALYSIS_FIELDS = (
+        "rankingOverview",
+        "audienceInsights",
+        "materialComparison",
+        "materialDiagnoses",
+        "competitorPatterns",
+        "opportunityMap",
+        "experimentMatrix",
+    )
+
+    def test_validate_material_script_analysis_rejects_cross_material_evidence(self):
+        report = load_module()
+        fact_pack = {
+            "selectedMaterials": [{"material_id": "m-001"}],
+            "materialFacts": [{
+                "material_id": "m-001",
+                "script": {
+                    "text": "当前素材脚本文案。",
+                    "formula": [],
+                    "evidence": [],
+                },
+                "evidenceIndex": {"script": ["script:m-001:text:当前素材脚本文案。"]},
+                "secondLevelBreakdown": {"metrics": []},
+            }],
+        }
+        analysis = {
+            "materialDeepDives": [{
+                "material_id": "m-001",
+                "frame_observations": [],
+                "scriptAnalysis": {
+                    "conclusion": "该素材脚本的事实信息需要结合原文继续核对，当前仅保留可验证的文本依据。",
+                    "evidenceRefs": ["script:m-002:text:其他素材句子"],
+                    "availability": "available",
+                },
+            }],
+        }
+
+        with self.assertRaisesRegex(report.YuntuReportError, "scriptAnalysis evidenceRefs"):
+            report._validate_material_deep_dives(analysis, fact_pack)
+
+    def test_prose_validation_allows_testing_language_but_rejects_metric_claims(self):
+        report = load_module()
+
+        report._validate_deep_dive_text(
+            "建议比较两种开场版本，观察是否提升产品辨识度。",
+            "derivative direction body",
+        )
+        with self.assertRaisesRegex(report.YuntuReportError, "must not contain"):
+            report._validate_deep_dive_text(
+                "该画面导致点击率提升。",
+                "derivative direction body",
+            )
+
+    def test_material_script_analysis_allows_click_as_a_test_direction(self):
+        report = load_module()
+        ref = "script:101:text:开场先说明使用场景。"
+        fact_pack = {
+            "selectedMaterials": [{"material_id": "101"}],
+            "materialFacts": [{
+                "material_id": "101",
+                "script": {"text": "开场先说明使用场景。", "formula": [], "evidence": []},
+                "evidenceIndex": {"script": [ref]},
+                "secondLevelBreakdown": {"metrics": []},
+            }],
+        }
+        analysis = {"materialDeepDives": [{
+            "material_id": "101",
+            "frame_observations": [],
+            "scriptAnalysis": {
+                "conclusion": "建议保留场景开头，并用后续点击测试比较表达顺序。",
+                "evidenceRefs": [ref],
+                "availability": "available",
+            },
+        }]}
+
+        report._validate_material_deep_dives(analysis, fact_pack)
+
+    def test_unavailable_material_script_accepts_a_clear_equivalent_reason(self):
+        report = load_module()
+        fact_pack = {
+            "schemaVersion": 8,
+            "selectedMaterials": [{"material_id": "101"}],
+            "materialFacts": [{
+                "material_id": "101",
+                "script": {"text": "", "formula": [], "evidence": []},
+                "evidenceIndex": {"script": []},
+                "secondLevelBreakdown": {"metrics": []},
+            }],
+        }
+        analysis = {"materialDeepDives": [{
+            "material_id": "101",
+            "frame_observations": [],
+            "scriptAnalysis": {
+                "conclusion": "未获取到该素材的可用脚本文本。",
+                "evidenceRefs": [],
+                "availability": "unavailable",
+            },
+        }]}
+
+        report._validate_material_deep_dives(analysis, fact_pack)
+
+    def test_validate_script_insights_requires_scoped_material_evidence(self):
+        report = load_module()
+        fact_pack = {
+            "scriptFacts": {
+                "scope": "selected_detail_materials",
+                "materials": [{"material_id": "101"}],
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            analysis = self.analysis_json()
+            analysis["scriptInsights"] = [{
+                "title": "脚本结构",
+                "summary": "该结构可作为下一轮脚本变量的观察方向。",
+                "evidence": ["script_text"],
+                "material_ids": [],
+            }]
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "script insight.*material"):
+                report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+            analysis["scriptInsights"][0]["material_ids"] = ["101"]
+            analysis["scriptInsights"][0]["summary"] = "该句导致点击提升，并与第 2 秒建立帧-话术对应关系。"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "script insight.*claim"):
+                report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+    def test_render_report_keeps_script_facts_in_material_tab_only(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["materialFacts"][0].update({
+            "script_text": "先提出早餐场景，再展示商品。",
+            "script_segments": [],
+            "content_formula": {"labels": ["场景引入"]},
+            "creative_breakdown": {"tags": ["口播"]},
+        })
+        fact_pack["scriptFacts"] = {
+            "scope": "selected_detail_materials",
+            "coverage": {"total": 2, "script": 1, "rate": 0.5},
+            "frequencies": {"formula_labels": {"场景引入": {"count": 1, "material_ids": ["101"]}}},
+            "materials": [
+                {"material_id": "101", "rank": 1, "script_text": "先提出早餐场景，再展示商品。", "script_segments": [], "content_formula": {"labels": ["场景引入"]}, "creative_breakdown": {"tags": ["口播"]}, "metrics": {"convertCnt": 17, "orderCnt": 3}, "data_availability": {"script_text": {"available": True, "missing_reason": ""}, "script_segments": {"available": False, "missing_reason": "source_empty"}}},
+                {"material_id": "102", "rank": 2, "script_text": "", "script_segments": [], "content_formula": None, "creative_breakdown": None, "metrics": {}, "data_availability": {"script_text": {"available": False, "missing_reason": "source_empty"}, "script_segments": {"available": False, "missing_reason": "source_empty"}}},
+            ],
+            "limitations": ["脚本时间戳段落未提供，不能建立秒点或高光帧与话术的对应关系。"],
+        }
+        analysis = self.deep_dive_analysis()
+        analysis["scriptInsights"] = [{"title": "场景先行再承接商品", "summary": "已获取详情素材中的可见脚本呈现场景先行、商品信息后置的结构，可作为下一轮版本变量。", "evidence": ["script_text"], "material_ids": ["101"]}]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "final-report", fact_pack=fact_pack)
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        chapter03 = rendered.split('id="script-insights"', 1)[1].split(
+            'id="highlight-insights"', 1
+        )[0]
+        chapter05 = rendered.split('id="material-deep-dive"', 1)[1]
+        self.assertIn("场景先行再承接商品", chapter03)
+        self.assertNotIn("先提出早餐场景，再展示商品。", chapter03)
+        self.assertIn("先提出早餐场景，再展示商品。", chapter05)
+        self.assertNotIn("AI 脚本结论", chapter05)
+        self.assertNotIn("未提供脚本时间段，暂不输出帧-话术对应关系", chapter05)
+
+    def test_chapter05_script_tab_renders_formula_copy_and_transcript_evidence(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["materialFacts"][0]["script"] = {
+            "text": "早餐可以不碰碳水，但鲜炖燕窝一定要坚持吃。",
+            "labels": [{"level1": "商品卖点", "level2": "成分配方原料", "evidenceRef": "script:101:商品卖点:成分配方原料"}],
+            "formula": [{"level1": "商品卖点", "level2": "成分配方原料"}],
+            "evidence": [{"level2": "成分配方原料", "sentence": "鲜炖燕窝一定要坚持吃。", "evidenceRef": "script:101:text:鲜炖燕窝"}],
+            "availability": "available",
+        }
+        fact_pack["materialFacts"][0]["content_formula"] = {
+            "labels": [{"level_1_label": 9, "level_2_labels": [42]}],
+            "detail.42": "鲜炖燕窝",
+            "视频标题.text": "早餐可以不碰碳水，但鲜炖燕窝一定要坚持吃。",
+            "视频画面.text": "画面字幕：鲜炖燕窝，每天一瓶。",
+        }
+        fact_pack["materialFacts"][0]["evidenceIndex"] = {"script": [
+            "script:101:商品卖点:成分配方原料", "script:101:text:鲜炖燕窝"
+        ]}
+        analysis = self.deep_dive_analysis()
+        analysis["materialDeepDives"][0]["scriptAnalysis"] = {
+            "conclusion": "该素材从早餐场景切入，再把鲜炖燕窝与坚持食用放入同一表达，利益点聚焦且承接自然，生活化口吻降低理解门槛，建议保留场景到产品价值的顺序；下一轮可测试卖点前置与场景前置的改写，继续以原文证据核对表达是否清晰，并观察不同受众对信息顺序的理解差异。",
+            "evidenceRefs": ["script:101:商品卖点:成分配方原料", "script:101:text:鲜炖燕窝"],
+            "availability": "available",
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        script_tab = rendered.split('data-material-detail-tab="script"', 1)[1]
+        self.assertNotIn("material-script-ai", script_tab)
+        self.assertNotIn("material-script-boundary", script_tab)
+        self.assertIn("脚本分析数据", script_tab)
+        self.assertIn('class="raw-fact-card material-script-analysis"', script_tab)
+        self.assertIn('id="material-detail-script-0"', script_tab)
+        self.assertNotIn('id="material-detail-script-0" class="material-detail-panel data-state"', script_tab)
+        self.assertNotIn("收起脚本数据", script_tab)
+        self.assertIn('class="script-analysis-panel"', script_tab)
+        self.assertIn('class="script-analysis-section-header"', script_tab)
+        self.assertIn("复制内容公式", script_tab)
+        self.assertIn("复制脚本", script_tab)
+        self.assertIn("视频标题", script_tab)
+        self.assertIn("视频画面", script_tab)
+        self.assertNotIn("视频标题文字", script_tab)
+        self.assertNotIn("视频画面文字", script_tab)
+        self.assertIn("script:101:video_title:鲜炖燕窝", script_tab)
+        self.assertIn("script:101:video_frame:鲜炖燕窝", script_tab)
+        self.assertIn("script:101:text:鲜炖燕窝", script_tab)
+        self.assertIn('class="script-formula-item script-formula-token"', script_tab)
+        self.assertIn("script-formula-title-label", script_tab)
+        self.assertIn("script-formula-level1", script_tab)
+        self.assertIn("script-formula-level2", script_tab)
+        self.assertIn("script-formula-detail", script_tab)
+        self.assertIn('class="transcript script-text-body script-transcript"', script_tab)
+        self.assertNotIn('class="material-script-copy"', script_tab)
+        self.assertIn("data-script-evidence-ref", script_tab)
+
+    def test_chapter05_script_tab_has_formula_evidence_and_responsive_contract(self):
+        template = (ROOT / "scripts" / "templates" / "final-report-template.html").read_text(encoding="utf-8")
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+        self.assertIn("highlightScriptEvidence", template)
+        self.assertIn("data-script-copy", template)
+        self.assertIn("navigator.clipboard", template)
+        self.assertIn("prefers-reduced-motion", template)
+        self.assertIn("data-script-evidence-ref", template)
+        self.assertIn("document.getElementById(scriptTarget)", template)
+        self.assertNotIn("panel.querySelector('[data-material-detail-target=", template)
+        self.assertIn(".script-analysis-panel", css)
+        self.assertIn(".script-analysis-section-header", css)
+        self.assertIn(".copy-button", css)
+        self.assertIn(".material-script-analysis", css)
+        self.assertNotIn(".material-script-copy", css)
+        self.assertIn(".script-formula-level1", css)
+        self.assertIn(".script-formula-level2", css)
+        self.assertIn(".script-formula-detail", css)
+        self.assertIn(".script-evidence-highlight.is-evidence-active", css)
+        self.assertIn("var(--script-color", css)
+        self.assertIn("@media (max-width: 720px)", css)
+
+    def test_render_report_shows_script_formula_drilldown_keywords_and_copy_dimension(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["scriptFacts"] = {
+            "scope": "selected_detail_materials",
+            "coverage": {"total": 2, "script": 1, "rate": 0.5},
+            "frequencies": {
+                "selling_points": {"优质活菌": {"count": 1, "material_ids": ["101"]}},
+                "scenes": {"早餐": {"count": 1, "material_ids": ["101"]}},
+            },
+            "materials": [
+                {
+                    "material_id": "101", "script_text": "先提出早餐场景，再展示商品。", "script_segments": [],
+                    "content_formula": {"labels": [{"level_1_label": 10, "level_2_labels": [40, 55]}], "视频标题.text": "标题原文不应进入脚本洞察"},
+                    "creative_breakdown": {"raw": {"商品卖点": "优质活菌"}, "tags": ["优质活菌"]},
+                    "metrics": {}, "data_availability": {"script_text": {"available": True, "missing_reason": ""}},
+                },
+                {
+                    "material_id": "102", "script_text": "", "script_segments": [],
+                    "content_formula": None, "creative_breakdown": None, "metrics": {},
+                    "data_availability": {"script_text": {"available": False, "missing_reason": "source_empty"}},
+                },
+            ],
+            "limitations": [],
+        }
+        analysis = self.deep_dive_analysis()
+        analysis["scriptInsights"] = [{
+            "title": "场景先行再承接商品",
+            "summary": "已获取详情素材中的可见脚本呈现场景先行、商品信息后置的结构。",
+            "evidence": ["script_text"],
+            "material_ids": ["101"],
+        }]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "final-report", fact_pack=fact_pack)
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('class="script-formula-dashboard"', rendered)
+        self.assertIn('data-script-formula-primary', rendered)
+        self.assertIn("renderScriptFormulaDrill", rendered)
+        self.assertIn("一句话结论", rendered)
+        self.assertIn("高频关键词云", rendered)
+        self.assertIn("从关键词云提炼的卖点", rendered)
+        self.assertIn("脚本文案", rendered)
+        self.assertNotIn("标题原文不应进入脚本洞察", rendered)
+        self.assertIn("数据不足以判断", rendered)
+        self.assertIn(".script-keyword-triad", rendered)
+        self.assertIn("@media (max-width: 759px)", rendered)
+
+    def test_chapter03_uses_qianchuan_order_and_three_column_mounts(self):
+        script_facts = {
+            "coverage": {"total": 2, "script": 2, "rate": 1.0},
+            "materials": [
+                {"material_id": "101", "script_text": "先讲场景。", "script_segments": [], "content_formula": {"labels": []}, "creative_breakdown": None, "data_availability": {"script_text": {"available": True}}},
+                {"material_id": "102", "script_text": "再讲卖点。", "script_segments": [], "content_formula": {"labels": []}, "creative_breakdown": None, "data_availability": {"script_text": {"available": True}}},
+            ],
+        }
+        script_dashboard = {
+            "conclusion": {"text": "先场景后卖点。", "materialIds": ["101", "102"]},
+            "keywords": [{"label": "优质活菌", "count": 2, "materialIds": ["101", "102"]}],
+            "sellingPoints": [{"label": "优质活菌", "count": 2, "materialIds": ["101", "102"]}],
+            "dimensions": {"contentFormula": {"primary": [], "secondary": {}}},
+        }
+        script_insights = [
+            {"title": "公式结构", "summary": "内容公式结论。", "material_ids": ["101"], "evidence": ["content_formula.labels"]},
+            {"title": "脚本文案", "summary": "脚本文案结论。", "material_ids": ["102"], "evidence": ["script_text"]},
+            {"title": "可测试改写方向", "summary": "下一轮可将场景开场与卖点承接拆成变量验证。", "material_ids": ["101", "102"], "evidence": ["script_text", "content_formula.labels"]},
+        ]
+
+        rendered = render_script_insights(
+            script_facts=script_facts,
+            script_insights=script_insights,
+            script_dashboard=script_dashboard,
+            esc=lambda value: str(value),
+        )
+
+        self.assertLess(rendered.index('class="script-ai-insights script-ai-insights-layout"'), rendered.index('class="script-keyword-triad"'))
+        self.assertLess(rendered.index('class="script-keyword-triad"'), rendered.index('class="script-formula-dimension"'))
+        self.assertEqual(rendered.count('script-insight-dimension-block'), 2)
+        self.assertNotIn('chapter02-dimension-', rendered)
+        self.assertNotIn('script-ai-insight-card', rendered)
+        self.assertIn("一二级内容公式", rendered)
+        self.assertIn("脚本文案", rendered)
+        self.assertNotIn("可测试改写方向", rendered)
+        self.assertNotIn('class="script-material"', rendered)
+
+    def test_chapter03_mounts_qianchuan_layout_and_collapsible_formula_data(self):
+        script_facts = {
+            "coverage": {"total": 2, "script": 2, "rate": 1.0},
+            "materials": [
+                {"material_id": "101", "script_text": "先讲场景。", "script_segments": [], "content_formula": {"labels": []}},
+                {"material_id": "102", "script_text": "再讲卖点。", "script_segments": [], "content_formula": {"labels": []}},
+            ],
+        }
+        script_dashboard = {
+            "conclusion": {"text": "先场景后卖点。"},
+            "keywords": [{"label": "优质活菌", "count": 2}],
+            "sellingPoints": [{"label": "优质活菌", "count": 2}],
+            "dimensions": {"contentFormula": {"primary": [{"id": "10", "label": "场景引入", "count": 2}], "secondary": {"10": [{"label": "问题切入", "count": 2}]}}},
+        }
+
+        rendered = render_script_insights(
+            script_facts=script_facts,
+            script_insights=[
+                {"title": "公式结构", "summary": "内容公式结论。", "material_ids": ["101"], "evidence": ["content_formula.labels"]},
+                {"title": "脚本文案", "summary": "脚本文案结论。", "material_ids": ["102"], "evidence": ["script_text"]},
+            ],
+            script_dashboard=script_dashboard,
+            esc=lambda value: str(value),
+        )
+
+        self.assertIn('class="script-ai-insights script-ai-insights-layout"', rendered)
+        self.assertIn('class="keyword-cloud-layout script-keyword-triad-grid"', rendered)
+        self.assertIn('class="keyword-cloud-conclusion script-keyword-conclusion"', rendered)
+        self.assertIn('class="keyword-cloud-summary script-keyword-cloud-panel"', rendered)
+        self.assertIn('class="keyword-cloud-selling script-keyword-selling-panel"', rendered)
+        self.assertIn('data-collapsible-toggle', rendered)
+        self.assertIn('data-collapsible-expanded-label="收起脚本汇总数据"', rendered)
+        self.assertIn('id="script-formula-body"', rendered)
+        self.assertIn('class="script-formula-dashboard"', rendered)
+        self.assertIn('class="data-dashboard"', rendered)
+
+    def test_chapter03_script_insights_use_dimension_blocks_without_card_or_evidence(self):
+        rendered = render_script_insights(
+            script_facts={
+                "coverage": {"total": 2, "script": 2, "rate": 1.0},
+                "materials": [
+                    {"material_id": "101", "script_text": "先讲场景。", "script_segments": []},
+                    {"material_id": "102", "script_text": "再讲卖点。", "script_segments": []},
+                ],
+            },
+            script_insights=[
+                {"title": "一二级内容公式：场景承接产品证明", "summary": "公式分析。", "material_ids": ["101"], "evidence": ["script:101:formula"]},
+                {"title": "脚本文案：用品质承接场景", "summary": "文案分析。", "material_ids": ["102"], "evidence": ["script:102:text"]},
+            ],
+            script_dashboard={"dimensions": {"contentFormula": {"primary": [], "secondary": {}}}},
+            esc=lambda value: str(value),
+        )
+
+        self.assertEqual(rendered.count('class="script-insight-dimension-block"'), 2)
+        self.assertNotIn("script-ai-insight-card", rendered)
+        self.assertNotIn("script-ai-evidence", rendered)
+        self.assertNotIn("证据：", rendered)
+        self.assertNotIn("script:101:formula", rendered)
+        self.assertIn("一二级内容公式</strong><span>：场景承接产品证明", rendered)
+        self.assertIn("脚本文案</strong><span>：用品质承接场景", rendered)
+
+    def test_script_formula_summary_uses_semantic_formula_names_not_detail_values(self):
+        rendered = render_script_insights(
+            script_facts={
+                "coverage": {"total": 3, "script": 3, "rate": 1.0},
+                "materials": [
+                    {"material_id": "101", "script_text": "文案一", "script_segments": []},
+                    {"material_id": "102", "script_text": "文案二", "script_segments": []},
+                    {"material_id": "103", "script_text": "文案三", "script_segments": []},
+                ],
+            },
+            script_insights=[],
+            script_dashboard={
+                "dimensions": {
+                    "contentFormula": {
+                        "primary": [{"id": "10", "label": "10", "count": 3}],
+                        "secondary": {"10": [
+                            {"id": "40", "label": "40", "count": 3, "detailLabels": ["小蓝瓶"]},
+                            {"id": "55", "label": "55", "count": 2, "detailLabels": ["胡军"]},
+                            {"id": "39", "label": "39", "count": 1, "detailLabels": []},
+                        ]},
+                    }
+                }
+            },
+            esc=lambda value: str(value),
+        )
+
+        self.assertNotIn("一二级内容公式明细", rendered)
+        self.assertNotIn("script-formula-summary-row", rendered)
+        self.assertIn('class="script-formula-display-label">品牌印象</strong>', rendered)
+        self.assertIn('"displayLabel": "品牌印象"', rendered)
+        self.assertIn('"label": "产品代名词"', rendered)
+        self.assertIn('"label": "身份认同"', rendered)
+        self.assertNotIn('class="script-formula-display-label">小蓝瓶、胡军</strong>', rendered)
+
+    def test_script_formula_names_resolve_known_numeric_ids_to_semantic_labels(self):
+        rendered = render_script_insights(
+            script_facts={
+                "coverage": {"total": 1, "script": 1, "rate": 1.0},
+                "materials": [{"material_id": "101", "script_text": "文案", "script_segments": []}],
+            },
+            script_insights=[],
+            script_dashboard={
+                "dimensions": {
+                    "contentFormula": {
+                        "primary": [{"id": "10", "label": "10", "count": 1}],
+                        "secondary": {"10": [{"id": "40", "label": "40", "count": 1, "detailLabels": []}]},
+                    }
+                }
+            },
+            esc=lambda value: str(value),
+        )
+
+        self.assertIn('class="script-formula-display-label">品牌印象</strong>', rendered)
+        self.assertNotIn('class="script-formula-display-label">10</strong>', rendered)
+        self.assertIn('"label": "产品代名词"', rendered)
+
+    def test_formula_drilldown_has_qianchuan_pie_contract(self):
+        template = (ROOT / "scripts" / "templates" / "final-report-template.html").read_text(encoding="utf-8")
+
+        self.assertIn("renderScriptFormulaPie", template)
+        self.assertIn("script-formula-pie", template)
+        self.assertIn("script-formula-pie-legend", template)
+        self.assertIn("conic-gradient", template)
+        self.assertIn("占比", template)
+
+    def test_script_dashboard_omits_missing_timestamp_note(self):
+        rendered = render_script_insights(
+            script_facts={
+                "coverage": {"total": 1, "script": 1, "rate": 1.0},
+                "materials": [{"material_id": "101", "script_text": "文案", "script_segments": []}],
+            },
+            script_insights=[],
+            script_dashboard={"dimensions": {"contentFormula": {"primary": [], "secondary": {}}}},
+            esc=lambda value: str(value),
+        )
+
+        self.assertNotIn("未提供脚本时间段，暂不输出帧-话术对应关系", rendered)
+
+    def test_chapter03_keeps_only_two_ai_dimensions_and_uses_keyword_cloud_projection(self):
+        rendered = render_script_insights(
+            script_facts={
+                "coverage": {"total": 2, "script": 2, "rate": 1.0},
+                "materials": [
+                    {"material_id": "101", "script_text": "鲜炖。", "script_segments": []},
+                    {"material_id": "102", "script_text": "燕窝。", "script_segments": []},
+                ],
+            },
+            script_insights=[
+                {"title": "一二级内容公式：场景承接产品证明", "summary": "公式分析。", "material_ids": ["101"], "evidence": ["formula"]},
+                {"title": "脚本文案：用产品信息承接场景", "summary": "文案分析。", "material_ids": ["101", "102"], "evidence": ["script_text"]},
+                {"title": "不应显示的第三维度", "summary": "旧结构。", "material_ids": ["101"], "evidence": ["old"]},
+            ],
+            script_dashboard={
+                "dimensions": {"contentFormula": {"primary": [{"id": "10", "label": "商品卖点", "count": 2}], "secondary": {"10": [{"id": "40", "label": "品质证明", "count": 2, "detailLabels": ["小蓝瓶"]}]} }},
+                "keywordCloudPanel": {
+                    "oneSentenceConclusion": "脚本以鲜炖品质承接日常使用场景。",
+                    "summary": "关键词集中在产品品质表达，下一轮可比较品质信息与场景信息的前置顺序。",
+                    "keywords": [{"keyword": "鲜炖", "frequency": 2}],
+                    "sellingPoints": [{"title": "鲜炖品质", "description": "产品品质词承担购买理由。", "keywordRefs": ["鲜炖"]}],
+                },
+            },
+            esc=lambda value: str(value),
+        )
+
+        self.assertNotIn("AI 二次分析", rendered)
+        self.assertNotIn("关键词洞察", rendered)
+        self.assertEqual(rendered.count('class="script-insight-dimension-block"'), 2)
+        self.assertNotIn("script-ai-insight-card", rendered)
+        self.assertIn("脚本以鲜炖品质承接日常使用场景。", rendered)
+        self.assertIn("关键词集中在产品品质表达，下一轮可比较品质信息与场景信息的前置顺序。", rendered)
+        self.assertIn("鲜炖品质", rendered)
+        self.assertIn("一二级内容公式</strong><span>：场景承接产品证明", rendered)
+        self.assertIn("商品卖点", rendered)
+        self.assertIn("2 个素材", rendered)
+        self.assertNotIn("一二级内容公式明细", rendered)
+        self.assertNotIn("script-formula-summary-row", rendered)
+        self.assertIn("小蓝瓶", rendered)
+
+        card = rendered.split('class="raw-fact-card dashboard-data-card script-dashboard"', 1)[1]
+        self.assertLess(card.index("收起脚本汇总数据"), card.index("一二级内容公式"))
+        self.assertIn("data-script-formula-primary", card)
+
+    def test_markdown_chapter03_includes_keyword_cloud_triad_content(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["scriptFacts"] = {
+            "coverage": {"total": 1, "script": 1, "rate": 1.0},
+            "materials": [{"material_id": "101", "script_text": "鲜炖。", "script_segments": []}],
+            "keywordCloud": {"keywords": [{"keyword": "鲜炖", "frequency": 2, "materialIds": ["101"], "evidenceRefs": ["script:101:text:鲜炖"]}]},
+        }
+        analysis = self.deep_dive_analysis()
+        analysis["scriptInsights"] = [
+            {"title": "一二级内容公式：产品承接场景", "summary": "公式分析。", "material_ids": ["101"], "evidence": ["formula"]},
+            {"title": "脚本文案：用品质承接场景", "summary": "文案分析。", "material_ids": ["101"], "evidence": ["script_text"]},
+        ]
+        analysis["keywordCloudInsight"] = {
+            "oneSentenceConclusion": "脚本以鲜炖品质承接日常场景。",
+            "summary": "关键词体现品质与场景的承接关系。",
+            "sellingPoints": [{"title": "鲜炖品质", "description": "品质信息承担购买理由。", "keywordRefs": ["鲜炖"], "evidenceRefs": ["script:101:text:鲜炖"]}],
+        }
+
+        markdown = report._render_markdown(analysis, fact_pack=fact_pack)
+
+        self.assertIn("#### 一句话结论", markdown)
+        self.assertIn("#### 高频关键词云", markdown)
+        self.assertIn("#### 从关键词云提炼的卖点", markdown)
+        self.assertIn("鲜炖品质", markdown)
+
+    def test_chapter03_server_markup_matches_qianchuan_mount_structure(self):
+        rendered = render_script_insights(
+            script_facts={
+                "coverage": {"total": 1, "script": 1, "rate": 1.0},
+                "materials": [{"material_id": "101", "script_text": "先讲场景。", "script_segments": [], "content_formula": {"labels": []}}],
+            },
+            script_insights=[{"title": "脚本文案", "summary": "先讲场景，再承接卖点。", "material_ids": ["101"], "evidence": ["script_text"]}],
+            script_dashboard={
+                "conclusion": {"text": "先讲场景，再承接卖点。"},
+                "keywords": [{"label": "早餐", "count": 1}],
+                "sellingPoints": [{"label": "场景卖点", "count": 1}],
+                "dimensions": {"contentFormula": {"primary": [], "secondary": {}}},
+            },
+            esc=lambda value: str(value),
+        )
+
+        self.assertIn('<div class="script-insights-sections">', rendered)
+        self.assertIn('id="script-primary"', rendered)
+        self.assertIn('class="script-ai-insights script-ai-insights-layout"', rendered)
+        self.assertNotIn('class="insight-card insight-card-primary script-ai-insight-card"', rendered)
+        self.assertIn('id="keyword-cloud-panel"', rendered)
+        self.assertIn('class="keyword-cloud-words"', rendered)
+        self.assertIn('class="keyword-selling-card"', rendered)
+        self.assertIn('id="script-dashboard"', rendered)
+
+    def test_formula_dashboard_has_keyboard_and_drilldown_contract(self):
+        template = (ROOT / "scripts" / "templates" / "final-report-template.html").read_text(encoding="utf-8")
+
+        self.assertIn("data-script-formula-primary", template)
+        self.assertIn("aria-controls", template)
+        self.assertIn("aria-live", template)
+        self.assertIn("返回一级公式总览", template)
+        self.assertIn("matchMedia", template)
+        self.assertIn("prefers-reduced-motion", template)
+        self.assertIn("__scriptFormulaActiveButton", template)
+        self.assertIn("二级内容公式不可用", template)
+
+    def test_chapter03_css_defines_qianchuan_layout_breakpoints(self):
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+
+        self.assertIn(".script-keyword-triad", css)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", css)
+        self.assertIn("@media (max-width: 759px)", css)
+        self.assertIn("@media (max-width: 960px)", css)
+        self.assertIn("display: grid;", css)
+        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));", css)
+        self.assertIn(".unified-yuntu .script-ai-insights-layout", css)
+        self.assertIn(".unified-yuntu .script-insight-dimension-block", css)
+        self.assertIn(".unified-yuntu .script-insights-sections", css)
+        self.assertIn("row-gap: 30px;", css)
+
+    def test_chapter03_keyword_cloud_fills_small_panel_without_wrapping_words(self):
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+
+        self.assertIn("display: flex;", css)
+        self.assertIn("flex-wrap: wrap;", css)
+        self.assertIn("gap: 6px 8px;", css)
+        self.assertIn("white-space: nowrap;", css)
+        self.assertIn("min-height: 0;", css)
+        self.assertIn("padding: 4px 2px;", css)
+        self.assertIn("grid-template-columns: 144px minmax(0, 1fr);", css)
+        self.assertIn("min-height: 0;", css)
+        self.assertIn("height: 124px;", css)
+        self.assertIn("width: min(210px, 100%) !important;", css)
+        self.assertIn(".unified-yuntu .keyword-cloud-words", css)
+        self.assertIn("gap: 5px 6px;", css)
+        self.assertIn("align-content: flex-start;", css)
+        self.assertIn("justify-content: flex-start;", css)
+        self.assertNotIn("border-left: 3px", css)
+
+    def test_render_report_creates_sibling_zip_with_final_report_directory(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8"
+            )
+            output_dir = root / "final-report"
+
+            status = report.render_report(
+                analysis_json=analysis_path, output_dir=output_dir
+            )
+
+            archive_path = root / "final-report.zip"
+            self.assertEqual(status, 0)
+            self.assertTrue(archive_path.is_file())
+            with zipfile.ZipFile(archive_path) as archive:
+                names = set(archive.namelist())
+            expected = {
+                f"final-report/{path.relative_to(output_dir).as_posix()}"
+                for path in output_dir.rglob("*")
+                if path.is_file()
+            }
+
+        self.assertEqual(names, expected)
+
+    def test_render_report_places_highlight_workbook_in_report_directory_and_zip(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(self.deep_dive_analysis(), ensure_ascii=False),
+                encoding="utf-8",
+            )
+            output_dir = root / "final-report"
+
+            status = report.render_report(
+                analysis_json=analysis_path,
+                output_dir=output_dir,
+                fact_pack=fact_pack,
+            )
+
+            workbook_path = output_dir / "highlight-frames.xlsx"
+            rendered = (output_dir / "final-report.html").read_text(encoding="utf-8")
+            with zipfile.ZipFile(root / "final-report.zip") as archive:
+                archive_names = archive.namelist()
+            self.assertEqual(status, 0)
+            self.assertTrue(workbook_path.is_file())
+            self.assertGreater(workbook_path.stat().st_size, 0)
+            self.assertIn(
+                'href="highlight-frames.xlsx" download>导出高光帧资产（Excel）</a>',
+                rendered,
+            )
+            self.assertIn("final-report/highlight-frames.xlsx", archive_names)
+
+    def test_render_report_places_local_video_left_of_six_highlight_frames_and_archives_it(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["materialFacts"][0]["localVideo"] = {
+            "available": True,
+            "relative_path": "video-assets/101.mp4",
+            "size_bytes": 14,
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for fact in fact_pack["materialFacts"]:
+                for frame in fact["highlightFrames"]:
+                    image = root / frame["relative_path"]
+                    image.parent.mkdir(parents=True, exist_ok=True)
+                    image.write_bytes(b"fake-jpeg")
+            source_video = root / "video-assets" / "101.mp4"
+            source_video.parent.mkdir(parents=True, exist_ok=True)
+            source_video.write_bytes(b"local-video-bytes")
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.deep_dive_analysis(), ensure_ascii=False), encoding="utf-8")
+
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
+
+            html = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+            presentation = json.loads((root / "final-report" / "presentation-report.json").read_text(encoding="utf-8"))
+            with zipfile.ZipFile(root / "final-report.zip") as archive:
+                archive_names = set(archive.namelist())
+
+        self.assertIn('class="deep-visual-layout"', html)
+        self.assertIn('<video class="material-video" controls preload="metadata"', html)
+        self.assertNotIn('material-video-panel', html)
+        self.assertNotIn('原视频播放', html)
+        self.assertIn('src="assets/videos/101.mp4"', html)
+        self.assertIn('class="deep-frame-grid fixed-six"', html)
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+        self.assertIn("aspect-ratio: 9 / 16;", css)
+        self.assertIn("grid-template-columns: minmax(260px, 0.8fr) minmax(300px, 1fr);", css)
+        self.assertEqual(presentation["chapters"]["chapter05"]["panels"][0]["video"]["src"], "assets/videos/101.mp4")
+        self.assertIn("final-report/assets/videos/101.mp4", archive_names)
+
+    def test_report_maps_legacy_working_video_when_fact_pack_has_no_video_descriptor(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "working-videos" / "101.mp4"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"legacy-video")
+
+            assets = report._copy_report_video_assets(
+                {"materialFacts": [{"material_id": "101"}]},
+                root / "final-report",
+                root,
+            )
+
+            self.assertEqual(assets["101"]["src"], "assets/videos/101.mp4")
+            self.assertEqual(
+                (root / "final-report" / "assets" / "videos" / "101.mp4").read_bytes(),
+                b"legacy-video",
+            )
+
+
+    def test_unused_markdown_value_helper_is_removed(self):
+        report = load_module()
+        self.assertFalse(hasattr(report, "_markdown_value"))
+
+    def test_render_report_writes_valid_presentation_projection(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+
+            status = report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+
+            presentation = json.loads(
+                (root / "final-report" / "presentation-report.json").read_text(encoding="utf-8")
+            )
+            report_data = json.loads(
+                (root / "final-report" / "final-report-data.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(presentation["presentationSchemaVersion"], 3)
+        self.assertEqual(report_data["presentation"], presentation)
+        self.assertNotIn("categories", presentation["chapters"]["chapter04"])
+        self.assertNotIn("materials", presentation)
+
+    def test_load_analysis_adapts_legacy_chapter02_scope_insights(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        analysis["chapter02Insights"] = {
+            "scopeOrder": ["all"],
+            "scopes": {
+                "all": {
+                    "audienceAnalysis": {
+                        "insights": [{
+                            "conclusion": "旧版人群结论仍应作为新版报告的事实锚点和验证方向。",
+                            "material_ids": ["101"],
+                            "evidence": [{"material_id": "101", "metric": "people_tags"}],
+                        }],
+                    },
+                    "marketingAnalysis": {
+                        "insights": [{
+                            "conclusion": "旧版营销卖点结论仍应作为新版报告的事实锚点和验证方向。",
+                            "material_ids": ["101"],
+                            "evidence": [{"material_id": "101", "metric": "material_tags"}],
+                        }],
+                    },
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            loaded = report._load_analysis(path)
+
+        scope = loaded["chapter02Insights"]["scopes"]["all"]
+        self.assertEqual(scope["audienceInsights"][0]["summary"], "旧版人群结论仍应作为新版报告的事实锚点和验证方向。")
+        self.assertEqual(scope["marketingInsights"][0]["summary"], "旧版营销卖点结论仍应作为新版报告的事实锚点和验证方向。")
+        self.assertEqual(scope["audienceSummary"]["title"], "人群洞察")
+        self.assertEqual(scope["audienceSummary"]["summary"], "")
+        self.assertEqual(scope["audienceSummary"]["material_ids"], ["101"])
+        self.assertEqual(scope["marketingSummary"]["title"], "营销卖点洞察")
+
     def test_progressive_section_renderers_are_explicitly_orchestrated(self):
         source = MODULE_PATH.read_text(encoding="utf-8")
 
@@ -45,7 +954,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("from yuntu_report_sections import", source)
         self.assertNotIn("def render_script_insights():", source)
         component = component_path.read_text(encoding="utf-8")
-        self.assertIn("def render_script_insights():", component)
+        self.assertIn("def render_script_insights(", component)
 
     def test_all_progressive_section_entrypoints_have_component_owner(self):
         component = (ROOT / "scripts" / "yuntu_report_sections.py").read_text(encoding="utf-8")
@@ -62,8 +971,9 @@ class YuntuReportTests(unittest.TestCase):
         source = MODULE_PATH.read_text(encoding="utf-8")
         component = (ROOT / "scripts" / "yuntu_report_sections.py").read_text(encoding="utf-8")
 
-        self.assertIn('class="top-material-executive yuntu-content-card"', component)
+        self.assertNotIn('class="top-material-executive yuntu-content-card"', component)
         self.assertIn('class="brand-tabs"', component)
+        self.assertIn("brand-summary-data", component)
         self.assertNotIn('def top_material_combination_cards(value):', source)
 
     def test_audience_renderer_owns_its_markup(self):
@@ -93,22 +1003,16 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("def highlight_insights_cards():", source)
         self.assertNotIn("def material_deep_dive_cards():", source)
 
-    def test_skill_documents_unified_report_delivery_contract(self):
+    def test_skill_documents_offline_report_delivery_boundary(self):
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("assets/report/", skill)
         self.assertIn("内联", skill)
         self.assertIn("不得手工修改", skill)
-        self.assertIn("1440x1000", skill)
-        self.assertIn("390x844", skill)
-        self.assertIn("rankingFacts", skill)
-        self.assertIn("visualAssets", skill)
-        self.assertIn("当前对话模型", skill)
-        self.assertIn("scene", skill)
-        self.assertIn("text_overlay", skill)
-        self.assertIn("不再生成或渲染单素材 AI 二次分析摘要字段", skill)
-        self.assertIn("audienceInsights", skill)
-        self.assertIn("只要求逐帧观察和秒级观察", skill)
+        self.assertIn("render-report", skill)
+        self.assertIn("脚本和生成的提示词是 schema 权威", skill)
+        self.assertNotIn("rankingFacts", skill)
+        self.assertNotIn("visualAssets", skill)
 
     def analysis_json(self):
         return {
@@ -128,18 +1032,6 @@ class YuntuReportTests(unittest.TestCase):
                         "material_ids": ["101"],
                         "evidence": [{"hidden": "evidence-sentinel-data"}],
                     },
-                    {
-                        "dimension": "people",
-                        "summary": "女性与新锐白领标签的曝光加权覆盖更高。",
-                        "material_ids": ["101"],
-                        "evidence": [{"hidden": "evidence-sentinel-audience"}],
-                    },
-                    {
-                        "dimension": "marketing",
-                        "summary": "头部素材以功效理性种草和痛点触发为主。",
-                        "material_ids": ["101"],
-                        "evidence": [{"hidden": "evidence-sentinel-marketing"}],
-                    }
                 ],
                 "brandConclusions": [
                     {
@@ -192,9 +1084,61 @@ class YuntuReportTests(unittest.TestCase):
             "materialComparison": [{"material_id": "101", "summary": "CTR 位于候选池高位。", "evidence": [{"metric": "ctr", "value": 0.7}]}],
             "materialDiagnoses": [{"material_id": "101", "summary": "第 1-2 秒出现点击高点。", "evidence": [{"trend_name": "点击指数", "start_sec": 1, "end_sec": 2}]}],
             "competitorPatterns": [{"summary": "价格利益点前置。", "material_ids": ["101"], "evidence": [{"tag": "限时抢购"}]}],
-            "xiaoxianDunOpportunityMap": [{"summary": "测试通勤滋补场景。", "material_ids": ["101"], "evidence": [{"tag": "商品展示(有语音)"}]}],
+            "opportunityMap": [{"summary": "测试通勤场景。", "material_ids": ["101"], "evidence": [{"tag": "商品展示(有语音)"}]}],
             "experimentMatrix": [{"priority": "P1", "hypothesis": "测试通勤开场的 3 秒播放率表现", "creative_variable": "前 3 秒场景钩子", "target_audience": "新锐白领", "success_metric": "play_3s_rate", "control": "现有商品直展示素材", "review_action": "按人群拆分复盘", "evidence": [{"material_id": "101", "metric": "play_3s_rate"}]}],
         }
+
+    def test_render_report_accepts_slim_analysis_without_unused_fields(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        for field in self.LEGACY_UNUSED_ANALYSIS_FIELDS:
+            analysis.pop(field)
+        analysis["topMaterialCombination"].pop("overallConclusions")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+
+            status = report.render_report(
+                analysis_json=analysis_path, output_dir=root / "final-report"
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(rendered.count('class="section"'), 5)
+        for section_id in (
+            "top-material-combination",
+            "audience-insights",
+            "script-insights",
+            "highlight-insights",
+            "material-deep-dive",
+        ):
+            self.assertIn(f'id="{section_id}"', rendered)
+
+    def test_render_report_ignores_unused_fields_in_legacy_analysis(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        for field in self.LEGACY_UNUSED_ANALYSIS_FIELDS:
+            analysis[field] = None
+        analysis["topMaterialCombination"]["overallConclusions"] = None
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+
+            status = report.render_report(
+                analysis_json=analysis_path, output_dir=root / "final-report"
+            )
+
+        self.assertEqual(status, 0)
 
     def highlight_dashboard(self):
         return {
@@ -234,6 +1178,8 @@ class YuntuReportTests(unittest.TestCase):
                 "material_id": material_id,
                 "rank": rank,
                 "title": f"测试素材 {material_id}",
+                "exposure": {"min": 200000, "max": 220000, "raw": "20万-22万"},
+                "metrics": {"show_cnt": 2686377, "ctr": 0.0327, "cvr": 0.0709, "play_3s_rate": 0.7441, "interact_rate": 0.0002},
                 "people_tags": ["新锐白领", "都市女性"],
                 "material_tags": ["睡前场景", "胶原蛋白肽"],
                 "listDataAvailability": {
@@ -279,13 +1225,353 @@ class YuntuReportTests(unittest.TestCase):
                 "peak_frame_reading": "点击峰值秒点中人物与产品同框，说明该画面组合值得保留为候选版本，但需要与其他开场变量分组验证。",
                 "second_level_reading": "五类指数只使用已返回秒级点位描述，点击高点与前段画面同时出现，可作为后续分镜测试的观察锚点。",
                 "audience_fit": "人群标签与日常场景主题存在可测试的匹配线索，不能视为真实分布；应在投放定向与素材版本交叉下验证。",
-                "xiaoxian_dun_reference": "小仙炖可测试产品主体和日常场景的组合，以清晰包装和单一利益点降低理解成本，并以短时播放与点击共同复盘。",
+                "replication_advice": "可测试产品主体和日常场景的组合，以清晰包装和单一利益点降低理解成本，并以短时播放与点击共同复盘。",
                 "do_not_copy": "不直接照搬竞品的健康功效、特定人群承诺或未验证状态暗示；仅借鉴人物、产品与日常场景的视觉组织方式。",
                 "second_level_observations": [{"trend_name": "点击指数", "summary": "第 2 秒为已返回的点击高点秒数，前段产品与人物同框可作为下一轮开场变量的对照锚点。", "evidence_seconds": [2]}],
             }
             for material_id in ("101", "102")
         ]
         return analysis
+
+    def dual_classification_dashboard(self, *, batch_status="complete"):
+        refs = [
+            f"highlight:{material_id}:{frame_kind}"
+            for material_id in ("101", "102")
+            for frame_kind in ("cover:0", "click_peak:2")
+        ]
+        understanding = [
+            {
+                "frame_ref": ref,
+                "status": "complete",
+                "subject": "人物与产品主体",
+                "visual_focus": "画面中央主体",
+                "human_product_relation": "人物与产品同框",
+                "action": "展示并操作产品",
+                "composition": "近景居中构图",
+                "information_expression": "字幕与包装信息可见",
+                "failure_reason": "",
+            }
+            for ref in refs
+        ]
+        common = {
+            "title": "主体与构图",
+            "body": "画面主体和构图信息清晰，可作为同批次分类的可观察依据。",
+            "frame_refs": refs,
+        }
+        direction = {
+            "title": "验证主体呈现",
+            "body": "改写动作是保持主体前置，变体方式是比较人物先出场与产品先出场，验证指标为短时播放率与点击指数。",
+            "frame_refs": refs,
+        }
+        batch_patterns = [
+            common,
+            {
+                "title": "动作与信息共同推进理解",
+                "body": "人物展示、产品操作和可见字幕在同一组画面中共同完成信息传递，动作节奏与包装识别形成连续的理解路径。",
+                "frame_refs": refs,
+            },
+            {
+                "title": "生活化场景承接主体关系",
+                "body": "画面以近景或居中构图保持人物与产品关系稳定，生活化场景为主体协同提供可识别的使用语境和内容落点。",
+                "frame_refs": refs,
+            },
+        ]
+        batch_directions = [
+            direction,
+            {
+                "title": "把动作顺序改造成分镜变量",
+                "body": "改写动作是拆分展示、操作和结果三个镜头；变体方式是比较人物先出场与产品先出场；验证指标为 3 秒播放率与点击指数。",
+                "frame_refs": refs,
+            },
+            {
+                "title": "把场景关系改造成版本变量",
+                "body": "改写动作是保持人物与产品同框；变体方式是比较居家、办公和餐桌场景；验证指标为点击指数、评论指数与完播率。",
+                "frame_refs": refs,
+            },
+        ]
+        standard_group = {
+            "category": "portrait",
+            "frame_refs": refs,
+            "common_patterns": [common],
+            "derivative_directions": [direction],
+        }
+        batch_group = {
+            "category": "主体协同",
+            "label": "主体协同",
+            "rule": "人物与产品共同构成视觉焦点且关系可辨识。",
+            "frame_refs": refs,
+            "common_patterns": batch_patterns,
+            "derivative_directions": batch_directions,
+        }
+        batch_groups = []
+        for index, refs_slice in enumerate((refs[:2], refs[2:])):
+            group = copy.deepcopy(batch_group)
+            group["category"] = "主体协同" if index == 0 else "信息机制"
+            group["label"] = "主体协同" if index == 0 else "信息机制"
+            group["rule"] = (
+                "人物与产品共同构成视觉焦点且关系可辨识。"
+                if index == 0
+                else "字幕、包装与动作共同承担信息传递。"
+            )
+            group["frame_refs"] = refs_slice
+            for field in ("common_patterns", "derivative_directions"):
+                for item in group[field]:
+                    item["frame_refs"] = refs_slice
+            batch_groups.append(group)
+        batch = {
+            "status": batch_status,
+            "missing_reason": "" if batch_status == "complete" else "整批画面理解证据不足",
+            "rule": "按主体协同关系与信息焦点对本批次画面分组。",
+            "groups": batch_groups if batch_status == "complete" else [],
+        }
+        return {
+            "frameUnderstanding": understanding,
+            "standardClassification": {
+                "status": "complete",
+                "missing_reason": "",
+                "groups": [standard_group],
+            },
+            "batchClassification": batch,
+            "groups": [standard_group],
+        }
+
+    def test_required_classification_rejects_omission_and_cross_scope_conflicts(self):
+        report = load_module()
+        dashboard = self.dual_classification_dashboard()
+        frames = [{"frame_ref": item["frame_ref"]} for item in dashboard["frameUnderstanding"]]
+        with self.assertRaisesRegex(report.YuntuReportError, "must include"):
+            report._validate_highlight_dual_classification({"brands": []}, frames, require_classification=True)
+        for item in dashboard["frameUnderstanding"]:
+            item.update(standard_category="portrait", category_reason="人物与产品同框，人物为主要讲解主体。")
+        dashboard["brands"] = [{"brand": "全品牌", "groups": copy.deepcopy(dashboard["standardClassification"]["groups"])}]
+        # A real single-category batch remains valid; diversity is not fabricated.
+        report._validate_highlight_dual_classification(dashboard, frames, require_classification=True)
+        for scope in (dashboard["standardClassification"], dashboard["brands"][0]):
+            scope["groups"][0]["category"] = "other"
+            with self.assertRaisesRegex(report.YuntuReportError, "must agree"):
+                report._validate_highlight_dual_classification(dashboard, frames, require_classification=True)
+            scope["groups"][0]["category"] = "portrait"
+        dashboard["batchClassification"] = {"status": "unavailable", "missing_reason": "画面不足以形成两个独立视觉主题", "groups": []}
+        report._validate_highlight_dual_classification(dashboard, frames, require_classification=True)
+
+    def test_validate_dual_highlight_classification_covers_every_successful_frame_once(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"] = self.dual_classification_dashboard()
+        fact_pack = self.deep_dive_fact_pack()
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+
+            report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+        duplicate = copy.deepcopy(analysis)
+        duplicate["highlightDashboard"]["batchClassification"]["groups"][0]["frame_refs"] = [
+            *duplicate["highlightDashboard"]["batchClassification"]["groups"][0]["frame_refs"],
+            "highlight:101:cover:0",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duplicate.json"
+            path.write_text(json.dumps(duplicate, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "batchClassification.*exactly once"):
+                report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+    def test_validate_dual_highlight_classification_accepts_batch_groups_without_legacy_insights(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"] = self.dual_classification_dashboard()
+        for group in analysis["highlightDashboard"]["batchClassification"]["groups"]:
+            group.pop("common_patterns")
+            group.pop("derivative_directions")
+        fact_pack = self.deep_dive_fact_pack()
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+    def test_rejects_reused_standard_highlight_insights_across_categories(self):
+        report = load_module()
+        dashboard = self.dual_classification_dashboard()
+        standard = dashboard["standardClassification"]["groups"][0]
+        refs = standard["frame_refs"]
+        first = copy.deepcopy(standard)
+        second = copy.deepcopy(standard)
+        first["category"], first["frame_refs"] = "portrait", refs[:2]
+        second["category"], second["frame_refs"] = "product", refs[2:]
+        for group in (first, second):
+            for item in (*group["common_patterns"], *group["derivative_directions"]):
+                item["frame_refs"] = group["frame_refs"]
+        dashboard["standardClassification"]["groups"] = [first, second]
+        frames = [{"frame_ref": ref} for ref in refs]
+
+        with self.assertRaisesRegex(report.YuntuReportError, "independent across categories"):
+            report._validate_highlight_dual_classification(dashboard, frames)
+
+    def test_validate_batch_highlight_taxonomy_requires_semantic_categories_and_two_groups(self):
+        report = load_module()
+        fact_pack = self.deep_dive_fact_pack()
+
+        def add_too_many_categories(dashboard):
+            source = dashboard["batchClassification"]["groups"][0]
+            extras = []
+            for index in range(3):
+                extra = copy.deepcopy(source)
+                extra["category"] = f"额外机制{index}"
+                extra["label"] = f"额外机制{index}"
+                extras.append(extra)
+            dashboard["batchClassification"]["groups"].extend(extras)
+
+        mutations = (
+            (
+                lambda dashboard: dashboard["batchClassification"].update(
+                    {"groups": dashboard["batchClassification"]["groups"][:1]}
+                ),
+                "batchClassification.*at least 2",
+            ),
+            (
+                lambda dashboard: dashboard["batchClassification"]["groups"][0].update(
+                    {"category": "其他1", "label": "其他1"}
+                ),
+                "batchClassification.*semantic",
+            ),
+            (
+                add_too_many_categories,
+                "batchClassification.*more categories than successful frames",
+            ),
+        )
+        for mutation, expected in mutations:
+            analysis = self.deep_dive_analysis()
+            analysis["highlightDashboard"] = self.dual_classification_dashboard()
+            mutation(analysis["highlightDashboard"])
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "analysis.json"
+                path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+                with self.assertRaisesRegex(report.YuntuReportError, expected):
+                    report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+    def test_validate_dual_highlight_classification_requires_unavailable_reason(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"] = self.dual_classification_dashboard(batch_status="unavailable")
+        analysis["highlightDashboard"]["batchClassification"]["missing_reason"] = ""
+        fact_pack = self.deep_dive_fact_pack()
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "batchClassification.*missing_reason"):
+                report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+    def test_render_report_renders_designated_dual_classification_switch_and_dynamic_labels(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"] = self.dual_classification_dashboard()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["filters"] = {"brands": ["WONDERLAB/万益蓝"]}
+        for fact in fact_pack["materialFacts"]:
+            fact["title"] = f"WONDERLAB/万益蓝 {fact['material_id']}"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack=fact_pack,
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-highlight-classification-tab', rendered)
+        self.assertIn('>标准分类<', rendered)
+        self.assertIn('>本批次视觉主题<', rendered)
+        self.assertIn("主体协同 · 2 帧", rendered)
+        standard_start = rendered.index('id="highlight-all-brands-mode-standard-panel"')
+        batch_start = rendered.index('id="highlight-all-brands-mode-batch-panel"')
+        standard_panel = rendered[standard_start:batch_start]
+        self.assertIn('产品画面 · 0 帧', standard_panel)
+        self.assertIn('其他画面 · 0 帧', standard_panel)
+        self.assertIn('当前品牌的成功帧中暂无此类画面', standard_panel)
+        batch_end = rendered.find('<section class="highlight-brand-panel"', batch_start)
+        batch_panel = rendered[batch_start:batch_end]
+        self.assertNotIn("共性洞察", batch_panel)
+        self.assertNotIn("裂变方向", batch_panel)
+        self.assertNotIn('产品画面 · 0 帧', batch_panel)
+        self.assertNotIn("分类规则：按主体协同关系与信息焦点对本批次画面分组。", batch_panel)
+
+    def test_renders_batch_classification_distribution_chart(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"] = self.dual_classification_dashboard()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["filters"] = {"brands": ["WONDERLAB/万益蓝"]}
+        for fact in fact_pack["materialFacts"]:
+            fact["title"] = f"WONDERLAB/万益蓝 {fact['material_id']}"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack=fact_pack,
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-highlight-batch-distribution', rendered)
+        self.assertIn('aria-label="本批次视觉主题分布柱状图', rendered)
+        self.assertIn("本批次视觉主题分布", rendered)
+        self.assertIn("主体协同", rendered)
+        self.assertIn("信息机制", rendered)
+        self.assertIn("2 帧", rendered)
+        self.assertIn("50.0%", rendered)
+        distribution_start = rendered.index('data-highlight-batch-distribution')
+        standard_panel_start = rendered.index('id="highlight-all-brands-mode-standard-panel"')
+        batch_panel_start = rendered.index('id="highlight-all-brands-mode-batch-panel"')
+        classification_start = rendered.index('class="highlight-dashboard-tabs"', batch_panel_start)
+        self.assertLess(distribution_start, classification_start)
+        self.assertNotIn('data-highlight-batch-distribution', rendered[standard_panel_start:batch_panel_start])
+        self.assertIn('data-highlight-batch-distribution', rendered[batch_panel_start:])
+
+        script = (ROOT / "assets" / "report" / "unified-report.js").read_text(encoding="utf-8")
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+        self.assertIn("data-highlight-batch-tooltip", rendered)
+        self.assertIn("function bindBatchDistributionTooltips()", script)
+        self.assertIn("position = 'fixed'", script)
+        self.assertIn(".highlight-batch-distribution .audience-column-plot", css)
+        self.assertIn("overflow: visible", css)
+        self.assertIn("--batch-column-chart-height: 236px", css)
+        self.assertIn("--batch-column-plot-height: 140px", css)
+        self.assertIn("padding: 8px 0 0", css)
+        self.assertIn("padding: 8px 14px 44px", css)
+
+    def test_render_report_disables_unavailable_batch_classification_with_reason(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        analysis["highlightDashboard"] = self.dual_classification_dashboard(batch_status="unavailable")
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["filters"] = {"brands": ["燕之屋"]}
+        for fact in fact_pack["materialFacts"]:
+            fact["title"] = f"燕之屋 {fact['material_id']}"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack=fact_pack,
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-highlight-classification-tab', rendered)
+        self.assertIn('disabled aria-disabled="true"', rendered)
+        self.assertIn("整批画面理解证据不足", rendered)
+        self.assertNotIn('data-highlight-batch-distribution', rendered)
 
     def test_render_report_writes_conclusion_only_report_without_evidence(self):
         report = load_module()
@@ -301,32 +1587,33 @@ class YuntuReportTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(data["status"], "complete")
         for rendered in (markdown, html):
-            self.assertIn("TOP1000 整体分析", rendered)
-            self.assertIn("从数据维度看", rendered)
-            self.assertIn("从人群维度看", rendered)
-            self.assertIn("从营销卖点维度看", rendered)
+            self.assertNotIn("综合结论", rendered)
+            self.assertNotIn("TOP1000 整体分析", rendered)
+            self.assertNotIn("从数据维度看", rendered)
+            self.assertNotIn("从营销卖点维度看", rendered)
             self.assertNotIn("人群标签是重叠标签，不是真实人群分布，不能相加为 100%。", rendered)
-            self.assertIn("各品牌榜单 Top N 分析", rendered)
+            self.assertIn("各品牌榜单分析", rendered)
             self.assertIn("万益蓝/WONDERLAB", rendered)
             self.assertIn("五个女博士", rendered)
             self.assertIn("燕之屋", rendered)
-            self.assertIn("品牌间差异总结", rendered)
-            self.assertIn("真实品牌差异结论", rendered)
+            self.assertNotIn("品牌间差异总结", rendered)
+            self.assertNotIn("真实品牌差异结论", rendered)
+            self.assertNotIn("素材列表数据分析", rendered)
+            self.assertNotIn("人群维度", rendered)
             self.assertNotIn("旧版兼容字段", rendered)
             self.assertNotIn("查看数据依据", rendered)
             self.assertNotIn('<details class="evidence-details">', rendered)
             self.assertNotIn("证据：", rendered)
             self.assertNotIn("evidence-sentinel", rendered)
-            self.assertEqual(rendered.count("从数据维度看"), 4)
-            self.assertEqual(rendered.count("从人群维度看"), 4)
-            self.assertEqual(rendered.count("从营销卖点维度看"), 4)
+            self.assertNotIn("女性与新锐白领标签", rendered)
+            self.assertNotIn("营销卖点以肠道健康表达为主", rendered)
             for title in ("榜单竞争格局", "内容表现地图", "内容与人群机会", "竞品内容模式", "秒级创意结构", "机会与实验"):
                 self.assertNotIn(title, rendered)
         self.assertNotIn("一、品牌筛选条件下", markdown)
         self.assertNotIn("二、各品牌 TOP", markdown)
-        self.assertIn("---\n\n### 各品牌榜单 Top N 分析", markdown)
+        self.assertIn("---\n\n### 各品牌榜单分析", markdown)
         self.assertIn("---\n\n### 五个女博士", markdown)
-        self.assertIn("---\n\n### 品牌间差异总结", markdown)
+        self.assertNotIn("品牌间差异总结", markdown)
         self.assertIn('role="tablist"', html)
         self.assertIn('role="tab"', html)
         self.assertIn('role="tabpanel"', html)
@@ -335,10 +1622,13 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-brand-panel="万益蓝/WONDERLAB"', html)
         self.assertIn('data-brand-panel="五个女博士"', html)
         self.assertIn('data-brand-panel="燕之屋"', html)
-        self.assertIn('id="brand-panel-0" aria-labelledby="brand-tab-0" hidden ', html)
-        self.assertIn('id="brand-panel-1" aria-labelledby="brand-tab-1" ', html)
+        # With the current renderer the first available brand is selected by
+        # default (the fixture has no aggregate ``全品牌`` conclusion), so
+        # panel 0 is visible and the remaining panels are hidden.
+        self.assertIn('id="brand-panel-0" aria-labelledby="brand-tab-0" ', html)
+        self.assertIn('id="brand-panel-1" aria-labelledby="brand-tab-1" hidden ', html)
         self.assertIn('id="brand-panel-2" aria-labelledby="brand-tab-2" hidden ', html)
-        self.assertIn('aria-label="五个女博士，标题匹配归属"', html)
+        self.assertIn('aria-label="万益蓝/WONDERLAB，标题匹配归属"', html)
         self.assertNotIn('当前品牌：', html)
         self.assertIn('.brand-panel[hidden]{display:none!important}', html)
         self.assertIn('<noscript><style>.brand-panel[hidden]{display:block!important}</style></noscript>', html)
@@ -363,7 +1653,7 @@ class YuntuReportTests(unittest.TestCase):
                 with self.assertRaisesRegex(report.YuntuReportError, "script_insights"):
                     report._load_html_template()
 
-    def test_render_report_rejects_top_material_combination_without_executive_summary(self):
+    def test_render_report_accepts_top_material_combination_without_executive_summary(self):
         report = load_module()
         analysis = self.analysis_json()
         analysis["topMaterialCombination"].pop("executiveSummary")
@@ -371,8 +1661,270 @@ class YuntuReportTests(unittest.TestCase):
             root = Path(directory)
             analysis_path = root / "analysis.json"
             analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(report.YuntuReportError, "executiveSummary"):
-                report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertNotIn("综合结论", rendered)
+
+    def test_render_report_keeps_schema_v4_brand_data_compatible_without_people_summary(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        for item in analysis["topMaterialCombination"]["brandConclusions"]:
+            item.pop("peopleSummary")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack={"schemaVersion": 4},
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertIn("各品牌榜单分析", rendered)
+        self.assertNotIn("素材列表数据分析", rendered)
+        self.assertNotIn("人群维度", rendered)
+
+    def test_render_report_rejects_brand_conclusion_without_people_summary(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        analysis["topMaterialCombination"]["brandConclusions"][0].pop(
+            "peopleSummary"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+            )
+
+    def test_new_chapter01_contract_requires_four_metrics_and_real_audience_label(self):
+        report = load_module()
+        analysis = {
+            "topMaterialCombination": {
+                "brandConclusions": [
+                    {
+                        "brand": "小仙炖",
+                        "dataSummary": "Top 30 累计曝光 100 万，CTR 2%、CVR 3%、3 秒播放率 40%。",
+                        "peopleSummary": "新锐白领标签覆盖较高。",
+                        "material_ids": ["101"],
+                    }
+                ]
+            }
+        }
+        fact_pack = {
+            "schemaVersion": 5,
+            "industryTop1000Facts": {"source_scope": "industry_top1000"},
+            "filters": {"brands": ["小仙炖"]},
+            "brandTopNFacts": {
+                "brands": {
+                    "小仙炖": {
+                        "source_scope": "brand_top_n",
+                        "sample_count": 1,
+                        "materials": [{"material_id": "101"}],
+                        "audienceFacts": {
+                            "coverageIsOverlapping": True,
+                            "age": [],
+                            "gender": [],
+                            "crowd": [{"label": "新锐白领"}],
+                        },
+                    }
+                }
+            },
+        }
+
+        report._validate_ranking_scope_contract(analysis, fact_pack)
+
+        analysis["topMaterialCombination"]["brandConclusions"][0][
+            "dataSummary"
+        ] = "Top 30 累计曝光 100 万。"
+        with self.assertRaisesRegex(report.YuntuReportError, "3-second play rate"):
+            report._validate_ranking_scope_contract(analysis, fact_pack)
+
+        analysis["topMaterialCombination"]["brandConclusions"][0][
+            "dataSummary"
+        ] = "Top 30 累计曝光 100 万，CTR 2%、CVR 3%、3 秒播放率 40%。"
+        analysis["topMaterialCombination"]["brandConclusions"][0].pop("peopleSummary")
+        report._validate_ranking_scope_contract(analysis, fact_pack)
+
+    def test_schema_v6_rejects_material_id_in_chapter01_visible_summaries(self):
+        report = load_module()
+        material_id = "7668663443726172214"
+        analysis = {
+            "topMaterialCombination": {
+                "brandConclusions": [
+                    {
+                        "brand": "小仙炖",
+                        "classificationSource": "runtime_title_rule",
+                        "dataSummary": (
+                            "Top 30 累计曝光 100 万，CTR 2%、CVR 3%、"
+                            f"3 秒播放率 40%，素材{material_id}表现突出。"
+                        ),
+                        "peopleSummary": "新锐白领标签覆盖较高。",
+                        "evidence": ["Top 30 聚合指标与人群覆盖事实。"],
+                        "material_ids": [material_id],
+                    }
+                ]
+            }
+        }
+        fact_pack = {
+            "schemaVersion": 6,
+            "industryTop1000Facts": {"source_scope": "industry_top1000"},
+            "filters": {"brands": ["小仙炖"]},
+            "brandTopNFacts": {
+                "brands": {
+                    "小仙炖": {
+                        "source_scope": "brand_top_n",
+                        "sample_count": 1,
+                        "materials": [{"material_id": material_id}],
+                        "audienceFacts": {
+                            "coverageIsOverlapping": True,
+                            "age": [],
+                            "gender": [],
+                            "crowd": [{"label": "新锐白领"}],
+                        },
+                    }
+                }
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                report.YuntuReportError, "must not include material IDs"
+            ):
+                report.validate_analysis_input(
+                    analysis_json=path, fact_pack=fact_pack
+                )
+
+        analysis["topMaterialCombination"]["brandConclusions"][0][
+            "dataSummary"
+        ] = "Top 30 累计曝光 100 万，CTR 2%、CVR 3%、3 秒播放率 40%。"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            validated = report.validate_analysis_input(
+                analysis_json=path, fact_pack=fact_pack
+            )
+
+        self.assertEqual(
+            validated["topMaterialCombination"]["brandConclusions"][0][
+                "material_ids"
+            ],
+            [material_id],
+        )
+
+    def test_schema_v7_accepts_unified_summary_and_legacy_evidence_when_present(self):
+        report = load_module()
+        analysis = {
+            "topMaterialCombination": {
+                "brandConclusions": [{
+                    "brand": "小仙炖",
+                    "classificationSource": "runtime_title_rule",
+                    "dataSummary": "小仙炖本周期覆盖 1 条素材，累计曝光 20 万，CTR 2%、CVR 3%、3 秒播放率 40%。",
+                    "evidence": ["品牌榜单聚合事实"],
+                    "material_ids": ["101"],
+                    "comparisonSummary": "本周期相较上一周期样本增加，表现与行业大盘接近。",
+                    "hotMaterialInsight": {
+                        "title": "爆款素材表现分析",
+                        "summary": "爆款素材达到曝光门槛，建议继续验证其指标组合。",
+                        "evidence": {"scope": "brand", "material_ids": ["101"]},
+                    },
+                }]
+            }
+        }
+        fact_pack = {
+            "schemaVersion": 7,
+            "filters": {"brands": ["小仙炖"]},
+            "industryTop1000Facts": {"source_scope": "industry_top1000"},
+            "brandRankingFacts": {"brands": {"小仙炖": {"source_scope": "brand_in_top1000", "sample_count": 1, "materials": [{"material_id": "101"}]}}},
+            "comparisonFacts": {"previousPeriod": {}, "industryBenchmark": {}},
+            "hotMaterialFacts": {"小仙炖": {"thresholdExposureMin": 200000, "qualifyingCount": 1, "materials": [{"material_id": "101", "exposure": {"min": 200000, "max": 220000, "raw": "20万-22万"}}], "available": True, "missing_reason": ""}},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+            unified_analysis = copy.deepcopy(analysis)
+            unified_item = unified_analysis["topMaterialCombination"]["brandConclusions"][0]
+            unified_item.pop("comparisonSummary")
+            unified_item.pop("hotMaterialInsight")
+            path.write_text(json.dumps(unified_analysis, ensure_ascii=False), encoding="utf-8")
+            report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+            analysis["topMaterialCombination"]["brandConclusions"][0]["hotMaterialInsight"]["evidence"]["scope"] = "all"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "scope"):
+                report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+            invalid_cases = (
+                ("unknown material evidence", lambda item, facts: item["hotMaterialInsight"]["evidence"].update(material_ids=["999"]), "unknown material ID"),
+                ("wrong deterministic count", lambda item, facts: facts["hotMaterialFacts"]["小仙炖"].update(qualifyingCount=2), "qualifyingCount"),
+                ("below deterministic threshold", lambda item, facts: facts["hotMaterialFacts"]["小仙炖"]["materials"][0]["exposure"].update(min=199999), "below the threshold"),
+            )
+            for _label, mutate, expected in invalid_cases:
+                invalid_analysis = copy.deepcopy(self._schema_v7_analysis_fixture(analysis))
+                invalid_facts = copy.deepcopy(fact_pack)
+                mutate(invalid_analysis["topMaterialCombination"]["brandConclusions"][0], invalid_facts)
+                path.write_text(json.dumps(invalid_analysis, ensure_ascii=False), encoding="utf-8")
+                with self.assertRaisesRegex(report.YuntuReportError, expected):
+                    report.validate_analysis_input(analysis_json=path, fact_pack=invalid_facts)
+
+    def test_schema_v7_accepts_configured_hot_material_threshold(self):
+        report = load_module()
+        analysis = {
+            "topMaterialCombination": {
+                "brandConclusions": [{
+                    "brand": "小仙炖",
+                    "classificationSource": "runtime_title_rule",
+                    "dataSummary": "小仙炖本周期覆盖 1 条素材，累计曝光 60 万，CTR 2%、CVR 3%、3 秒播放率 40%。",
+                    "evidence": ["品牌榜单聚合事实"],
+                    "material_ids": ["101"],
+                }]
+            }
+        }
+        fact_pack = {
+            "schemaVersion": 7,
+            "filters": {"brands": ["小仙炖"]},
+            "industryTop1000Facts": {"source_scope": "industry_top1000"},
+            "brandRankingFacts": {"brands": {"小仙炖": {"source_scope": "brand_in_top1000", "sample_count": 1, "materials": [{"material_id": "101"}]}}},
+            "comparisonFacts": {"previousPeriod": {}, "industryBenchmark": {}},
+            "hotMaterialRule": {"metric": "exposure_interval_min", "comparison": "gte", "threshold": 500000},
+            "hotMaterialFacts": {"小仙炖": {"thresholdExposureMin": 500000, "qualifyingCount": 1, "materials": [{"material_id": "101", "exposure": {"min": 600000, "max": 650000, "raw": "60万-65万"}}], "available": True, "missing_reason": ""}},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+
+            report.validate_analysis_input(analysis_json=path, fact_pack=fact_pack)
+
+    @staticmethod
+    def _schema_v7_analysis_fixture(analysis):
+        """Restore the valid fixture after the scope mutation above."""
+        restored = copy.deepcopy(analysis)
+        insight = restored["topMaterialCombination"]["brandConclusions"][0].setdefault(
+            "hotMaterialInsight", {}
+        )
+        insight.setdefault("title", "爆款素材表现分析")
+        insight.setdefault("summary", "爆款素材达到曝光门槛，建议继续验证其指标组合。")
+        insight["evidence"] = {"scope": "brand", "material_ids": ["101"]}
+        restored["topMaterialCombination"]["brandConclusions"][0]["comparisonSummary"] = (
+            "本周期相较上一周期样本增加，表现与行业大盘接近。"
+        )
+        return restored
 
     def test_render_report_renders_section_scope_labels_without_deep_frame_coverage(self):
         report = load_module()
@@ -418,15 +1970,72 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("TOP1000 榜单素材：1000 条", top_section)
         self.assertNotIn("成功秒级拆解素材：5 条", top_section)
         self.assertNotIn("高光帧可用：", rendered)
-        self.assertIn("TOP1000 整体分析", rendered)
-        self.assertIn("各品牌榜单 Top 30 分析", rendered)
+        self.assertNotIn("TOP1000 整体分析", rendered)
+        self.assertIn("各品牌榜单分析", rendered)
         self.assertNotIn("各品牌榜单 Top N 分析", rendered)
         self.assertNotIn("品牌筛选 TOP30", rendered)
         self.assertNotIn("各品牌 TOP30", rendered)
         self.assertNotIn("TOP30", markdown)
-        self.assertIn('<h3>综合结论</h3>', rendered)
-        self.assertIn("综合结论：榜单、人群、卖点和已取得详情共同指向明确的内容机会。", rendered)
-        self.assertIn('class="brand-classification-note">品牌归属：本次榜单标题匹配；分析范围：同一榜单 TOP1000 内的品牌 Top 30</p>', rendered)
+        self.assertNotIn('<h3>综合结论</h3>', rendered)
+        self.assertNotIn("综合结论：榜单、人群、卖点和已取得详情共同指向明确的内容机会。", rendered)
+        self.assertIn('class="brand-classification-note">品牌归属：本次榜单标题匹配；分析范围：行业 TOP1000 内该品牌全部匹配素材</p>', rendered)
+
+    def test_chapter01_renders_brand_metric_facts_instead_of_overall_block(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        analysis["topMaterialCombination"]["overallConclusions"] = [
+            analysis["topMaterialCombination"]["overallConclusions"][0]
+        ]
+        fact_pack = {
+            "filters": {"brands": ["万益蓝/WONDERLAB", "五个女博士", "燕之屋"]},
+            "industryTop1000Facts": {"source_scope": "industry_top1000"},
+            "brandTopNFacts": {
+                "requested_top_n": 30,
+                "brands": {
+                    "万益蓝/WONDERLAB": {
+                        "source_scope": "brand_top_n",
+                        "sample_count": 12,
+                        "metrics": {
+                            "show_cnt": {"total": 123456},
+                            "ctr": {"median": 0.0123},
+                            "cvr": {"median": 0.0456},
+                            "play_3s_rate": {"median": 0.321},
+                        },
+                    },
+                    "五个女博士": {"source_scope": "brand_top_n", "sample_count": 8, "metrics": {}},
+                    "燕之屋": {"source_scope": "brand_top_n", "sample_count": 6, "metrics": {}},
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(
+                analysis_json=analysis_path,
+                output_dir=root / "final-report",
+                fact_pack=fact_pack,
+            )
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertNotIn("TOP1000 整体分析", rendered)
+        self.assertNotIn('class="brand-metric-facts"', rendered)
+        self.assertNotIn("分析样本 12 条", rendered)
+        self.assertNotIn("累计曝光 12.3 万", rendered)
+        self.assertNotIn("CTR 中位数 1.23%", rendered)
+        self.assertNotIn("CVR 中位数 4.56%", rendered)
+        self.assertNotIn("3 秒播放率中位数 32.10%", rendered)
+
+    def test_chapter01_omits_executive_card_style(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+            rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertNotIn(".unified-yuntu .top-material-executive {", rendered)
 
     def test_render_report_inlines_unified_assets_and_emits_unified_structure(self):
         report = load_module()
@@ -462,7 +2071,8 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("TOP30 素材组合结论", rendered)
         self.assertNotIn("来源：Top1000 榜单数据", rendered)
         self.assertNotIn("基于筛选品牌集合与标题匹配品牌", rendered)
-        self.assertEqual(rendered.count(' yuntu-content-card"'), 4)
+        self.assertEqual(rendered.count(' yuntu-content-card"'), 1)
+        self.assertNotIn('class="brand-difference', rendered)
         self.assertIn(".unified-report .report-shell", rendered)
         self.assertIn("data-unified-report-ready", rendered)
         self.assertNotIn('rel="stylesheet"', rendered)
@@ -588,6 +2198,11 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-audience-topn-label', html)
         self.assertIn('computeAudienceDimension', html)
         self.assertIn('renderAudienceTopN', html)
+        self.assertIn("if (input.value.trim() === '') return;", html)
+        self.assertIn('function computeMarketingCategories(selectedRecords)', html)
+        self.assertIn("new CustomEvent('audience-topn-change'", html)
+        self.assertIn("addEventListener('audience-topn-change'", html)
+        self.assertIn('renderMarketingOverview(computeMarketingCategories(event.detail.records || []))', html)
         self.assertIn("var visualBuckets = key === 'age'", html)
         self.assertIn('var legendBuckets = visualBuckets;', html)
         self.assertIn("renderAudienceGroupDrill(item.closest('article')", html)
@@ -627,6 +2242,9 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("02｜人群及营销卖点洞察", html)
         self.assertIn('data-chapter02-tab="all"', html)
         self.assertIn('data-chapter02-tab="WONDERLAB/万益蓝"', html)
+        chapter02_tabs = html.split('class="chapter02-tabs"', 1)[1].split('class="chapter02-panels"', 1)[0]
+        self.assertIn(">所有指定品牌</button>", chapter02_tabs)
+        self.assertNotIn(">全品牌</button>", chapter02_tabs)
         self.assertEqual(html.count('role="tabpanel" id="chapter02-panel-'), 2)
         self.assertIn("营销卖点汇总", html)
         self.assertIn('data-audience-records=', html)
@@ -634,6 +2252,19 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-marketing-categories=', html)
         self.assertIn('class="chart-grid script-dashboard-overview marketing-column-chart"', html)
         self.assertIn('.chart-grid.script-dashboard-overview.marketing-column-chart{grid-template-columns:repeat(auto-fit,minmax(78px,1fr))', html)
+        self.assertIn('class="section-title-row"><h3>营销卖点汇总</h3><p class="script-dashboard-hint chart-interaction-hint">点击一级标签柱状图可查看二级标签分布</p></div>', html)
+        self.assertIn('营销卖点标签分类规则以完整营销卖点中括号里的内容为一级标签。', html)
+        self.assertNotIn('由于 RPA 提取的营销卖点数据以下划线区分层级，而下划线不会透出，因此此处以云图官方界面显示作为解释。', html)
+        self.assertNotIn('点击类别柱查看该类别的标签比例', html)
+        self.assertIn("titleRow.className = 'section-title-row'", html)
+        self.assertIn("hint.className = 'chart-interaction-hint audience-crowd-hint'", html)
+        self.assertIn("hint.textContent = '点击柱状图查看对应人群 TOP3 素材'", html)
+        self.assertIn("summary.textContent = '点击一级标签柱状图可查看二级标签分布'", html)
+        self.assertIn('role="region" tabindex="0" aria-label="营销卖点汇总柱状图"', html)
+        self.assertIn('flex-wrap:nowrap', html)
+        self.assertIn('overflow-x:auto', html)
+        self.assertIn('flex:0 0 86px', html)
+        self.assertIn('flex:0 0 68px', html)
         self.assertIn('column-item column-item-interactive marketing-category-column', html)
         self.assertIn('data-marketing-category-column', html)
         self.assertIn('class="marketing-dashboard marketing-dashboard-card chart-card"', html)
@@ -673,6 +2304,58 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('.audience-chart-age,.audience-chart-gender{display:flex;flex-direction:column}', html)
         self.assertIn('flex:1;min-height:0;gap:14px;align-items:center', html)
         self.assertIn('@container (max-width:360px){.audience-pie-layout{grid-template-columns:1fr}', html)
+
+    def test_render_report_uses_adaptive_audience_drill_and_shared_chapter02_column_styles(self):
+        report = load_module()
+        chapter02 = {
+            "scopeOrder": ["all"],
+            "all": {
+                "label": "全量 TOP1000",
+                "topMaterials": [{
+                    "material_id": "1", "rank": 1, "title": "素材一",
+                    "people_tags": ["新锐白领"],
+                    "material_tags": ["功效功能_补充营养_日常养护", "未分层营销标签"],
+                }],
+                "audienceDashboard": {"dimensions": {"crowd": {
+                    "labelMode": "normalized_tag_share", "recordCount": 1,
+                    "buckets": [{"label": "新锐白领", "materialCount": 1, "chartShare": 1}],
+                }}},
+                "marketingDashboard": {
+                    "taxonomyVersion": 2,
+                    "tagCount": 2,
+                    "occurrenceCount": 2,
+                    "categories": [{
+                        "category": "功效功能", "tagCount": 1, "occurrenceCount": 1,
+                        "tags": [{"tag": "补充营养_日常养护", "rawTag": "功效功能_补充营养_日常养护", "count": 1}],
+                    }, {
+                        "category": "其他", "tagCount": 1, "occurrenceCount": 1,
+                        "tags": [{"tag": "未分层营销标签", "rawTag": "未分层营销标签", "count": 1}],
+                    }],
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "report", fact_pack={"chapter02Facts": chapter02})
+            html = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-marketing-taxonomy-version="2"', html)
+        self.assertIn("function parseMarketingTag(rawTag)", html)
+        self.assertNotIn("function marketingCategory(tag)", html)
+        self.assertIn("rawTag: parsed.rawTag", html)
+        self.assertIn("function formatExposure(record)", html)
+        self.assertIn("className = 'preference-exposure'", html)
+        self.assertIn("exposure.textContent = '曝光量：' + formatExposure(record)", html)
+        self.assertIn("grid-template-areas", html)
+        self.assertIn('.unified-yuntu .audience-drill-panel {', html)
+        self.assertIn('min-height: 0;', html)
+        self.assertIn('align-self: stretch;', html)
+        self.assertIn('height: auto;', html)
+        self.assertIn('.unified-yuntu :is(.audience-column-bar, .marketing-category-column .column-bar)', html)
+        self.assertIn('linear-gradient(180deg, #e1ac61 0%, #9b6a37 100%)', html)
+        self.assertIn('.unified-yuntu :is(.audience-column-item, .marketing-category-column):hover', html)
         self.assertIn('.pie-chart{position:relative;width:min(260px,100%);', html)
         self.assertIn('.audience-chart-gender .pie-chart{width:min(240px,100%)}', html)
         self.assertIn('.pie-legend .legend-item{position:relative;display:grid;grid-template-columns:minmax(80px,1fr) auto auto;', html)
@@ -696,6 +2379,83 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("scrollbar-width: thin;", html)
         self.assertNotIn('class="pie-tooltip"', html)
         self.assertNotIn('class="audience-bar-chart"', html)
+
+    def test_render_report_renders_chapter02_dimensions_with_titles_and_details(self):
+        report = load_module()
+        analysis = self.analysis_json()
+        analysis["chapter02Insights"] = {
+            "scopeOrder": ["all"],
+            "scopes": {
+                "all": {
+                    "audienceSummary": {
+                        "title": "女性与 31-40 岁是主要内容入口",
+                        "summary": "八大人群中以新锐白领和精致妈妈为主要覆盖，同时女性与31-40岁构成核心标签，应作为内容入口假设而非真实受众比例。",
+                        "evidence": [{"metric": "people_tags", "value": "女/31-40"}],
+                        "material_ids": ["101"],
+                    },
+                    "audienceInsights": [{
+                        "title": "旧版人群分点不应继续编号",
+                        "summary": "旧版人群分点不应继续编号。",
+                        "evidence": [{"metric": "people_tags", "value": "女"}],
+                        "material_ids": ["101"],
+                    }, {
+                        "title": "旧版人群第二分点",
+                        "summary": "旧版人群第二分点也只作为兼容内容。",
+                        "evidence": [{"metric": "people_tags", "value": "31-40"}],
+                        "material_ids": ["101"],
+                    }],
+                    "marketingSummary": {
+                        "title": "产品展示承担首屏识别",
+                        "summary": "卖点标签显示产品展示与购买信息经常并置，后续应拆开顺序验证。",
+                        "evidence": [{"metric": "material_tags", "value": "商品展示"}],
+                        "material_ids": ["101"],
+                    },
+                    "marketingInsights": [{
+                        "title": "旧版营销分点不应继续编号",
+                        "summary": "旧版营销分点不应继续编号。",
+                        "evidence": [{"metric": "material_tags", "value": "使用场景/促销利益"}],
+                        "material_ids": ["101"],
+                    }, {
+                        "title": "旧版营销第二分点",
+                        "summary": "旧版营销第二分点也只作为兼容内容。",
+                        "evidence": [{"metric": "material_tags", "value": "促销利益"}],
+                        "material_ids": ["101"],
+                    }],
+                }
+            },
+        }
+        chapter02 = {
+            "scopeOrder": ["all"],
+            "all": {
+                "label": "全量 TOP1000",
+                "topMaterials": [],
+                "audienceDashboard": {"dimensions": {}},
+                "marketingDashboard": {"tagCount": 1, "occurrenceCount": 1, "categories": []},
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=analysis_path, output_dir=root / "report", fact_pack={"chapter02Facts": chapter02})
+            html = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn("人群", html)
+        self.assertIn("女性与 31-40 岁是主要内容入口", html)
+        self.assertIn("八大人群中以新锐白领和精致妈妈为主要覆盖", html)
+        self.assertIn("营销卖点", html)
+        self.assertIn("产品展示承担首屏识别", html)
+        self.assertIn("卖点标签显示产品展示与购买信息经常并置", html)
+        self.assertIn('class="chapter02-dimension-block"', html)
+        self.assertIn('class="chapter02-dimension-content"', html)
+        self.assertNotIn('<article class="chapter02-detail-insight"', html)
+        self.assertIn('class="chapter02-dimension-lead"', html)
+        self.assertNotIn('旧版人群分点不应继续编号', html)
+        self.assertNotIn('旧版人群第二分点', html)
+        self.assertNotIn('旧版营销分点不应继续编号', html)
+        self.assertNotIn('旧版营销第二分点', html)
+        self.assertNotIn('audienceInsights', html)
+        self.assertNotIn('。；', html)
 
     def test_render_report_keeps_unlabeled_dimension_out_of_pie_chart(self):
         report = load_module()
@@ -730,58 +2490,170 @@ class YuntuReportTests(unittest.TestCase):
     def test_render_report_rejects_evidence_less_conclusion(self):
         report = load_module()
         analysis = self.analysis_json()
-        del analysis["materialComparison"][0]["evidence"]
+        del analysis["topMaterialCombination"]["brandConclusions"][0]["evidence"]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "analysis.json"
             path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
             with self.assertRaisesRegex(report.YuntuReportError, "evidence"):
                 report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
 
-    def test_render_report_rejects_top_material_conclusion_without_evidence(self):
+    def test_render_report_accepts_top_material_contract_without_brand_comparison(self):
         report = load_module()
         analysis = self.analysis_json()
-        del analysis["topMaterialCombination"]["overallConclusions"][0]["evidence"]
+        analysis["topMaterialCombination"].pop("brandComparisonConclusion")
         with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
             path = Path(directory) / "analysis.json"
             path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(report.YuntuReportError, "topMaterialCombination.*evidence"):
-                report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
+            report.render_report(analysis_json=path, output_dir=root / "report")
+            rendered = (root / "report" / "final-report.html").read_text(
+                encoding="utf-8"
+            )
 
-    def test_render_report_rejects_incomplete_top_material_contract(self):
+        self.assertNotIn("品牌间差异总结", rendered)
+
+    def test_render_report_separates_chapter01_ai_blocks_and_comparison_collapse(self):
         report = load_module()
-        for mutation, error in (
-            (
-                lambda analysis: analysis["topMaterialCombination"]["overallConclusions"][0].update({"dimension": "unknown"}),
-                "dimension",
-            ),
-            (
-                lambda analysis: analysis["topMaterialCombination"].pop("brandComparisonConclusion"),
-                "brandComparisonConclusion",
-            ),
-        ):
-            with self.subTest(error=error):
-                analysis = self.analysis_json()
-                mutation(analysis)
-                with tempfile.TemporaryDirectory() as directory:
-                    path = Path(directory) / "analysis.json"
-                    path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-                    with self.assertRaisesRegex(report.YuntuReportError, error):
-                        report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
+        brands = ["小仙炖"]
+        analysis = {
+            "topMaterialCombination": {
+                "brandConclusions": [{
+                    "brand": "小仙炖",
+                    "classificationSource": "runtime_title_rule",
+                    "dataSummary": "表现对比段落，覆盖曝光、CTR、CVR 和 3 秒播放率。",
+                    "hotMaterialInsight": {
+                        "title": "爆款整体洞察",
+                        "summary": "爆款整体段落，说明共同内容机会和验证方向。",
+                        "evidence": {"scope": "brand", "material_ids": ["101"]},
+                    },
+                    "evidence": ["brand"], "material_ids": ["101"],
+                }],
+                "allBrandsConclusion": {
+                    "brand": "全品牌",
+                    "classificationSource": "runtime_title_rule",
+                    "dataSummary": "全范围表现对比段落，覆盖曝光、CTR、CVR 和 3 秒播放率。",
+                    "hotMaterialInsight": {
+                        "title": "全范围爆款整体洞察",
+                        "summary": "全范围爆款段落，说明共同内容机会和验证方向。",
+                        "evidence": {"scope": "all", "material_ids": ["101"]},
+                    },
+                    "evidence": ["all"], "material_ids": ["101"],
+                },
+            }
+        }
+        hot = {
+            "thresholdExposureMin": 200000,
+            "qualifyingCount": 1,
+            "materials": [{
+                "material_id": "101", "title": "真实爆款素材",
+                "exposure": {"min": 200000, "max": 220000, "raw": "20万-22万"},
+                "metrics": {"ctr": 0.1, "cvr": 0.02, "play_3s_rate": 0.4},
+            }],
+            "available": True, "missing_reason": "",
+        }
+        comparison_template = {
+            "current": {
+                "sampleCount": 2,
+                "metrics": {
+                    "show_cnt": {"total": 2686377, "median": 1343188.5},
+                    "ctr": {"median": 0.0327},
+                    "cvr": {"median": 0.0709},
+                    "play_3s_rate": {"median": 0.7441},
+                },
+            },
+            "previousPeriod": {
+                "currentSampleCount": 2,
+                "baselineSampleCount": 3,
+                "metrics": {
+                    "show_cnt": {"current": 2686377, "baseline": 2000000, "delta": 686377, "rate": -0.301},
+                    "ctr": {"current": 0.0327, "baseline": 0.0367, "delta": -0.004, "rate": -0.109},
+                    "cvr": {"current": 0.0709, "baseline": 0.0609, "delta": 0.01, "rate": 0.164},
+                    "play_3s_rate": {"current": 0.7441, "baseline": 0.7641, "delta": -0.02, "rate": -0.026},
+                },
+            },
+            "industryBenchmark": {
+                "currentSampleCount": 2,
+                "baselineSampleCount": 10,
+                "metrics": {
+                    "show_cnt": {"current": 2686377, "baseline": 3000000, "delta": -313623, "rate": 0.093},
+                    "ctr": {"current": 0.0327, "baseline": 0.04, "delta": -0.0073, "rate": 0.323},
+                    "cvr": {"current": 0.0709, "baseline": 0.0909, "delta": -0.02, "rate": -0.221},
+                    "play_3s_rate": {"current": 0.7441, "baseline": 0.7741, "delta": -0.03, "rate": -0.039},
+                },
+            },
+        }
+        fact_pack = {
+            "schemaVersion": 7,
+            "filters": {"brands": brands},
+            "comparisonFacts": {"scopes": {"all": copy.deepcopy(comparison_template), "小仙炖": copy.deepcopy(comparison_template)}},
+            "hotMaterialFacts": {"all": copy.deepcopy(hot), "小仙炖": copy.deepcopy(hot)},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=fact_pack)
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+            markdown = (root / "report" / "final-report.md").read_text(encoding="utf-8")
+
+        self.assertIn("所有指定品牌", rendered)
+        self.assertIn("素材表现洞察", rendered)
+        self.assertIn("爆款素材洞察", rendered)
+        self.assertIn("aria-expanded=\"true\"", rendered)
+        self.assertIn("aria-controls=\"chapter01-comparison-details-all-brands\"", rendered)
+        self.assertIn("环比与全行业对比", rendered)
+        self.assertIn("收起环比与全行业对比数据", rendered)
+        self.assertIn("当前默认筛选条件", rendered)
+        self.assertEqual(rendered.count('class="chapter01-comparison-group chapter01-comparison-card"'), 6)
+        self.assertEqual(rendered.count("真实值"), 6)
+        self.assertEqual(rendered.count('class="chapter01-comparison-card-change"'), 0)
+        self.assertNotIn(">变化</h6>", rendered)
+        self.assertIn("环比周期", rendered)
+        self.assertIn("同周期全行业", rendered)
+        self.assertIn("200.0 万次（变化率 -25.55%）", rendered)
+        self.assertIn("300.0 万次（变化率 +11.67%）", rendered)
+        self.assertIn("268.6 万次", rendered)
+        self.assertNotIn("e+", rendered.lower())
+        self.assertIn("收起爆款素材汇总数据", rendered)
+        self.assertIn("所有指定品牌", markdown)
+        self.assertIn("爆款整体段落", rendered)
+        self.assertIn("素材表现洞察", markdown)
+        self.assertIn("环比与全行业对比", markdown)
+        self.assertIn("曝光总量：200.0 万次（变化率 -25.55%）", markdown)
+        self.assertIn("曝光总量：300.0 万次（变化率 +11.67%）", markdown)
+        self.assertNotIn("- 变化：", markdown)
+        self.assertNotIn("e+", markdown.lower())
+        self.assertLess(rendered.index("素材表现洞察"), rendered.index("环比与全行业对比"))
+        self.assertLess(rendered.index("当前默认筛选条件", rendered.index("环比与全行业对比")), rendered.index("环比周期", rendered.index("环比与全行业对比")))
+        self.assertLess(rendered.index("环比周期", rendered.index("环比与全行业对比")), rendered.index("同周期全行业", rendered.index("环比与全行业对比")))
+        self.assertLess(rendered.index("环比与全行业对比"), rendered.index("爆款素材洞察"))
+        self.assertLess(rendered.index("爆款素材洞察"), rendered.index("爆款素材面板"))
+
+    def test_chapter01_comparison_cards_match_hot_material_style_and_responsive_layout(self):
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+        grid_rule = css.split(".unified-yuntu .chapter01-comparison-grid {", 1)[1].split("}", 1)[0]
+        card_rule = css.split(".unified-yuntu .chapter01-comparison-card {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr));", grid_rule)
+        self.assertIn("padding: 10px;", card_rule)
+        self.assertIn("border-radius: 6px;", card_rule)
+        self.assertIn("background: #fff;", card_rule)
+        self.assertIn(".unified-yuntu .chapter01-comparison {", css)
+        comparison_rule = css.split(".unified-yuntu .chapter01-comparison {", 1)[1].split("}", 1)[0]
+        self.assertIn("background: #fffdf8;", comparison_rule)
+        self.assertIn(
+            "@media (max-width: 700px) {\n  .unified-yuntu .chapter01-comparison-grid {\n    grid-template-columns: 1fr;",
+            css,
+        )
 
     def test_render_report_rejects_audit_content_in_user_readable_summaries(self):
         report = load_module()
         for field, value in (
-            ("summary", "查看数据依据"),
             ("dataSummary", "证据：{\"metric\": \"ctr\"}"),
-            ("marketingSummary", "指标对象：{\"metric\": \"ctr\"}"),
+            ("peopleSummary", "查看数据依据"),
         ):
             with self.subTest(field=field):
                 analysis = self.analysis_json()
-                target = (
-                    analysis["topMaterialCombination"]["overallConclusions"][0]
-                    if field == "summary"
-                    else analysis["topMaterialCombination"]["brandConclusions"][0]
-                )
+                target = analysis["topMaterialCombination"]["brandConclusions"][0]
                 target[field] = value
                 with tempfile.TemporaryDirectory() as directory:
                     path = Path(directory) / "analysis.json"
@@ -807,12 +2679,13 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('href="#script-insights"', rendered)
         self.assertIn('href="#highlight-insights"', rendered)
         self.assertIn('href="#material-deep-dive"', rendered)
-        self.assertIn("脚本数据：未接入", rendered)
+        self.assertIn("脚本数据：不可用", rendered)
         self.assertIn("本次云图 RPA 未提供可用于汇总的脚本正文与时间戳段落", markdown)
         self.assertIn("暂无可用高光帧", rendered)
+        self.assertNotIn("data-highlight-collapse-toggle", rendered)
         self.assertNotIn('href="#landscape"', rendered)
-        self.assertIn('</article></section>', rendered)
-        self.assertNotIn('</article></div></section>', rendered)
+        self.assertIn('</div></div></section>', rendered)
+        self.assertNotIn('class="brand-difference', rendered)
         self.assertNotIn("榜单竞争格局", markdown)
 
     def test_render_report_renders_material_deep_dive_with_tabs_frames_and_five_charts(self):
@@ -830,11 +2703,21 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('class="deep-frame-grid fixed-six"', rendered)
         self.assertIn('class="second-level-timeline raw-fact-card"', rendered)
         self.assertIn('data-collapsible-toggle', rendered)
-        self.assertIn('class="collapsible-toggle-action">收起数据</span>', rendered)
+        self.assertIn('data-collapsible-expanded-label="收起秒级拆解数据"', rendered)
+        self.assertIn('data-collapsible-collapsed-label="展开秒级拆解数据"', rendered)
+        self.assertIn('class="collapsible-toggle-action">收起秒级拆解数据</span>', rendered)
+        self.assertIn('<span>曝光量</span><b>20万-22万</b>', rendered)
+        self.assertNotIn('<span>曝光量</span><b>20.0 万</b>', rendered)
+        self.assertNotIn('class="collapsible-toggle-action">收起数据</span>', rendered)
+        self.assertNotIn('class="collapsible-toggle-action">收起/展开秒级拆解数据</span>', rendered)
         self.assertEqual(rendered.count('class="second-level-chart"'), 0)
-        self.assertIn("点击 Top1 波峰画面", rendered)
+        deep_dive_section = rendered.split('id="material-deep-dive"', 1)[1]
+        self.assertIn("0s · 点击指数 -", deep_dive_section)
+        self.assertIn("2s · 点击指数 0.8", deep_dive_section)
+        self.assertNotIn("封面画面", deep_dive_section)
+        self.assertNotIn("点击 Top1 波峰画面", deep_dive_section)
         self.assertIn('data-jump-material="101"', rendered)
-        self.assertIn('class="highlight-source-link"', rendered)
+        self.assertIn('class="highlight-material-title"', rendered)
         self.assertIn("## 05｜单素材深度分析", markdown)
         self.assertIn("秒级拆解", markdown)
         self.assertNotIn("AI 二次分析", rendered)
@@ -844,6 +2727,28 @@ class YuntuReportTests(unittest.TestCase):
         self.assertNotIn("#### 不建议照搬", markdown)
         self.assertNotIn("可结合画面主体、字幕和产品露出查看节奏分布", rendered)
         self.assertNotIn("未输出观察。", markdown)
+
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(encoding="utf-8")
+        self.assertIn("gap: 12px;", css)
+        self.assertIn("border-bottom: 1px solid var(--unified-line);", css)
+        self.assertIn("padding: 0 2px 8px;", css)
+        self.assertIn("bottom: -1px;", css)
+        self.assertIn("border-top: 0;", css)
+        self.assertIn(".unified-yuntu .second-level-switcher.metric-switch", css)
+        metric_rule = css.split(".unified-yuntu .second-level-switcher.metric-switch", 1)[1].split("}", 1)[0]
+        self.assertIn("gap: 14px;", metric_rule)
+        self.assertIn(
+            ".unified-yuntu :is(.brand-tabs,.chapter02-tabs,.highlight-dashboard-tabs,.highlight-brand-tabs) {\n  gap: 12px;\n  padding: 0 2px 8px;",
+            css,
+        )
+        self.assertIn(
+            '.unified-yuntu :is(.brand-tab,.chapter02-tabs button,.highlight-dashboard-tabs button,.highlight-brand-tabs button)[aria-selected="true"]::after {\n  right: 12px;\n  bottom: -1px;\n  left: 12px;',
+            css,
+        )
+        self.assertIn("bottom: -1px;", css)
+        self.assertIn(".unified-yuntu .material-detail-tabs {", css)
+        material_tabs_rule = css.split(".unified-yuntu .material-detail-tabs {", 1)[1].split("}", 1)[0]
+        self.assertIn("gap: 14px;", material_tabs_rule)
 
     def test_render_report_uses_qianchuan_style_frame_first_deep_dive_layout(self):
         report = load_module()
@@ -941,26 +2846,66 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-deep-frame-clear', rendered)
         self.assertIn('data-deep-frame-checkbox', rendered)
         self.assertIn('data-deep-frame-observation', rendered)
-        self.assertIn('脚本数据：未接入', rendered)
+        self.assertIn('data-deep-frame-observation-empty', rendered)
+        self.assertIn('全选高光帧', rendered)
+        self.assertIn('全不选高光帧', rendered)
+        self.assertIn('脚本分析数据', rendered)
+        self.assertIn('暂无脚本分析数据', rendered)
         self.assertIn('核心人群标签</dt><dd>未返回</dd>', rendered)
 
-    def test_render_report_rejects_invalid_material_deep_dive_frame_and_second(self):
+    def test_render_report_supports_keyboard_tabs_and_filtered_highlight_observations(self):
         report = load_module()
-        cases = (
-            ("frame", "highlight:102:cover:0", "exactly once"),
-            ("second", 9, "evidence_seconds"),
-        )
-        for kind, value, error in cases:
-            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
-                analysis = self.deep_dive_analysis()
-                if kind == "frame":
-                    analysis["materialDeepDives"][0]["frame_observations"][1]["frame_ref"] = value
-                else:
-                    analysis["materialDeepDives"][0]["second_level_observations"][0]["evidence_seconds"] = [value]
-                path = Path(directory) / "analysis.json"
-                path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-                with self.assertRaisesRegex(report.YuntuReportError, error):
-                    report.render_report(analysis_json=path, output_dir=Path(directory) / "report", fact_pack=self.deep_dive_fact_pack())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "analysis.json"
+            path.write_text(json.dumps(self.deep_dive_analysis(), ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=self.deep_dive_fact_pack())
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-material-detail-tab="visual"', rendered)
+        self.assertIn('tabindex="-1" data-material-detail-tab="timeline"', rendered)
+        self.assertIn('data-deep-frame-select-all', rendered)
+        self.assertIn('data-deep-frame-clear', rendered)
+        self.assertIn('data-deep-frame-observation-empty', rendered)
+        self.assertIn("var selectedRefs = new Set", rendered)
+        self.assertIn("function renderObservations()", rendered)
+        self.assertIn("function syncSelection()", rendered)
+        self.assertIn("selectAll.disabled = selectedRefs.size === checkboxes.length", rendered)
+        self.assertIn("selectNone.disabled = selectedRefs.size === 0", rendered)
+        self.assertIn("caption.prepend(label)", rendered)
+        self.assertIn("tab.addEventListener('keydown'", rendered)
+        self.assertIn("tabs.length - 1", rendered)
+
+    def test_render_report_rejects_invalid_material_deep_dive_frame(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            analysis = self.deep_dive_analysis()
+            analysis["materialDeepDives"][0]["frame_observations"][1]["frame_ref"] = "highlight:102:cover:0"
+            path = Path(directory) / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(report.YuntuReportError, "exactly once"):
+                report.render_report(analysis_json=path, output_dir=Path(directory) / "report", fact_pack=self.deep_dive_fact_pack())
+
+    def test_render_report_ignores_legacy_second_level_ai_observations(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis = self.deep_dive_analysis()
+            analysis["materialDeepDives"][0]["second_level_observations"][0]["evidence_seconds"] = [999]
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(
+                analysis_json=path,
+                output_dir=root / "report",
+                fact_pack=self.deep_dive_fact_pack(),
+            )
+            data = json.loads((root / "report" / "final-report-data.json").read_text(encoding="utf-8"))
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+
+        self.assertNotIn("second_level_observations", data["analysis"]["materialDeepDives"][0])
+        self.assertNotIn("secondLevelObservations", data["presentation"]["chapters"]["chapter05"]["panels"][0])
+        self.assertIn('class="second-level-timeline raw-fact-card"', rendered)
+        self.assertIn('data-second-level-metric="点赞指数"', rendered)
 
     def test_render_report_omits_ai_secondary_analysis_from_deep_dive(self):
         report = load_module()
@@ -969,7 +2914,7 @@ class YuntuReportTests(unittest.TestCase):
             "visual_summary", "data_summary", "audience_summary", "marketing_summary",
             "replication_advice", "risk_notes", "opening_judgment", "visual_rhythm",
             "peak_frame_reading", "second_level_reading", "audience_fit",
-            "xiaoxian_dun_reference", "do_not_copy",
+            "do_not_copy",
         )
         for dive in analysis["materialDeepDives"]:
             for field in summary_fields:
@@ -1016,21 +2961,6 @@ class YuntuReportTests(unittest.TestCase):
                 ),
                 0,
             )
-
-    def test_render_report_rejects_experiment_without_fact_reference(self):
-        report = load_module()
-        analysis = self.deep_dive_analysis()
-        del analysis["experimentMatrix"][0]["evidence"]
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            path = root / "analysis.json"
-            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(report.YuntuReportError, "experimentMatrix.*reference"):
-                report.render_report(
-                    analysis_json=path,
-                    output_dir=root / "report",
-                    fact_pack=self.deep_dive_fact_pack(),
-                )
 
     def test_render_report_renders_classified_highlight_frames(self):
         report = load_module()
@@ -1098,16 +3028,74 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn('data-highlight-page-size="12"', rendered)
         self.assertIn('data-highlight-frame-count="9"', rendered)
         self.assertIn('data-highlight-page-status', rendered)
+        self.assertIn('共性洞察', rendered)
+        self.assertIn('裂变方向', rendered)
+        self.assertIn('class="highlight-frame-kind"', rendered)
+        self.assertIn('class="highlight-frame-metric"', rendered)
+        self.assertIn('class="highlight-material-title"', rendered)
+        self.assertNotIn('每条素材保留封面画面', rendered)
+        self.assertNotIn('查看素材：#', rendered)
         self.assertIn("1 / 1", rendered)
+        highlight_header = '<header class="section-header highlight-section-header">'
+        self.assertIn(highlight_header, rendered)
+        self.assertIn('<div class="highlight-export-toolbar"', rendered)
+        self.assertIn('href="highlight-frames.xlsx" download>', rendered)
         self.assertLess(
             rendered.index('class="highlight-analysis-pair"'),
             rendered.index('class="highlight-frame-grid"'),
         )
+        self.assertGreaterEqual(rendered.count('data-highlight-collapse-toggle'), 1)
+        self.assertIn('aria-expanded="true"', rendered)
+        self.assertIn('data-collapsible-expanded-label="收起高光画面数据"', rendered)
+        self.assertIn('data-collapsible-collapsed-label="展开高光画面数据"', rendered)
+        self.assertIn('class="highlight-data-card raw-fact-card"', rendered)
+        self.assertIn('data-highlight-cards-panel', rendered)
+        self.assertLess(
+            rendered.index('class="highlight-analysis-pair"'),
+            rendered.index('class="highlight-data-card raw-fact-card"'),
+        )
+        self.assertLess(
+            rendered.index('class="highlight-data-card raw-fact-card"'),
+            rendered.index('data-highlight-collapse-toggle'),
+        )
+        self.assertLess(
+            rendered.index('data-highlight-collapse-toggle'),
+            rendered.index('data-highlight-cards-panel'),
+        )
+        self.assertRegex(rendered, r'aria-controls="[^"]*-cards-portrait"')
         self.assertLess(
             rendered.index('class="highlight-frame-grid"'),
             rendered.index('class="highlight-pagination"'),
         )
         self.assertIn("highlight:101:click_peak:1", data["highlightFrames"])
+
+    def test_render_report_renders_brand_first_highlight_tabs(self):
+        report = load_module()
+        analysis = self.deep_dive_analysis()
+        fact_pack = self.deep_dive_fact_pack()
+        fact_pack["filters"] = {"brands": ["小仙炖", "五个女博士"]}
+        fact_pack["materialFacts"][0]["title"] = "小仙炖测试素材"
+        fact_pack["materialFacts"][1]["title"] = "五个女博士测试素材"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for material in fact_pack["materialFacts"]:
+                for frame in material["highlightFrames"]:
+                    source = root / frame["relative_path"]
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_bytes(b"fake-jpg")
+            path = root / "analysis.json"
+            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            report.render_report(analysis_json=path, output_dir=root / "report", fact_pack=fact_pack)
+            rendered = (root / "report" / "final-report.html").read_text(encoding="utf-8")
+        self.assertIn('aria-label="高光画面品牌分类"', rendered)
+        self.assertIn("highlight-brand-tab-brand-u5c0f-u4ed9-u7096", rendered)
+        self.assertIn("highlight-brand-tab-brand-u4e94-u4e2a-u5973-u535a-u58eb", rendered)
+        self.assertIn('data-highlight-brand-tab', rendered)
+        highlight_tabs = rendered.split('class="highlight-brand-tabs"', 1)[1].split('class="highlight-brand-panels"', 1)[0]
+        self.assertIn(">所有指定品牌</button>", highlight_tabs)
+        self.assertNotIn(">全品牌</button>", highlight_tabs)
+        self.assertIn('data-highlight-brand-panel', rendered)
+        self.assertIn('aria-label="高光画面分类"', rendered)
 
     def test_render_report_copies_highlight_assets_from_explicit_source_root(self):
         report = load_module()
@@ -1309,25 +3297,25 @@ class YuntuReportTests(unittest.TestCase):
                     fact_pack=fact_pack,
                 )
 
-    def test_render_report_rejects_incomplete_experiment(self):
+    def test_current_schema_rejects_hidden_chapter01_residual_fields(self):
         report = load_module()
         analysis = self.analysis_json()
-        del analysis["experimentMatrix"][0]["control"]
+        analysis["topMaterialCombination"] = {
+            "brandConclusions": analysis["topMaterialCombination"]["brandConclusions"],
+            "brandComparisonConclusion": analysis["topMaterialCombination"]["brandComparisonConclusion"],
+        }
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "analysis.json"
             path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(report.YuntuReportError, "control"):
-                report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
-
-    def test_render_report_rejects_brand_comparison_without_each_brand_evidence(self):
-        report = load_module()
-        analysis = self.analysis_json()
-        analysis["topMaterialCombination"]["brandComparisonConclusion"]["evidence"].pop()
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "analysis.json"
-            path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(report.YuntuReportError, "brandComparisonConclusion.*brand"):
-                report.render_report(analysis_json=path, output_dir=Path(directory) / "report")
+            with self.assertRaisesRegex(
+                report.YuntuReportError,
+                "must only include brandConclusions",
+            ):
+                report.render_report(
+                    analysis_json=path,
+                    output_dir=Path(directory) / "report",
+                    fact_pack={"schemaVersion": 6},
+                )
 
     def test_render_report_renders_styled_cover_without_legacy_gallery(self):
         report = load_module()
@@ -1347,7 +3335,7 @@ class YuntuReportTests(unittest.TestCase):
         fact_pack = {
             "filters": {
                 "industry": "食品饮料",
-                "brands": ["小仙炖", "诺特兰德"],
+                "brands": ["品牌甲", "品牌乙"],
                 "custom_start_date": "2026-07-26",
                 "custom_end_date": "2026-08-01",
             }
@@ -1358,7 +3346,7 @@ class YuntuReportTests(unittest.TestCase):
             analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
-        self.assertIn("食品饮料行业｜小仙炖、诺特兰德｜2026-07-26 至 2026-08-01", rendered)
+        self.assertIn("食品饮料行业｜品牌甲、品牌乙｜2026-07-26 至 2026-08-01", rendered)
         self.assertNotIn("好丽友、香飘飘", rendered)
 
     def test_render_report_keeps_evidence_in_json_without_rendering_it(self):
@@ -1370,7 +3358,7 @@ class YuntuReportTests(unittest.TestCase):
             "materialComparison": analysis["materialComparison"],
             "materialDiagnoses": analysis["materialDiagnoses"],
             "competitorPatterns": analysis["competitorPatterns"],
-            "xiaoxianDunOpportunityMap": analysis["xiaoxianDunOpportunityMap"],
+            "opportunityMap": analysis["opportunityMap"],
         }
         for name, entries in evidence_sections.items():
             entries[0]["evidence"] = [{"hidden": f"evidence-sentinel-{name}"}]
@@ -1411,7 +3399,7 @@ class YuntuReportTests(unittest.TestCase):
             report.render_report(analysis_json=analysis_path, output_dir=root / "final-report", fact_pack=fact_pack)
             rendered = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
         self.assertIn("--paper:#fff8ec", rendered)
-        self.assertIn('aria-label="各品牌榜单 Top N 分析"', rendered)
+        self.assertIn('aria-label="各品牌榜单分析"', rendered)
         self.assertNotIn('aria-label="查看 101 封面 高光帧"', rendered)
         self.assertNotIn('aria-label="关闭高光帧预览"', rendered)
 
@@ -1455,18 +3443,27 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("grid-template-columns: 188px minmax(0, 1fr);", css)
         self.assertIn("gap: 18px;", css)
         self.assertIn(".unified-yuntu .audience-data-card", css)
+        self.assertIn(".unified-yuntu .highlight-data-card", css)
+        self.assertIn(".unified-yuntu .highlight-section-header", css)
         self.assertIn("padding: 18px;", css)
         self.assertIn("white-space: nowrap;", css)
         self.assertIn(".unified-yuntu .script-drill-layout", css)
         self.assertIn(".unified-yuntu .script-drill-primary", css)
-        self.assertIn("grid-template-rows: auto 150px auto;", css)
+        self.assertIn("grid-template-rows: auto 170px auto;", css)
         self.assertIn("min-height: 300px;", css)
+        self.assertIn(".unified-yuntu .script-drill-detail {", css)
+        self.assertIn("min-height: 0;", css)
         self.assertIn(".unified-yuntu .audience-drill-panel", css)
         self.assertIn("align-self: stretch;", css)
+        self.assertIn("height: auto;", css)
         self.assertIn(".unified-yuntu .audience-drill-panel .preference-list", css)
+        self.assertIn(".unified-yuntu .audience-drill-panel .material-link", css)
+        self.assertIn("font-size: 14px;", css)
+        self.assertIn(".unified-yuntu .audience-drill-panel .preference-exposure", css)
+        self.assertIn('grid-template-areas:\n    "rank exposure"\n    "title title";', css)
         self.assertIn(".unified-yuntu .audience-chart-crowd .audience-column-chart", css)
-        self.assertIn("min-height: 250px;", css)
-        self.assertIn("height: 170px;", css)
+        self.assertIn("min-height: var(--chapter02-column-container-height);", css)
+        self.assertIn("height: var(--chapter02-column-plot-height);", css)
         self.assertIn(".unified-yuntu .brand-tab[aria-selected=\"true\"]::after", css)
         self.assertIn(".unified-yuntu .audience-chart-gender .pie-legend", css)
         self.assertIn("margin-block: auto;", css)
@@ -1479,7 +3476,40 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn(".script-drill-moving-bar", css)
         self.assertIn(".highlight-frame-card[hidden]", css)
         self.assertIn(".second-level-section {", css)
-        self.assertIn("padding-top: 24px;", css)
+        self.assertIn("border-top: 0;", css)
+        self.assertIn("padding-top: 0;", css)
+        self.assertIn(".unified-yuntu .keyword-cloud-words", css)
+        self.assertIn("flex-wrap: wrap;", css)
+
+    def test_shared_style_keeps_audience_drill_height_and_compacts_pies(self):
+        css = (ROOT / "assets" / "report" / "unified-report.css").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("--chapter02-audience-card-height: 420px;", css)
+        self.assertIn("--chapter02-audience-drill-height: 300px;", css)
+        self.assertIn(".unified-yuntu .audience-chart-crowd .script-drill-detail", css)
+        self.assertIn(".unified-yuntu .audience-chart-age,", css)
+        self.assertIn("min-height: var(--chapter02-audience-card-height);", css)
+        self.assertIn(".unified-yuntu .audience-chart-crowd .script-drill-detail", css)
+        self.assertIn("min-height: var(--chapter02-audience-drill-height);", css)
+        self.assertIn(".unified-yuntu .audience-chart-age .pie-chart", css)
+        self.assertIn("width: min(var(--chapter02-audience-pie-size), 100%) !important;", css)
+        self.assertIn("gap: 6px 10px;", css)
+        self.assertIn("padding: 2px 0;", css)
+        self.assertIn(".unified-yuntu .marketing-drill-primary {", css)
+        self.assertIn("align-content:center;", css)
+        self.assertIn(".unified-yuntu .marketing-drill-primary-plot {", css)
+        self.assertIn("justify-content: center;", css)
+        self.assertIn("--chapter02-audience-crowd-height: 232px;", css)
+        self.assertIn("--chapter02-audience-crowd-drill-height: 260px;", css)
+        self.assertIn(".unified-yuntu .audience-chart-crowd .script-dashboard-overview", css)
+        self.assertIn("min-height: var(--chapter02-audience-crowd-height);", css)
+        self.assertIn("min-height: var(--chapter02-audience-crowd-drill-height);", css)
+        self.assertIn("background: #fff;", css)
+        self.assertIn("color: #5e3820;", css)
+        self.assertIn("align-self: flex-start;", css)
+        self.assertIn("justify-content: flex-start;", css)
 
     def test_unified_report_mobile_navigation_does_not_force_page_overflow(self):
         css = (ROOT / "assets" / "report" / "unified-report.css").read_text(

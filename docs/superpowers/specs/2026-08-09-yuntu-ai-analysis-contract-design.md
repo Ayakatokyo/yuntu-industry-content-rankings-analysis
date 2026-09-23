@@ -75,7 +75,7 @@ fetch -> prepare-analysis -> 当前对话模型生成 yuntu-ai-analysis.json
 - `peak_frame_reading`
 - `second_level_reading`
 - `audience_fit`
-- `xiaoxian_dun_reference`
+- `replication_advice`
 - `do_not_copy`
 
 上述所有摘要均由模型输出。`risk_notes` 应覆盖数据不足、视觉复用边界和潜在合规复核，不能将合规风险写成未经验证的结论；`do_not_copy` 说明不宜照搬的表达、画面或宣称，不得根据标题和趋势补造脚本内容。

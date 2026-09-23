@@ -2,6 +2,7 @@
 
 import ast
 import csv
+import hashlib
 import io
 import json
 import os
@@ -26,14 +27,47 @@ class GatewayResult:
         self.file_url = file_url
 
 
-def _decode_json_cell(value):
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _decode_structure(value):
+    """Recursively decode structured descendants while preserving text values."""
+    parse_failed = False
+    if isinstance(value, dict):
+        decoded = {}
+        for key, item in value.items():
+            decoded_item, item_failed = decode_structured_cell(item)
+            decoded[key] = decoded_item
+            parse_failed = parse_failed or item_failed
+        return decoded, parse_failed
+    if isinstance(value, list):
+        decoded = []
+        for item in value:
+            decoded_item, item_failed = decode_structured_cell(item)
+            decoded.append(decoded_item)
+            parse_failed = parse_failed or item_failed
+        return decoded, parse_failed
+    return value, False
+
+
+def decode_structured_cell(value):
+    """Decode JSON/Python container cells without executing source text.
+
+    The boolean signals that source looked structured but could not be parsed.
+    Callers preserve the original text and carry that state into availability.
+    """
     if not isinstance(value, str):
-        return value
+        return value, False
     text = value.strip()
     if not text:
-        return ""
+        return "", False
     if text[0] not in "[{":
-        return value
+        return value, False
     for decoder, errors in (
         (json.loads, (json.JSONDecodeError,)),
         (ast.literal_eval, (ValueError, SyntaxError)),
@@ -43,14 +77,21 @@ def _decode_json_cell(value):
         except errors:
             continue
         if isinstance(decoded, (dict, list)):
-            return decoded
-    return value
+            return _decode_structure(decoded)
+    return value, True
 
 
 def _clean_csv_value(value):
     if isinstance(value, str):
         return value.strip(_EDGE_CONTROL_CHARACTERS)
     return value
+
+
+def _is_csv_padding_row(row):
+    values = [value for value in row.values() if value not in (None, "")]
+    return bool(values) and all(
+        isinstance(value, str) and not value.strip(" ,") for value in values
+    )
 
 
 def _records_from_payload(payload):
@@ -82,11 +123,33 @@ def _file_url_from_envelope(result):
     return file_url.strip()
 
 
+def _file_url_from_completed_task(result):
+    if result.get("status") not in {"completed", "partial_success"}:
+        raise RpaIoError("RPA async task did not complete successfully")
+    files = result.get("files")
+    if not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict):
+        raise RpaIoError("RPA async task must contain exactly one fileUrl")
+    file_url = files[0].get("fileUrl")
+    if not isinstance(file_url, str) or not file_url.strip():
+        raise RpaIoError("RPA async task fileUrl is missing")
+    return file_url.strip()
+
+
 def unpack_gateway_result(result):
     if isinstance(result, list):
         return GatewayResult(kind="records", records=result)
     if not isinstance(result, dict):
         raise RpaIoError("RPA gateway result must be a list or object")
+
+    if "status" in result and ("files" in result or "payload" in result):
+        if result.get("status") not in {"completed", "partial_success"}:
+            raise RpaIoError("RPA async task did not complete successfully")
+        if "files" in result:
+            return GatewayResult(kind="files", file_url=_file_url_from_completed_task(result))
+        payload = result.get("payload")
+        if isinstance(payload, dict):
+            payload = [payload]
+        return GatewayResult(kind="records", records=_records_from_payload(payload))
 
     data = result.get("data")
     if isinstance(data, dict) and data.get("result_type") == "files":
@@ -206,15 +269,24 @@ def parse_csv_records(path):
         cleaned_row = {key: _clean_csv_value(value) for key, value in row.items()}
         if not any(value not in (None, "") for value in cleaned_row.values()):
             continue
-        records.append(
-            {key: _decode_json_cell(value) for key, value in cleaned_row.items()}
-        )
+        if _is_csv_padding_row(cleaned_row):
+            continue
+        record = {}
+        parse_failed_fields = []
+        for key, value in cleaned_row.items():
+            decoded, parse_failed = decode_structured_cell(value)
+            record[key] = decoded
+            if parse_failed:
+                parse_failed_fields.append(key)
+        if parse_failed_fields:
+            record["__parse_failed_fields__"] = parse_failed_fields
+        records.append(record)
     if not records:
         raise RpaIoError(f"RPA CSV {source} has no records")
     return records
 
 
-def write_json_atomically(result, output_path):
+def write_json_atomically(result, output_path, *, indent=2):
     target = Path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -226,7 +298,13 @@ def write_json_atomically(result, output_path):
     ) as staging_file:
         staging_path = Path(staging_file.name)
         try:
-            json.dump(result, staging_file, ensure_ascii=False, indent=2)
+            json.dump(
+                result,
+                staging_file,
+                ensure_ascii=False,
+                indent=indent,
+                separators=(",", ":") if indent is None else None,
+            )
             staging_file.write("\n")
         except Exception:
             try:

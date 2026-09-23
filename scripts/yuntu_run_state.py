@@ -59,7 +59,7 @@ def new_collection_summary(contract):
     """Create a collection lifecycle summary with non-overlapping stage counts."""
     contract_snapshot = _snapshot(contract)
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 4,
         "runId": uuid.uuid4().hex,
         "parameterFingerprint": parameter_fingerprint(contract_snapshot),
         "collectionContract": contract_snapshot,
@@ -72,6 +72,8 @@ def new_collection_summary(contract):
             },
             "details": {"requestStatus": "pending"},
         },
+        "rankingRuns": {},
+        "taskRuns": {},
         "stageCounts": {
             "candidateCount": 0,
             "detailSubmittedCount": 0,
@@ -96,21 +98,6 @@ def collection_contract_matches(summary, contract):
         stored == expected
         and summary.get("parameterFingerprint") == parameter_fingerprint(expected)
     )
-
-
-def new_run_summary(root, filters):
-    """Create the initial state for a single collection run."""
-    del root
-    filters_snapshot = _snapshot(filters)
-    return {
-        "schemaVersion": 1,
-        "runId": uuid.uuid4().hex,
-        "parameterFingerprint": parameter_fingerprint(filters_snapshot),
-        "filters": filters_snapshot,
-        "status": "collecting",
-        "artifacts": {},
-        "nextAction": {"command": "fetch", "allowsRpa": True},
-    }
 
 
 def sha256_file(path):

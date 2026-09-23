@@ -8,11 +8,15 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILL_PATH = ROOT / "SKILL.md"
 OPENAI_YAML_PATH = ROOT / "agents" / "openai.yaml"
 CONNECTOR_PATH = ROOT / "scripts" / "rpa_connector.py"
+METADATA_PATH = ROOT / "metadata.yaml"
 
 
 class AnalysisSkillContractTests(unittest.TestCase):
     def read_skill(self):
         return SKILL_PATH.read_text(encoding="utf-8")
+
+    def test_skill_keeps_the_operating_guide_concise(self):
+        self.assertLessEqual(len(self.read_skill().splitlines()), 170)
 
     def test_frontmatter_identifies_a_standalone_analysis_skill(self):
         skill = self.read_skill()
@@ -20,7 +24,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
 
         self.assertIsNotNone(frontmatter)
         self.assertIn(
-            "name: 云图行业内容榜单分析", frontmatter.group(1)
+            "name: 云图行业素材全景分析", frontmatter.group(1)
         )
         description = re.search(r"^description: (.+)$", frontmatter.group(1), re.MULTILINE)
         self.assertIsNotNone(description)
@@ -33,33 +37,131 @@ class AnalysisSkillContractTests(unittest.TestCase):
 
         self.assertIsNotNone(frontmatter)
         self.assertRegex(frontmatter.group(1), r"(?m)^argument_hint: .+时间范围")
-        self.assertRegex(frontmatter.group(1), r"(?m)^  pre_input: .+时间范围")
+        self.assertIn("生成云图行业素材全景分析报告", frontmatter.group(1))
+        self.assertRegex(frontmatter.group(1), r"(?m)^  pre_input: \|")
         for phrase in (
             "近七天",
             "云图界面",
             "行业",
-            "品牌榜单Top素材数",
             "秒级拆解素材数",
             "默认",
-            "同一时间范围",
+            "同一分析周期",
         ):
             self.assertIn(phrase, skill)
+
+    def test_documents_distinct_collection_and_brand_analysis_counts(self):
+        skill = self.read_skill()
+        frontmatter = re.match(r"\A---\n(.*?)\n---", skill, re.DOTALL)
+
+        self.assertIsNotNone(frontmatter)
+        self.assertNotIn("fetch --target-top-n", frontmatter.group(1))
+        self.assertNotIn("prepare-analysis --brand-top-n", frontmatter.group(1))
+        self.assertIn("秒级拆解素材数默认 10，由批参数 JSON 的 `target_top_n` 控制", skill)
+        self.assertIn("第一部分品牌分析直接使用提取到的行业 TOP1000，并在其中按品牌匹配全部素材", skill)
+        self.assertNotIn("品牌榜单 Top 素材数默认 30", skill)
+        self.assertIn("未完成映射核对时不得启动 RPA 长任务", skill)
+
+    def test_fetch_and_prepare_cli_help_explain_count_ownership(self):
+        result = subprocess.run(
+            [sys.executable, str(CONNECTOR_PATH), "fetch", "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("target_top_n", result.stdout)
+        self.assertIn("candidate_top_n", result.stdout)
+        self.assertIn("second-level breakdown", result.stdout)
+        self.assertIn("not the brand analysis Top N", result.stdout)
+
+        result = subprocess.run(
+            [sys.executable, str(CONNECTOR_PATH), "prepare-analysis", "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotIn("brand Top N", result.stdout)
+        self.assertNotIn("Analysis-only", result.stdout)
+
+    def test_documents_relative_periods_as_yuntu_enums(self):
+        skill = self.read_skill()
+
+        for phrase in (
+            "近7天",
+            "LAST_7_DAYS",
+            "近30天",
+            "LAST_30_DAYS",
+            "不换算为自定义日期",
+        ):
+            self.assertIn(phrase, skill)
+
+    def test_documents_optional_filters_and_generic_user_facing_copy(self):
+        skill = self.read_skill()
+        prompt = (ROOT / "prompts" / "yuntu-analysis-prompt.md").read_text(
+            encoding="utf-8"
+        )
+        metadata = METADATA_PATH.read_text(encoding="utf-8")
+
+        for field in (
+            "rpa_shop",
+            "industry",
+            "date_range",
+            "ranking_metric",
+            "brand_scope",
+            "brands",
+            "ages",
+            "genders",
+            "crowd_groups",
+            "material_list",
+            "detail_top_n",
+        ):
+            self.assertIn(f"__field:{field}__", skill)
+            self.assertIn(f"- key: {field}", metadata)
+        self.assertIn("label: 全行业/指定品牌", metadata)
+        self.assertIn("label: 详情素材数", metadata)
+        self.assertIn(
+            "description: 默认 10；详情请求包含秒级拆解和内容公式字段；如同时生成高光帧图片，再按下方规则提取高光帧图片",
+            metadata,
+        )
+        self.assertIn("品牌范围是 __field:brand_scope__；指定品牌是 __field:brands__", skill)
+        self.assertIn(
+            "年龄筛选：__field:ages__；性别筛选：__field:genders__；八大人群筛选：__field:crowd_groups__",
+            skill,
+        )
+        removed_brand = "\u5c0f\u4ed9\u7096"
+        self.assertNotIn(removed_brand, skill)
+        self.assertNotIn(removed_brand, prompt)
+
+    def test_uses_one_rpa_selector_for_ranking_and_detail(self):
+        skill = self.read_skill()
+        metadata = METADATA_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("__field:rpa_shop__", skill)
+        self.assertIn("- key: rpa_shop\n    type: rpa_shop", metadata)
+        self.assertIn("application_id: RPA_JULIANG_YT_ACCOUNT_PASSWORD", metadata)
+        self.assertIn("rpa_shop.extra.shop_id", skill)
+        self.assertIn("rpa_shop_not_authorized", skill)
+
+    def test_date_range_uses_the_yuntu_t_plus_4_form_policy(self):
+        metadata = METADATA_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("max_policy: t_plus_4", metadata)
+        self.assertIn("结束日期不得晚于采集当天前 4 天", metadata)
 
     def test_requires_the_same_time_range_for_ranking_and_detail(self):
         skill = self.read_skill()
 
-        self.assertIn("榜单和素材详情必须使用同一时间范围", skill)
+        self.assertIn("榜单和素材详情必须使用同一分析周期", skill)
         self.assertRegex(
             skill,
-            r'(?s)--time-range-type "LAST_7_DAYS".{0,80}'
-            r'--detail-date-range-type "LAST_7_DAYS"',
+            r'(?s)"date_type": "LAST_7_DAYS".{0,160}'
+            r'"date_type": "LAST_7_DAYS"',
         )
 
     def test_documents_fixed_connectors_runtime_and_workflow(self):
         skill = self.read_skill()
         for connector in (
             "rpa.conn.juliang.yt.industry.content.rankings.list",
-            "rpa.conn.juliang.yt.industry.content.rankings.detail",
+            "rpa.conn.juliang.yt.industry.content.rankings.details",
         ):
             self.assertIn(connector, skill)
         for environment_variable in (
@@ -82,16 +184,16 @@ class AnalysisSkillContractTests(unittest.TestCase):
         skill = self.read_skill()
         command = "python <skill-root>/scripts/rpa_connector.py"
         for subcommand in (
-            "list-accounts",
             "schema",
             "self-test",
             "fetch",
             "prepare-analysis",
             "render-report",
-            "retry-failed",
-            "retry-unresolved",
         ):
             self.assertIn(f"{command} {subcommand}", skill)
+        dynamic_command = "python <skill-root>/scripts/rpa_dynamic_client.py"
+        for subcommand in ("detail", "list-accounts", "validate"):
+            self.assertIn(f"{dynamic_command} {subcommand}", skill)
 
         result = subprocess.run(
             [sys.executable, str(CONNECTOR_PATH), "fetch", "--help"],
@@ -102,17 +204,14 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         for option in (
             "--shop-id",
-            "--top-n",
+            "--params-json",
+            "--params-file",
             "--output-dir",
-            "--detail-date-range-type",
-            "--detail-custom-start-date",
-            "--detail-custom-end-date",
-            "--industry",
-            "--time-range-type",
-            "--ranking-limit-type",
         ):
             self.assertIn(option, result.stdout)
             self.assertIn(option, skill)
+        for removed_option in ("--top-n", "--industry", "--detail-date-range-type"):
+            self.assertNotIn(removed_option, result.stdout)
         root_help = subprocess.run(
             [sys.executable, str(CONNECTOR_PATH), "--help"],
             check=False,
@@ -120,18 +219,19 @@ class AnalysisSkillContractTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(root_help.returncode, 0, root_help.stderr)
-        self.assertIn("retry-failed", root_help.stdout)
-        self.assertIn("retry-unresolved", root_help.stdout)
+        self.assertNotIn("retry-failed", root_help.stdout)
+        self.assertNotIn("retry-unresolved", root_help.stdout)
+        self.assertNotIn("retry-failed", skill)
+        self.assertNotIn("retry-unresolved", skill)
 
-    def test_documents_long_task_recovery_and_explicit_unresolved_retry(self):
+    def test_documents_long_task_recovery_without_rpa_resubmission(self):
         skill = self.read_skill()
 
         for phrase in (
             "长任务",
             "异步",
-            "300 秒",
+            "3600 秒",
             "unresolvedMaterials",
-            "retry-unresolved",
             "不重复提交",
         ):
             self.assertIn(phrase, skill)
@@ -175,74 +275,77 @@ class AnalysisSkillContractTests(unittest.TestCase):
             skill,
         )
         self.assertIn(
-            "references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_detail.md",
+            "references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_details.md",
             skill,
         )
 
-    def test_documents_rpa_run_state_and_five_section_report_scope(self):
+    def test_documents_html_and_zip_final_delivery(self):
+        skill = self.read_skill()
+
+        for phrase in (
+            "final-report.zip",
+            "HTML 报告",
+            "final-report/` 目录",
+            "同级",
+        ):
+            self.assertIn(phrase, skill)
+
+    def test_report_acceptance_is_automated_without_browser_visual_check(self):
+        skill = self.read_skill()
+
+        self.assertIn("报告验收只执行自动化产物校验", skill)
+        self.assertIn("不要启动实际浏览器", skill)
+        self.assertIn("不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤", skill)
+
+    def test_keeps_operational_rules_and_defers_schema_details(self):
         skill = self.read_skill()
 
         for phrase in (
             "run-summary.json",
             "status --output-dir",
             "参数指纹",
-            "不一致",
             "list_context",
-            "01｜TOP 素材组合结论",
-            "02｜人群洞察",
-            "03｜脚本洞察",
-            "04｜高光画面洞察",
-            "05｜单素材深度分析",
-            "脚本数据：未接入",
-            "点击指数",
-            "最多 5",
-            "portrait",
-            "product",
-            "other",
-            "秒级拆解",
-            "点赞指数",
-            "流失指数",
-            "互动指数",
-            "评论指数",
+            "unresolvedMaterials",
+            "status == success",
+            "prepare-analysis",
+            "attest-analysis",
+            "render-report",
+            "程序化兜底",
+            "脚本和生成的提示词是 schema 权威",
         ):
             self.assertIn(phrase, skill)
         self.assertIn("python <skill-root>/scripts/rpa_connector.py status", skill)
+        self.assertLessEqual(len(skill.splitlines()), 110)
+        self.assertNotIn("industryTop1000Facts", skill)
         self.assertNotIn("--highlight-trends", skill)
 
-    def test_documents_xiaoxian_dun_closed_loop_report(self):
-        skill = self.read_skill()
-        for chapter in (
-            "榜单机会总览",
-            "素材表现对比",
-            "单素材秒级诊断",
-            "竞品创意模式",
-            "小仙炖机会地图",
-            "下一轮实验矩阵",
-        ):
-            self.assertIn(chapter, skill)
-        self.assertIn("Python 字面量", skill)
-        self.assertIn("数据不足以判断", skill)
-        self.assertNotIn("数据范围与可信度", skill)
-        self.assertNotIn("风险与待补数据", skill)
-
-    def test_documents_top_material_combination_and_title_brand_limits(self):
+    def test_documents_slim_analysis_output_and_legacy_json_compatibility(self):
         skill = self.read_skill()
 
-        for phrase in (
-            "TOP 素材组合结论",
-            "同一合并 TOP1000",
-            "标题匹配",
-            "未知品牌",
-            "CPM",
-            "不可相加为 100%",
-            "brandComparisonConclusion",
-            "dataSummary",
-            "peopleSummary",
-            "marketingSummary",
-            "不进入用户可读报告正文",
-        ):
-            self.assertIn(phrase, skill)
-        self.assertNotIn("数据证据以可展开区域保留", skill)
+        self.assertIn("只生成当前报告实际展示的分析模块", skill)
+        self.assertIn("旧版完整 JSON", skill)
+        self.assertIn("额外字段", skill)
+        self.assertIn("兼容渲染", skill)
+        self.assertIn("新批次不再生成 `yuntu-analysis-data.json`", skill)
+        self.assertIn("缺少 `report-data.json`", skill)
+        self.assertIn("历史批次", skill)
+        self.assertIn(
+            "`diagnostic-analysis/yuntu-ai-analysis.schema.json`", skill
+        )
+        self.assertIn("`diagnostic-analysis/yuntu-analysis-prompt.md`", skill)
+        self.assertNotIn(
+            "`diagnostic-analysis/yuntu-analysis-data.json`（完整兼容快照）",
+            skill,
+        )
+
+    def test_requires_current_dialog_model_without_external_model_processes(self):
+        skill = self.read_skill()
+
+        self.assertIn("当前对话模型直接完成", skill)
+        self.assertIn("实际查看全部可用本地 JPEG", skill)
+        for forbidden_route in ("`codex exec`", "子进程", "外部模型服务"):
+            self.assertIn(forbidden_route, skill)
+        self.assertIn("不得仅凭 `--generator`", skill)
 
     def test_openai_metadata_has_required_interface_fields(self):
         metadata = OPENAI_YAML_PATH.read_text(encoding="utf-8")
@@ -250,7 +353,7 @@ class AnalysisSkillContractTests(unittest.TestCase):
         self.assertRegex(metadata, r'(?m)^  display_name: "[^"\n]+"\s*$')
         self.assertRegex(metadata, r'(?m)^  short_description: "[^"\n]+"\s*$')
         self.assertIn(
-            "$云图行业内容榜单分析",
+            "$云图行业素材全景分析",
             metadata,
         )
 

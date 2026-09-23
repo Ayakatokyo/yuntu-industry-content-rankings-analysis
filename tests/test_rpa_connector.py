@@ -1,9 +1,9 @@
 import importlib.util
+import hashlib
 import io
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -46,6 +46,18 @@ class RecordingSession:
         return self.response
 
 
+class SequencedSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.posts = []
+
+    def post(self, url, **kwargs):
+        self.posts.append((url, kwargs))
+        if not self.responses:
+            raise AssertionError("unexpected gateway request")
+        return self.responses.pop(0)
+
+
 class RaisingSession:
     def __init__(self, error):
         self.error = error
@@ -54,21 +66,6 @@ class RaisingSession:
     def post(self, url, **kwargs):
         self.posts.append((url, kwargs))
         raise self.error
-
-
-class SequencedSession:
-    """Offline session that returns or raises each configured outcome in order."""
-
-    def __init__(self, outcomes):
-        self.outcomes = list(outcomes)
-        self.posts = []
-
-    def post(self, url, **kwargs):
-        self.posts.append((url, kwargs))
-        outcome = self.outcomes.pop(0)
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome
 
 
 class RpaConnectorTest(unittest.TestCase):
@@ -83,10 +80,83 @@ class RpaConnectorTest(unittest.TestCase):
             "YUCE_SESSION_ID": "agent-session-123",
         }
 
+    def connector_detail(self, connector_code, params=(), platform="YUNTU_DYNAMIC_PLATFORM"):
+        return {
+            "connectorCode": connector_code,
+            "name": "test connector",
+            "platformCode": platform,
+            "connectionTypeList": ["ACCOUNT_PASSWORD"],
+            "inParamJsonSchemaText": None,
+            "inParamList": [
+                {"param": name, "isRequired": False, "dataTypeEnum": "STRING"}
+                for name in params
+            ],
+            "outParamList": [],
+        }
+
+    def authorized_shop_response(self, shop_id="shop-42"):
+        return FakeResponse({
+            "success": True,
+            "data": [{"platform": "YUNTU_DYNAMIC_PLATFORM", "accountId": shop_id}],
+        })
+
+    def completed_task_session(self, task_group_id, connector_code, params=()):
+        return SequencedSession(
+            [
+                FakeResponse({"success": True, "data": [self.connector_detail(connector_code, params)]}),
+                self.authorized_shop_response(),
+                FakeResponse({"success": True, "data": {"task_group_id": task_group_id}}),
+                FakeResponse({"success": True, "data": {"status": "completed", "payload": []}}),
+            ]
+        )
+
+    def test_runtime_config_accepts_explicit_cookie_session_without_agent_session_id(self):
+        connector = self.connector()
+        environment = {
+            "ENV_BACKEND_HOST": "https://gateway.example/",
+            "YUCE_AUTHORIZATION": "authorization-token",
+            "YCSESSIONID": "cookie-session-456",
+        }
+
+        _api_base, authorization, session_id, cookies = connector.runtime_config(environment)
+
+        self.assertEqual(authorization, "authorization-token")
+        self.assertEqual(session_id, "cookie-session-456")
+        self.assertEqual(cookies, {"YCSESSIONID": "cookie-session-456"})
+
+    def test_legacy_serial_fetch_helpers_are_removed(self):
+        connector = self.connector()
+        for name in (
+            "fetch_analysis",
+            "select_material_ids",
+            "_manifest",
+            "write_json_atomically",
+            "_safe_error_summary",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(connector, name))
+
+    def test_prepare_analysis_cli_passes_hot_material_config(self):
+        connector = self.connector()
+        with mock.patch.object(connector, "prepare_analysis", return_value=0) as prepare:
+            status = connector.main([
+                "prepare-analysis",
+                "--input-dir", "input",
+                "--output-dir", "output",
+                "--hot-material-config", "config/hot-material-rules.json",
+            ])
+
+        self.assertEqual(status, 0)
+        prepare.assert_called_once_with(
+            input_dir="input",
+            output_dir="output",
+            hot_material_config="config/hot-material-rules.json",
+        )
+
     def test_connector_script_exists(self):
         self.assertTrue(SCRIPT_PATH.exists(), "analysis connector has not been implemented")
 
-    def test_fetch_batch_uses_target_plus_two_candidates_by_default(self):
+    def test_fetch_batch_uses_double_target_candidates_by_default(self):
         connector = self.connector()
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             connector, "fetch_batch", return_value=0
@@ -94,43 +164,95 @@ class RpaConnectorTest(unittest.TestCase):
             status = connector.fetch_batch_analysis(
                 "shop-42",
                 {"industry": "食品饮料"},
-                {"date_range_type": "LAST_7_DAYS"},
+                {"date_type": "LAST_7_DAYS"},
                 target_top_n=5,
                 output_dir=directory,
             )
 
         self.assertEqual(status, 0)
-        self.assertEqual(fetch_batch.call_args.kwargs["candidate_top_n"], 7)
+        self.assertEqual(fetch_batch.call_args.kwargs["candidate_top_n"], 10)
 
-    def test_main_dispatches_explicit_unresolved_retry(self):
+    def test_build_ranking_run_specs_shifts_custom_period_and_forces_industry_scope(self):
+        connector = self.connector()
+
+        specs = connector.build_ranking_run_specs(
+            {
+                "industry": "食品饮料",
+                "time_range_type": "CUSTOM",
+                "custom_start_date": "20260810",
+                "custom_end_date": "20260820",
+                "brand_scope_type": "SPECIFIED_BRANDS",
+                "brands": ["小仙炖", "燕之屋", "五个女博士"],
+            }
+        )
+
+        self.assertEqual(set(specs), {"query", "previous_period", "industry"})
+        self.assertEqual(
+            specs["previous_period"]["params"]["custom_start_date"], "20260730"
+        )
+        self.assertEqual(
+            specs["previous_period"]["params"]["custom_end_date"], "20260809"
+        )
+        self.assertEqual(specs["industry"]["params"]["brand_scope_type"], "ALL_INDUSTRY")
+        self.assertNotIn("brands", specs["industry"]["params"])
+        self.assertEqual(
+            specs["query"]["resolvedDateRange"],
+            {"startDate": "2026-08-10", "endDate": "2026-08-20"},
+        )
+
+    def test_batch_invoker_forwards_to_current_public_invocations(self):
         connector = self.connector()
         with mock.patch.object(
-            connector, "retry_unresolved_batch_analysis", return_value=0
-        ) as retry, mock.patch("sys.stdout", new_callable=io.StringIO):
-            status = connector.main(
-                [
-                    "retry-unresolved",
-                    "--shop-id",
-                    "shop-42",
-                    "--output-dir",
-                    "output",
-                ]
+            connector, "invoke_list", return_value={"kind": "list"}
+        ) as invoke_list, mock.patch.object(
+            connector, "invoke_detail", return_value={"kind": "detail"}
+        ) as invoke_detail:
+            invoker = connector._batch_invoker()
+            self.assertEqual(invoker.invoke_list("shop-42", {"page": 1}), {"kind": "list"})
+            self.assertEqual(
+                invoker.invoke_detail("shop-42", {"material_id": "101"}),
+                {"kind": "detail"},
             )
 
-        self.assertEqual(status, 0)
-        retry.assert_called_once_with("shop-42", output_dir="output")
+        invoke_list.assert_called_once_with("shop-42", {"page": 1})
+        invoke_detail.assert_called_once_with("shop-42", {"material_id": "101"})
 
-    def test_fixed_gateway_metadata_cannot_be_overridden(self):
+    def test_batch_invoker_keeps_selection_group_local_to_the_batch(self):
+        connector = self.connector()
+        with mock.patch.object(connector, "invoke_detail", return_value={"kind": "detail"}) as invoke_detail:
+            connector._batch_invoker().invoke_detail(
+                "shop-42",
+                {
+                    "material_id": "101",
+                    "date_type": "LAST_7_DAYS",
+                    "selectionGroupId": "brand-a:feed",
+                    "brandId": "brand-a",
+                },
+            )
+
+        invoke_detail.assert_called_once_with(
+            "shop-42", {"material_id": "101", "date_type": "LAST_7_DAYS"}
+        )
+
+    def test_rpa_retry_commands_are_not_available(self):
+        connector = self.connector()
+        for command in ("retry-failed", "retry-unresolved"):
+            with self.subTest(command=command), self.assertRaises(SystemExit):
+                connector._parser().parse_args(
+                    [command, "--shop-id", "shop-42", "--output-dir", "output"]
+                )
+
+    def test_connector_entrypoints_are_the_only_static_gateway_identity(self):
         connector = self.connector()
         self.assertEqual(
-            connector.LIST_FUNCTION_CODE,
+            connector.LIST_CONNECTOR_CODE,
             "rpa.conn.juliang.yt.industry.content.rankings.list",
         )
         self.assertEqual(
-            connector.DETAIL_FUNCTION_CODE,
-            "rpa.conn.juliang.yt.industry.content.rankings.detail",
+            connector.DETAIL_CONNECTOR_CODE,
+            "rpa.conn.juliang.yt.industry.content.rankings.details",
         )
-        self.assertEqual(connector.PLATFORM, "RPA_JULIANG_YT_ACCOUNT_PASSWORD")
+        self.assertFalse(hasattr(connector, "PLATFORM"))
         self.assertEqual(connector.DATA_SOURCE_TYPE, "rpa")
 
     def test_requirements_declare_requests_for_independent_installation(self):
@@ -185,102 +307,93 @@ class RpaConnectorTest(unittest.TestCase):
             with self.subTest(host=host):
                 environment = self.runtime_environment()
                 environment["ENV_BACKEND_HOST"] = host
-                session = RecordingSession(FakeResponse({"success": True, "data": []}))
+                session = SequencedSession([
+                    FakeResponse({"success": True, "data": [self.connector_detail(
+                        "rpa.conn.juliang.yt.industry.content.rankings.list"
+                    )]}),
+                    FakeResponse({"success": True, "data": []}),
+                ])
 
                 connector.list_accounts(environ=environment, session=session)
 
-                self.assertEqual(session.posts[0][0], expected_url)
+                self.assertEqual(session.posts[1][0], expected_url)
 
-    def test_shanghai_today_uses_the_business_calendar_at_a_timezone_boundary(self):
+    def test_detail_invocation_uses_the_new_code_and_fetch_task_protocol(self):
         connector = self.connector()
-        boundary_instant = datetime(2026, 7, 25, 16, 30, tzinfo=timezone.utc)
+        session = SequencedSession(
+            [
+                FakeResponse({"success": True, "data": [self.connector_detail(
+                    "rpa.conn.juliang.yt.industry.content.rankings.details",
+                    ("material_id", "date_type"),
+                )]}),
+                self.authorized_shop_response(),
+                FakeResponse({"success": True, "data": {"task_group_id": "task-123"}}),
+                FakeResponse({"success": True, "data": {"status": "completed", "files": []}}),
+            ]
+        )
+        with mock.patch.object(connector.time, "sleep") as sleep:
+            result = connector.invoke_detail(
+                shop_id="shop-42",
+                business_params={"material_id": "764", "date_type": "LAST_7_DAYS"},
+                environ=self.runtime_environment(),
+                session=session,
+            )
 
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["task_group_id"], "task-123")
+        self.assertEqual(sleep.call_args.args, (10,))
         self.assertEqual(
-            connector.shanghai_today(boundary_instant).isoformat(), "2026-07-26"
+            session.posts[1][0],
+            "https://gateway.example/adg/v1/agent/rpa/authorizations/query",
         )
-
-    def test_list_validation_normalizes_filters_and_rejects_invalid_values(self):
-        connector = self.connector()
-        params = connector.validate_list_business_params(
-            {
-                "industry": "食品饮料",
-                "time_range_type": "LAST_7_DAYS",
-                "ages": "AGE_24_30,AGE_31_35",
-                "genders": ["FEMALE"],
-                "crowd_groups": '["REFINED_MOM", "NEW_WHITE_COLLAR"]',
-                "brand_scope_type": "SPECIFIED_BRANDS",
-                "brands": "燕之屋,王老吉,Oreo/奥利奥",
-                "ranking_limit_type": "CTR_TOP1000",
-            }
-        )
-        self.assertEqual(params["ages"], ["AGE_24_30", "AGE_31_35"])
-        self.assertEqual(params["brands"], ["燕之屋", "王老吉", "Oreo/奥利奥"])
-        passthrough = connector.validate_list_business_params(
-            {
-                "ages": "18-23,24-30",
-                "genders": ["男"],
-                "crowd_groups": '["都市银发", "小镇中老年"]',
-            }
-        )
-        self.assertEqual(passthrough["ages"], ["18-23", "24-30"])
-        self.assertEqual(passthrough["genders"], ["男"])
-        self.assertEqual(passthrough["crowd_groups"], ["都市银发", "小镇中老年"])
-        invalid_cases = (
-            ({"unrecognized": "value"}, "unexpected"),
-            ({"ages": "AGE_24_30,AGE_24_30"}, "duplicates"),
-            ({"brand_scope_type": "SPECIFIED_BRANDS"}, "brands"),
-        )
-        for raw_params, message in invalid_cases:
-            with self.subTest(raw_params=raw_params):
-                with self.assertRaisesRegex(connector.RpaConnectorError, message):
-                    connector.validate_list_business_params(raw_params)
-
-    def test_detail_validation_requires_a_numeric_material_id_and_consistent_dates(self):
-        connector = self.connector()
         self.assertEqual(
-            connector.validate_detail_business_params(
-                {
-                    "material_id": "764",
-                    "date_range_type": "CUSTOM",
-                    "custom_start_date": "20260701",
-                    "custom_end_date": "2026-07-02",
-                }
-            ),
+            session.posts[1][1]["json"],
+            {"authorization": "authorization-token", "platform": "YUNTU_DYNAMIC_PLATFORM"},
+        )
+        submit_url, submit_options = session.posts[2]
+        self.assertEqual(submit_url, "https://gateway.example/adg/v1/agent/fetch/tasks")
+        self.assertEqual(
+            submit_options["json"],
             {
-                "material_id": "764",
-                "date_range_type": "CUSTOM",
-                "custom_start_date": "20260701",
-                "custom_end_date": "2026-07-02",
+                "authorization": "authorization-token",
+                "agent_session_id": "agent-session-123",
+                "data_source_type": "rpa",
+                "platform": "YUNTU_DYNAMIC_PLATFORM",
+                "function_code": "rpa.conn.juliang.yt.industry.content.rankings.details",
+                "business_params": {"material_id": "764", "date_type": "LAST_7_DAYS"},
+                "shop_id": "shop-42",
             },
         )
-        invalid_cases = (
-            ({"material_id": "not-an-id", "date_range_type": "LAST_7_DAYS"}, "material_id"),
-            ({"material_id": "764", "date_range_type": "LAST_90_DAYS"}, "date_range_type"),
-            ({"material_id": "764", "date_range_type": "CUSTOM"}, "CUSTOM requires"),
-            ({"material_id": "764", "date_range_type": "LAST_7_DAYS", "custom_start_date": "20260701"}, "CUSTOM"),
-            ({"material_id": "764", "date_range_type": "CUSTOM", "custom_start_date": "20260702", "custom_end_date": "20260701"}, "earlier"),
+        self.assertEqual(
+            session.posts[3][0],
+            "https://gateway.example/adg/v1/agent/fetch/tasks/status",
         )
-        for raw_params, message in invalid_cases:
-            with self.subTest(raw_params=raw_params):
-                with self.assertRaisesRegex(connector.RpaConnectorError, message):
-                    connector.validate_detail_business_params(raw_params)
+        self.assertEqual(
+            session.posts[3][1]["json"],
+            {"authorization": "authorization-token", "task_group_id": "task-123"},
+        )
 
-    def test_list_accounts_uses_a_fixed_platform_payload(self):
+    def test_list_accounts_uses_the_live_platform_payload(self):
         connector = self.connector()
-        session = RecordingSession(FakeResponse({"success": True, "data": []}))
+        session = SequencedSession([
+            FakeResponse({"success": True, "data": [self.connector_detail(
+                "rpa.conn.juliang.yt.industry.content.rankings.list"
+            )]}),
+            FakeResponse({"success": True, "data": []}),
+        ])
         self.assertEqual(
             connector.list_accounts(environ=self.runtime_environment(), session=session),
             {"success": True, "data": []},
         )
         self.assertEqual(
-            session.posts,
+            session.posts[1:],
             [
                 (
                     "https://gateway.example/adg/v1/agent/rpa/authorizations/query",
                     {
                         "json": {
                             "authorization": "authorization-token",
-                            "platform": "RPA_JULIANG_YT_ACCOUNT_PASSWORD",
+                            "platform": "YUNTU_DYNAMIC_PLATFORM",
                         },
                         "headers": {"Content-Type": "application/json"},
                         "cookies": {"YCSESSIONID": "authorization-token"},
@@ -290,32 +403,60 @@ class RpaConnectorTest(unittest.TestCase):
             ],
         )
 
-    def test_separate_list_and_detail_invocations_use_fixed_payloads(self):
+    def test_list_accounts_prefers_explicit_cookie_session_for_gateway_authentication(self):
         connector = self.connector()
-        list_session = RecordingSession(FakeResponse({"success": True, "data": {}}))
-        detail_session = RecordingSession(FakeResponse({"success": True, "data": {}}))
+        environment = self.runtime_environment()
+        environment["YCSESSIONID"] = "cookie-session-456"
+        session = SequencedSession([
+            FakeResponse({"success": True, "data": [self.connector_detail(
+                "rpa.conn.juliang.yt.industry.content.rankings.list"
+            )]}),
+            FakeResponse({"success": True, "data": []}),
+        ])
+
+        connector.list_accounts(environ=environment, session=session)
+
+        self.assertEqual(session.posts[1][1]["cookies"], {"YCSESSIONID": "cookie-session-456"})
+
+    def test_separate_list_and_detail_invocations_use_live_contract_payloads(self):
+        connector = self.connector()
+        list_session = self.completed_task_session(
+            "list-task",
+            "rpa.conn.juliang.yt.industry.content.rankings.list",
+            ("industry",),
+        )
+        detail_session = self.completed_task_session(
+            "detail-task",
+            "rpa.conn.juliang.yt.industry.content.rankings.details",
+            ("material_id", "date_type"),
+        )
         environment = self.runtime_environment()
 
-        connector.invoke_list(
-            shop_id=" shop-42 ",
-            business_params={"industry": "食品饮料"},
-            environ=environment,
-            session=list_session,
-        )
-        connector.invoke_detail(
-            shop_id=" shop-42 ",
-            business_params={"material_id": "764", "date_range_type": "LAST_7_DAYS"},
-            environ=environment,
-            session=detail_session,
-        )
+        with mock.patch.object(connector.time, "sleep"):
+            connector.invoke_list(
+                shop_id=" shop-42 ",
+                business_params={"industry": "食品饮料"},
+                environ=environment,
+                session=list_session,
+            )
+            connector.invoke_detail(
+                shop_id=" shop-42 ",
+                business_params={"material_id": "764", "date_type": "LAST_7_DAYS"},
+                environ=environment,
+                session=detail_session,
+            )
 
         for session, function_code, params in (
-            (list_session, connector.LIST_FUNCTION_CODE, {"industry": "食品饮料"}),
-            (detail_session, connector.DETAIL_FUNCTION_CODE, {"material_id": "764", "date_range_type": "LAST_7_DAYS"}),
+            (list_session, connector.LIST_CONNECTOR_CODE, {"industry": "食品饮料"}),
+            (detail_session, connector.DETAIL_CONNECTOR_CODE, {"material_id": "764", "date_type": "LAST_7_DAYS"}),
         ):
-            self.assertEqual(len(session.posts), 1)
-            url, options = session.posts[0]
-            self.assertEqual(url, "https://gateway.example/adg/v1/agent/invoke")
+            self.assertEqual(len(session.posts), 4)
+            self.assertEqual(
+                session.posts[1][0],
+                "https://gateway.example/adg/v1/agent/rpa/authorizations/query",
+            )
+            url, options = session.posts[2]
+            self.assertEqual(url, "https://gateway.example/adg/v1/agent/fetch/tasks")
             self.assertEqual(
                 options,
                 {
@@ -323,93 +464,20 @@ class RpaConnectorTest(unittest.TestCase):
                         "authorization": "authorization-token",
                         "agent_session_id": "agent-session-123",
                         "data_source_type": "rpa",
-                        "platform": "RPA_JULIANG_YT_ACCOUNT_PASSWORD",
+                        "platform": "YUNTU_DYNAMIC_PLATFORM",
                         "function_code": function_code,
                         "business_params": params,
                         "shop_id": "shop-42",
                     },
                     "headers": {"Content-Type": "application/json"},
                     "cookies": {"YCSESSIONID": "authorization-token"},
-                    "timeout": 3600,
+                    "timeout": 30,
                 },
             )
-
-    def test_rebound_exported_metadata_cannot_change_gateway_payloads(self):
-        connector = self.connector()
-        original_values = {
-            "LIST_FUNCTION_CODE": connector.LIST_FUNCTION_CODE,
-            "DETAIL_FUNCTION_CODE": connector.DETAIL_FUNCTION_CODE,
-            "PLATFORM": connector.PLATFORM,
-            "DATA_SOURCE_TYPE": connector.DATA_SOURCE_TYPE,
-        }
-        list_session = RecordingSession(FakeResponse({"success": True, "data": {}}))
-        detail_session = RecordingSession(FakeResponse({"success": True, "data": {}}))
-        accounts_session = RecordingSession(FakeResponse({"success": True, "data": []}))
-        try:
-            connector.LIST_FUNCTION_CODE = "rpa.conn.attacker.list"
-            connector.DETAIL_FUNCTION_CODE = "rpa.conn.attacker.detail"
-            connector.PLATFORM = "ATTACKER_PLATFORM"
-            connector.DATA_SOURCE_TYPE = "attacker"
-
-            connector.invoke_list(
-                "shop-42", {}, environ=self.runtime_environment(), session=list_session
+            self.assertEqual(
+                session.posts[3][0],
+                "https://gateway.example/adg/v1/agent/fetch/tasks/status",
             )
-            connector.invoke_detail(
-                "shop-42",
-                {"material_id": "764", "date_range_type": "LAST_7_DAYS"},
-                environ=self.runtime_environment(),
-                session=detail_session,
-            )
-            connector.list_accounts(
-                environ=self.runtime_environment(), session=accounts_session
-            )
-        finally:
-            for name, value in original_values.items():
-                setattr(connector, name, value)
-
-        self.assertEqual(
-            list_session.posts[0][1]["json"]["function_code"],
-            "rpa.conn.juliang.yt.industry.content.rankings.list",
-        )
-        self.assertEqual(
-            detail_session.posts[0][1]["json"]["function_code"],
-            "rpa.conn.juliang.yt.industry.content.rankings.detail",
-        )
-        self.assertEqual(
-            list_session.posts[0][1]["json"]["platform"],
-            "RPA_JULIANG_YT_ACCOUNT_PASSWORD",
-        )
-        self.assertEqual(
-            detail_session.posts[0][1]["json"]["platform"],
-            "RPA_JULIANG_YT_ACCOUNT_PASSWORD",
-        )
-        self.assertEqual(list_session.posts[0][1]["json"]["data_source_type"], "rpa")
-        self.assertEqual(detail_session.posts[0][1]["json"]["data_source_type"], "rpa")
-        self.assertEqual(
-            accounts_session.posts[0][1]["json"]["platform"],
-            "RPA_JULIANG_YT_ACCOUNT_PASSWORD",
-        )
-
-    def test_public_list_wrapper_ignores_mutable_function_code_attributes(self):
-        connector = self.connector()
-        malicious_code = "rpa.conn.attacker.control"
-        if hasattr(connector, "FUNCTION_CODES_BY_OPERATION"):
-            connector.FUNCTION_CODES_BY_OPERATION["list"] = malicious_code
-        else:
-            setattr(connector, "FUNCTION_CODES_BY_OPERATION", {"list": malicious_code})
-        session = RecordingSession(FakeResponse({"success": True, "data": {}}))
-
-        connector.invoke_list(
-            shop_id="shop-42",
-            business_params={},
-            environ=self.runtime_environment(),
-            session=session,
-        )
-
-        self.assertEqual(
-            session.posts[0][1]["json"]["function_code"],
-            "rpa.conn.juliang.yt.industry.content.rankings.list",
-        )
 
     def test_internal_dispatch_rejects_an_arbitrary_function_code(self):
         connector = self.connector()
@@ -434,7 +502,7 @@ class RpaConnectorTest(unittest.TestCase):
         ):
             with self.subTest(session=type(session).__name__), tempfile.TemporaryDirectory() as temporary_directory:
                 output = Path(temporary_directory) / "result.json"
-                with self.assertRaisesRegex(connector.RpaConnectorError, "fetch RPA list|unsuccessful") as context:
+                with self.assertRaisesRegex(connector.RpaConnectorError, "connector detail|unsuccessful") as context:
                     connector.invoke_list(
                         shop_id="shop-42",
                         business_params={},
@@ -443,190 +511,6 @@ class RpaConnectorTest(unittest.TestCase):
                     )
                 self.assertNotIn("authorization-token", str(context.exception))
                 self.assertFalse(output.exists())
-
-    def test_write_json_atomically_preserves_existing_file_when_replace_fails(self):
-        connector = self.connector()
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "nested" / "result.json"
-            output.parent.mkdir()
-            output.write_text(json.dumps({"existing": True}), encoding="utf-8")
-            with mock.patch.object(connector.os, "replace", side_effect=OSError("replace failed")):
-                with self.assertRaisesRegex(connector.RpaConnectorError, "write"):
-                    connector.write_json_atomically({"new": True}, output)
-            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), {"existing": True})
-            self.assertEqual(list(output.parent.glob("*.tmp")), [])
-
-    def test_extract_material_ids_is_recursive_order_preserving_and_top_n_bounded(self):
-        connector = self.connector()
-        payload = {
-            "data": {
-                "items": [
-                    {"material_id": "101"},
-                    {"nested": [{"material_id": "202"}, {"material_id": "101"}]},
-                    {"material_id": 303},
-                    {"material_id": "not-numeric"},
-                    {"material_id": "004"},
-                    {"other": {"material_id": "505"}},
-                ]
-            }
-        }
-        self.assertEqual(connector.select_material_ids(payload, top_n=3), ["101", "202", "004"])
-        self.assertEqual(connector.select_material_ids(payload, top_n=10), ["101", "202", "004", "505"])
-        for invalid_top_n in (0, -1, True, "3"):
-            with self.subTest(top_n=invalid_top_n):
-                with self.assertRaisesRegex(connector.RpaConnectorError, "top_n"):
-                    connector.select_material_ids(payload, top_n=invalid_top_n)
-
-    def test_fetch_analysis_uses_default_top_n_and_fixed_list_detail_payloads(self):
-        connector = self.connector()
-        list_result = {
-            "success": True,
-            "data": {"items": [{"material_id": "11"}, {"material_id": "12"}, {"material_id": "13"}]},
-        }
-        session = SequencedSession(
-            [
-                FakeResponse(list_result),
-                FakeResponse({"success": True, "data": {"id": "11"}}),
-                FakeResponse({"success": True, "data": {"id": "12"}}),
-                FakeResponse({"success": True, "data": {"id": "13"}}),
-            ]
-        )
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "analysis"
-            status = connector.fetch_analysis(
-                shop_id="shop-42",
-                raw_list_params={"industry": "食品饮料"},
-                raw_detail_params={"date_range_type": "LAST_7_DAYS"},
-                output_dir=output,
-                environ=self.runtime_environment(),
-                session=session,
-            )
-
-            self.assertEqual(status, 0)
-            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["filters"], {"industry": "食品饮料"})
-            self.assertEqual(manifest["list_response_path"], "list-response.json")
-            self.assertEqual(manifest["selected_material_ids"], ["11", "12", "13"])
-            self.assertEqual([item["status"] for item in manifest["details"]], ["success", "success", "success"])
-            self.assertTrue((output / "list-response.json").exists())
-            self.assertTrue((output / "details" / "11.json").exists())
-            self.assertEqual(len(session.posts), 4)
-            self.assertEqual(session.posts[0][1]["json"]["function_code"], connector.LIST_FUNCTION_CODE)
-            self.assertTrue(all(post[1]["json"]["function_code"] == connector.DETAIL_FUNCTION_CODE for post in session.posts[1:]))
-
-    def test_fetch_analysis_deduplicates_valid_ids_in_response_order_and_honors_explicit_top_n(self):
-        connector = self.connector()
-        session = SequencedSession(
-            [
-                FakeResponse({"success": True, "data": {"items": [{"material_id": "11"}, {"material_id": "11"}, {"material_id": 12}, {"material_id": "bad"}, {"material_id": "004"}, {"material_id": "22"}]}}),
-                FakeResponse({"success": True, "data": {}}),
-                FakeResponse({"success": True, "data": {}}),
-            ]
-        )
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "analysis"
-            status = connector.fetch_analysis(
-                "shop-42",
-                {},
-                {"date_range_type": "LAST_30_DAYS"},
-                top_n=2,
-                output_dir=output,
-                environ=self.runtime_environment(),
-                session=session,
-            )
-            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-
-        self.assertEqual(status, 0)
-        self.assertEqual(manifest["selected_material_ids"], ["11", "004"])
-        self.assertEqual([post[1]["json"]["business_params"]["material_id"] for post in session.posts[1:]], ["11", "004"])
-
-    def test_fetch_analysis_stops_after_list_failure_or_missing_ids_and_writes_safe_manifest(self):
-        connector = self.connector()
-        cases = (
-            ("list-failure", [FakeResponse({"success": False})], False),
-            ("missing-ids", [FakeResponse({"success": True, "data": {"items": [{"material_id": "bad"}]}})], True),
-        )
-        for name, outcomes, list_file_expected in cases:
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary_directory:
-                output = Path(temporary_directory) / "analysis"
-                session = SequencedSession(outcomes)
-                status = connector.fetch_analysis(
-                    "shop-42",
-                    {"industry": "食品饮料"},
-                    {"date_range_type": "LAST_7_DAYS"},
-                    output_dir=output,
-                    environ=self.runtime_environment(),
-                    session=session,
-                )
-                manifest_text = (output / "manifest.json").read_text(encoding="utf-8")
-                manifest = json.loads(manifest_text)
-
-                self.assertEqual(status, 1)
-                self.assertEqual(len(session.posts), 1)
-                self.assertEqual((output / "list-response.json").exists(), list_file_expected)
-                self.assertEqual(manifest["details"], [])
-                self.assertEqual(manifest["selected_material_ids"], [])
-                self.assertIn(manifest["status"], {"list_failed", "no_material_ids"})
-                self.assertNotIn("authorization-token", manifest_text)
-                self.assertNotIn("agent-session-123", manifest_text)
-
-    def test_fetch_analysis_continues_after_detail_failures_and_leaves_no_temporary_outputs(self):
-        connector = self.connector()
-        session = SequencedSession(
-            [
-                FakeResponse({"success": True, "data": {"items": [{"material_id": "11"}, {"material_id": "22"}, {"material_id": "33"}]}}),
-                RaisingSession(RuntimeError("authorization-token agent-session-123 unavailable")).error,
-                FakeResponse({"success": True, "data": {"id": "22"}}),
-                FakeResponse({"success": False, "error": "authorization-token"}),
-            ]
-        )
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "analysis"
-            status = connector.fetch_analysis(
-                "shop-42",
-                {},
-                {"date_range_type": "LAST_7_DAYS"},
-                top_n=3,
-                output_dir=output,
-                environ=self.runtime_environment(),
-                session=session,
-            )
-            manifest_text = (output / "manifest.json").read_text(encoding="utf-8")
-            manifest = json.loads(manifest_text)
-
-            self.assertEqual(status, 1)
-            self.assertEqual([item["status"] for item in manifest["details"]], ["failed", "success", "failed"])
-            self.assertTrue((output / "details" / "22.json").exists())
-            self.assertFalse((output / "details" / "11.json").exists())
-            self.assertFalse((output / "details" / "33.json").exists())
-            self.assertEqual(list(output.rglob("*.tmp")), [])
-            self.assertNotIn("authorization-token", manifest_text)
-            self.assertNotIn("agent-session-123", manifest_text)
-            self.assertEqual(len(session.posts), 4)
-
-    def test_fetch_analysis_validates_every_input_before_any_network_request(self):
-        connector = self.connector()
-        session = SequencedSession([])
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "analysis"
-            invalid_cases = (
-                ({"industry": ""}, {"date_range_type": "LAST_7_DAYS"}, 1),
-                ({}, {"date_range_type": "LAST_90_DAYS"}, 1),
-                ({}, {"date_range_type": "LAST_7_DAYS"}, 0),
-            )
-            for list_params, detail_params, top_n in invalid_cases:
-                with self.subTest(list_params=list_params, detail_params=detail_params, top_n=top_n):
-                    with self.assertRaises(connector.RpaConnectorError):
-                        connector.fetch_analysis(
-                            "shop-42",
-                            list_params,
-                            detail_params,
-                            top_n=top_n,
-                            output_dir=output,
-                            environ=self.runtime_environment(),
-                            session=session,
-                        )
-            self.assertEqual(session.posts, [])
 
     def test_main_prepare_analysis_uses_fixed_standard_highlight_selection(self):
         connector = self.connector()
@@ -642,7 +526,7 @@ class RpaConnectorTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(
             prepare.call_args.kwargs,
-            {"input_dir": "in", "output_dir": "out", "brand_top_n": 30},
+            {"input_dir": "in", "output_dir": "out"},
         )
 
     def test_main_status_reads_local_collection_state_without_runtime_credentials(self):
@@ -735,6 +619,123 @@ class RpaConnectorTest(unittest.TestCase):
 
         self.assertEqual(receipt["analysisSource"], "model_generated")
 
+    def test_analysis_unit_manifest_receipt_rejects_a_tampered_unit(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            unit_dir = root / "analysis-units"
+            unit_dir.mkdir()
+            analysis_path = root / "yuntu-ai-analysis.json"
+            prompt_path = root / "yuntu-analysis-prompt.md"
+            report_path = root / "report-data.json"
+            unit_path = unit_dir / "ranking-brand-input.json"
+            manifest_path = unit_dir / "analysis-unit-manifest.json"
+            analysis_path.write_text(
+                json.dumps(
+                    {
+                        "topMaterialCombination": {
+                            "executiveSummary": {
+                                "summary": "模型综合结论",
+                                "evidence": [{"metric": "exposure", "value": 1}],
+                                "material_ids": ["1"],
+                            },
+                            "brandConclusions": [],
+                            "brandComparisonConclusion": {
+                                "summary": "模型品牌比较结论",
+                                "evidence": [
+                                    {"brand": "示例品牌", "metric": "exposure", "value": 1}
+                                ],
+                                "material_ids": ["1"],
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            prompt_path.write_text("prompt", encoding="utf-8")
+            report_path.write_text("{}", encoding="utf-8")
+            unit_path.write_text('{"evidence":{}}', encoding="utf-8")
+            digest = hashlib.sha256(unit_path.read_bytes()).hexdigest()
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "executionMode": "single_model_call",
+                        "units": [
+                            {
+                                "path": "analysis-units/ranking-brand-input.json",
+                                "bytes": unit_path.stat().st_size,
+                                "sha256": digest,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            receipt_path = connector.attest_analysis(
+                analysis_json=analysis_path,
+                fact_pack_json=manifest_path,
+                prompt_path=prompt_path,
+                source="model_generated",
+                generator="codex",
+            )
+            unit_path.write_text('{"evidence":{"changed":true}}', encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                connector.YuntuAnalysisProvenanceError,
+                "analysis unit does not match manifest",
+            ):
+                connector.load_verified_provenance(
+                    analysis_json=analysis_path,
+                    provenance_path=receipt_path,
+                )
+
+    def test_attest_analysis_validates_single_call_output_before_writing_receipt(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            unit_dir = root / "analysis-units"
+            unit_dir.mkdir()
+            analysis_path = root / "yuntu-ai-analysis.json"
+            prompt_path = root / "yuntu-analysis-prompt.md"
+            report_path = root / "report-data.json"
+            unit_path = unit_dir / "ranking-brand-input.json"
+            manifest_path = unit_dir / "analysis-unit-manifest.json"
+            analysis_path.write_text("{}", encoding="utf-8")
+            prompt_path.write_text("prompt", encoding="utf-8")
+            report_path.write_text("{}", encoding="utf-8")
+            unit_path.write_text('{"evidence":{}}', encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "executionMode": "single_model_call",
+                        "units": [
+                            {
+                                "path": "analysis-units/ranking-brand-input.json",
+                                "bytes": unit_path.stat().st_size,
+                                "sha256": hashlib.sha256(unit_path.read_bytes()).hexdigest(),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                connector.YuntuAnalysisProvenanceError,
+                "analysis validation failed",
+            ):
+                connector.attest_analysis(
+                    analysis_json=analysis_path,
+                    fact_pack_json=manifest_path,
+                    prompt_path=prompt_path,
+                    source="model_generated",
+                    generator="current-dialog-model",
+                )
+
+            self.assertFalse(
+                (root / "yuntu-ai-analysis.provenance.json").exists()
+            )
+
     def test_render_command_passes_verified_model_source_to_renderer(self):
         connector = self.connector()
         with tempfile.TemporaryDirectory() as directory, mock.patch(
@@ -772,6 +773,91 @@ class RpaConnectorTest(unittest.TestCase):
             render.call_args.kwargs["analysis_provenance"]["analysisSource"],
             "manual_model_generated",
         )
+
+    def test_render_command_prefers_report_projection_when_no_fact_pack_is_given(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ):
+            root = Path(directory)
+            analysis_path = root / "yuntu-ai-analysis.json"
+            complete_path = root / "yuntu-analysis-data.json"
+            report_path = root / "report-data.json"
+            prompt_path = root / "yuntu-analysis-prompt.md"
+            analysis_path.write_text("{}", encoding="utf-8")
+            complete_path.write_text('{"source":"complete"}', encoding="utf-8")
+            report_path.write_text('{"source":"report"}', encoding="utf-8")
+            prompt_path.write_text("prompt", encoding="utf-8")
+            connector.main(
+                [
+                    "attest-analysis",
+                    "--analysis-json", str(analysis_path),
+                    "--fact-pack-json", str(complete_path),
+                    "--prompt", str(prompt_path),
+                    "--source", "model_generated",
+                    "--generator", "codex",
+                ]
+            )
+            with mock.patch.object(connector, "render_report", return_value=0) as render:
+                status = connector.main(
+                    [
+                        "render-report",
+                        "--analysis-json", str(analysis_path),
+                        "--output-dir", str(root / "report"),
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(render.call_args.kwargs["fact_pack"], {"source": "report"})
+        self.assertEqual(render.call_args.kwargs["highlight_asset_root"], root.parent)
+
+    def test_render_command_uses_report_projection_without_complete_snapshot(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "yuntu-ai-analysis.json"
+            report_path = root / "report-data.json"
+            analysis_path.write_text("{}", encoding="utf-8")
+            report_path.write_text('{"source":"report-only"}', encoding="utf-8")
+            with mock.patch.object(
+                connector, "load_verified_provenance", return_value={}
+            ), mock.patch.object(connector, "render_report", return_value=0) as render:
+                status = connector.main(
+                    [
+                        "render-report",
+                        "--analysis-json", str(analysis_path),
+                        "--output-dir", str(root / "report"),
+                    ]
+                )
+            complete_snapshot_exists = (root / "yuntu-analysis-data.json").exists()
+
+        self.assertEqual(status, 0)
+        self.assertFalse(complete_snapshot_exists)
+        self.assertEqual(
+            render.call_args.kwargs["fact_pack"], {"source": "report-only"}
+        )
+
+    def test_render_command_falls_back_to_complete_fact_pack_for_legacy_batches(self):
+        connector = self.connector()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "yuntu-ai-analysis.json"
+            complete_path = root / "yuntu-analysis-data.json"
+            analysis_path.write_text("{}", encoding="utf-8")
+            complete_path.write_text('{"source":"complete"}', encoding="utf-8")
+            with mock.patch.object(
+                connector, "load_verified_provenance", return_value={}
+            ), mock.patch.object(connector, "render_report", return_value=0) as render:
+                status = connector.main(
+                    [
+                        "render-report",
+                        "--analysis-json", str(analysis_path),
+                        "--output-dir", str(root / "report"),
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(render.call_args.kwargs["fact_pack"], {"source": "complete"})
 
     def test_programmatic_fallback_analysis_is_disabled(self):
         connector = self.connector()

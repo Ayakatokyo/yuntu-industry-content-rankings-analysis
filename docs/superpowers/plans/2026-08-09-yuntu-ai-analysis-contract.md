@@ -133,7 +133,7 @@ Update `deep_dive_analysis()` so every deep dive includes:
 "peak_frame_reading": "点击峰值秒点展示产品与人物同框的画面。",
 "second_level_reading": "五类指数只按已返回秒级点位作描述。",
 "audience_fit": "人群标签与画面主题的匹配仅为待验证判断。",
-"xiaoxian_dun_reference": "小仙炖可测试产品主体和日常场景的组合。",
+"replication_advice": "目标品牌可测试产品主体和日常场景的组合。",
 "do_not_copy": "不直接照搬健康功效或特定人群承诺。",
 ```
 
@@ -204,7 +204,7 @@ DEEP_DIVE_SUMMARY_FIELDS = (
     "visual_summary", "data_summary", "audience_summary", "marketing_summary",
     "replication_advice", "risk_notes", "opening_judgment", "visual_rhythm",
     "peak_frame_reading", "second_level_reading", "audience_fit",
-    "xiaoxian_dun_reference", "do_not_copy",
+    "replication_advice", "do_not_copy",
 )
 ```
 
@@ -275,7 +275,7 @@ for heading, key in (
     ("风险提示", "risk_notes"),
     ("开场判断", "opening_judgment"), ("画面节奏", "visual_rhythm"),
     ("峰值帧解读", "peak_frame_reading"), ("秒级关系", "second_level_reading"),
-    ("人群匹配", "audience_fit"), ("小仙炖借鉴", "xiaoxian_dun_reference"),
+    ("人群匹配", "audience_fit"), ("目标品牌借鉴", "replication_advice"),
     ("不建议照搬", "do_not_copy"),
 ):
     lines.extend([f"#### {heading}", "", dive[key], ""])

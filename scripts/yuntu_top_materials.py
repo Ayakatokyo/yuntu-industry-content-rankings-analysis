@@ -1,6 +1,8 @@
 """Build post-RPA facts for the TOP material combination report block."""
 
 from statistics import median
+import re
+import unicodedata
 
 
 BRAND_RULES = (
@@ -54,6 +56,28 @@ def _runtime_brand_rules(brands):
     return tuple(rules)
 
 
+def _classification_brands(classification):
+    """Normalize single- and multi-brand classification results."""
+    if not isinstance(classification, dict):
+        return []
+    values = classification.get("matchedBrands")
+    if isinstance(values, list):
+        return [str(value) for value in values if str(value).strip()]
+    value = classification.get("value")
+    return [str(value)] if isinstance(value, str) and value not in {"未知品牌", "歧义品牌"} else []
+
+
+def _brand_token_matches(text, token):
+    normalized_text = unicodedata.normalize("NFKC", text).casefold()
+    normalized_token = unicodedata.normalize("NFKC", token).casefold()
+    if normalized_token in normalized_text:
+        return True
+    # Observed in the source data: 九阳自律豆浆 omits the configured 豆浆 suffix.
+    if normalized_token == "九阳豆浆":
+        return bool(re.search(r"九阳[^\s#，。！？]{0,6}豆浆", normalized_text))
+    return False
+
+
 def classify_brand(title, *, brands=None):
     """Classify a title using only the current run's user-provided brands."""
     if brands is None:
@@ -62,16 +86,16 @@ def classify_brand(title, *, brands=None):
     else:
         rules = _runtime_brand_rules(brands)
         source = "runtime_title_rule"
-    text = str(title or "").casefold()
+    text = str(title or "")
     matches = [
         brand
         for brand, keywords in rules
-        if any(keyword.casefold() in text for keyword in keywords)
+        if any(_brand_token_matches(text, keyword) for keyword in keywords)
     ]
     if len(matches) == 1:
         return {"value": matches[0], "source": source}
     if len(matches) > 1:
-        return {"value": "歧义品牌", "source": "ambiguous"}
+        return {"value": matches, "matchedBrands": matches, "source": source}
     return {"value": "未知品牌", "source": "unclassified"}
 
 
@@ -205,30 +229,44 @@ def build_audience_dashboard(records, *, limit=1000):
     }
 
 
+MARKETING_TAXONOMY_VERSION = 2
+
+
+def parse_marketing_tag(raw_tag):
+    """Split one material tag into its first- and second-level labels."""
+    raw = str(raw_tag or "")
+    tag = raw.strip()
+    if not tag:
+        return {"category": "其他", "tag": "", "rawTag": raw}
+    if "_" not in tag:
+        return {"category": "其他", "tag": tag, "rawTag": raw}
+    category, secondary = tag.split("_", 1)
+    return {
+        "category": category.strip() or "其他",
+        "tag": secondary.strip(),
+        "rawTag": raw,
+    }
+
+
 def _marketing_category(tag):
-    if tag.startswith("成分配方原料_"):
-        return "成分/原料"
-    if tag.startswith("功效功能_"):
-        return "功效"
-    if tag.startswith("痛点_"):
-        return "痛点"
-    if tag.startswith("使用场景_"):
-        return "使用场景"
-    if any(token in tag for token in ("口播", "商品展示", "图文", "情景", "动画", "无语音")):
-        return "内容形式"
-    if any(token in tag for token in ("优惠", "价格", "赠送", "限时", "抢购", "折", "划算", "促销")):
-        return "促销利益"
-    return "其他"
+    """Return the first-level label using the current hierarchy contract."""
+    return parse_marketing_tag(tag)["category"]
 
 
 def _marketing_summary(records):
-    categories = {name: {} for name in ("成分/原料", "功效", "痛点", "使用场景", "内容形式", "促销利益", "其他")}
+    categories = {}
     total_exposure = sum(record["metrics"]["show_cnt"] for record in records)
     for record in records:
         for tag in record.get("material_tags", []):
-            if not isinstance(tag, str) or not tag:
+            if not isinstance(tag, str) or not tag.strip():
                 continue
-            item = categories[_marketing_category(tag)].setdefault(tag, {"materialIds": [], "exposure": 0})
+            parsed = parse_marketing_tag(tag)
+            category = parsed["category"]
+            raw_tag = parsed["rawTag"]
+            item = categories.setdefault(category, {}).setdefault(
+                raw_tag,
+                {"tag": parsed["tag"], "materialIds": [], "exposure": 0},
+            )
             if record["material_id"] not in item["materialIds"]:
                 item["materialIds"].append(record["material_id"])
                 item["exposure"] += record["metrics"]["show_cnt"]
@@ -236,6 +274,8 @@ def _marketing_summary(records):
         category: [
             {
                 "rawTag": tag,
+                "category": category,
+                "tag": item["tag"],
                 "materialCount": len(item["materialIds"]),
                 "materialIds": item["materialIds"],
                 "exposure": item["exposure"],
@@ -254,6 +294,7 @@ def build_marketing_dashboard(records, *, limit=1000):
     tag_material_ids = {}
     category_counts = {}
     category_material_ids = {}
+    parsed_tags = {}
     labeled_record_ids = set()
     for record in selected:
         material_id = record.get("material_id")
@@ -262,10 +303,12 @@ def build_marketing_dashboard(records, *, limit=1000):
             if not isinstance(tag, str) or not tag.strip():
                 continue
             has_marketing_tag = True
-            tag = tag.strip()
-            tag_counts[tag] = tag_counts.get(tag, 0) + 1
-            tag_material_ids.setdefault(tag, set()).add(material_id)
-            category = _marketing_category(tag)
+            parsed = parse_marketing_tag(tag)
+            raw_tag = parsed["rawTag"]
+            parsed_tags[raw_tag] = parsed
+            tag_counts[raw_tag] = tag_counts.get(raw_tag, 0) + 1
+            tag_material_ids.setdefault(raw_tag, set()).add(material_id)
+            category = parsed["category"]
             category_counts[category] = category_counts.get(category, 0) + 1
             category_material_ids.setdefault(category, set()).add(material_id)
         if has_marketing_tag and material_id is not None:
@@ -279,7 +322,8 @@ def build_marketing_dashboard(records, *, limit=1000):
     ):
         category_tags = [
             {
-                "tag": tag,
+                "tag": parsed_tags[tag]["tag"],
+                "rawTag": tag,
                 "count": count,
                 "materialCount": len(tag_material_ids.get(tag, set())),
             }
@@ -301,6 +345,7 @@ def build_marketing_dashboard(records, *, limit=1000):
         )
     return {
         "labelMode": "marketing_tag_category_share",
+        "taxonomyVersion": MARKETING_TAXONOMY_VERSION,
         "recordCount": len(selected),
         "labeledRecordCount": len(labeled_record_ids),
         "unlabeledRecordCount": len(selected) - len(labeled_record_ids),
@@ -308,10 +353,11 @@ def build_marketing_dashboard(records, *, limit=1000):
         "occurrenceCount": total_occurrence_count,
         "topTags": [
             {
-                "tag": tag,
+                "tag": parsed_tags[tag]["tag"],
+                "rawTag": tag,
                 "count": count,
                 "materialCount": len(tag_material_ids.get(tag, set())),
-                "category": _marketing_category(tag),
+                "category": parsed_tags[tag]["category"],
             }
             for tag, count in sorted_tags[:20]
         ],
@@ -372,14 +418,11 @@ def build_top_material_combination(records, *, top_n=30, brands=None):
     ]
     pool_records = select_top_materials(classified, limit=len(classified))
     warnings = []
-    if any(record["brandClassification"]["source"] == "ambiguous" for record in classified):
-        warnings.append("ambiguous_brand_title")
     brands = {}
     for brand in classification_brands:
         brand_records = [
             record for record in classified
-            if record["brandClassification"] == {"value": brand, "source": "title_rule"}
-            or record["brandClassification"] == {"value": brand, "source": "runtime_title_rule"}
+            if brand in _classification_brands(record.get("brandClassification"))
         ]
         if not brand_records:
             continue

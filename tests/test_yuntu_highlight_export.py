@@ -3,6 +3,7 @@ import unittest
 from contextlib import redirect_stderr
 from io import StringIO
 import tempfile
+import zipfile
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -21,6 +22,24 @@ from yuntu_highlight_export import (  # noqa: E402
 
 
 class HighlightExportTests(unittest.TestCase):
+    def test_workbook_shares_original_image_bytes_across_three_sheets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            facts, presentation = self._dual_gallery_fixture(root)
+            originals = { (root / frame["relative_path"]).read_bytes()
+                         for frame in facts["materialFacts"][0]["highlightFrames"] }
+            output = export_highlight_workbook(facts, presentation, root / "frames.xlsx", asset_root=root)
+            with zipfile.ZipFile(output) as archive:
+                media = [name for name in archive.namelist() if name.startswith("xl/media/")]
+                self.assertEqual(len(media), 3)
+                self.assertEqual({archive.read(name) for name in media}, originals)
+                self.assertIsNone(archive.testzip())
+            workbook = load_workbook(output)
+            for sheet in workbook:
+                self.assertEqual(len(sheet._images), 3)
+                self.assertEqual({image._data() for image in sheet._images}, originals)
+            workbook.close()
+
     def _write_image(self, root, relative_path, size):
         path = root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)

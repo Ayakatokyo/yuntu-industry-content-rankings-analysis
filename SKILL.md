@@ -31,6 +31,13 @@ metadata:
 
 ## 先确认参数
 
+采集前用一句话复述参数对章节的影响，无需增加确认轮次：全行业输出行业整体洞察；只有明确指定品牌才在第 01–04 章增加相同品牌集合的分类。详情素材数决定需要取详情、看图和撰写第五章的规模，默认 10，30 条通常会显著增加远端等待与模型工作量；按用户已给数量执行，不擅自缩小。
+
+| 品牌参数 | 01 榜单 / 02 人群卖点 / 03 脚本 / 04 高光 |
+|---|---|
+| `ALL_INDUSTRY` 或品牌集合为空 | 全部只给整体范围，不套用默认食品品牌、不从标题推造品牌池 |
+| `SPECIFIED_BRANDS` 且有品牌 | 整体 + 同一组规范化指定品牌；零样本品牌保留入口并说明不足 |
+
 云图没有独立的 API 报表店铺阶段。先选择 `rpa_shop`：榜单和素材详情均通过 `RPA_JULIANG_YT_ACCOUNT_PASSWORD` 获取，`rpa_shop.extra.shop_id` 是这两个步骤唯一使用的授权账号 ID，必须原样同时传入两步的 `--shop-id`；不得再手填、猜测或替换账号。执行每个阶段前查询当前授权列表：所选账号不在列表时以 `rpa_shop_not_authorized` 停止，不提交后续 RPA 任务，也不改用其他账号。
 
 - 行业必填；指定品牌可选，填写时给 3–10 个品牌并使用 `SPECIFIED_BRANDS`。实时连接器的 `brands` 是 STRING：优先用英文逗号分隔品牌名；本地上下文校验也兼容斜杠分隔和 JSON 数组字符串，归一化后逐品牌比对页面实际 tag。连接器请求和 `run-summary.json` 保留该 STRING；写入 `batch-manifest.json.filters.brands` 后必须是规范化的品牌列表，供分析、草稿和报告逐品牌消费。年龄、性别、八大人群空缺时不传筛选参数（全选）。截取方式为曝光量TOP1000、CTRTOP1000、互动率TOP1000或完播率TOP1000。
@@ -52,17 +59,14 @@ python <skill-root>/scripts/rpa_dynamic_client.py validate --params-json '<按�
 python <skill-root>/scripts/rpa_connector.py self-test
 ```
 
+已有下方批参数文件时，使用 `rpa_dynamic_client.py validate --params-file tmp/yuntu-rpa-params.json --params-section list`。未指定 `--params-section` 时输入必须是业务参数本身，不能把 `list/detail/target_top_n` 容器交给连接器 Schema。详情中的 `material_id` 仍由选材后真实校验，不用占位 ID 预检冒充有效详情参数。
+
 `inParamJsonSchemaText` 非空时只按其原文的 Draft 2020-12 契约校验；仅它为 `null` 时才使用 `inParamList`。未知 `shop_id` 先按详情返回的原始 `platformCode` 执行 `list-accounts`，不补 `_ACCOUNT_PASSWORD`。详情数组为空时停止，说明连接器不存在、未上线或不支持 `BIZ_EXPERT`。
 
 将榜单和详情的动态业务参数合并成一个 JSON 文件；`target_top_n` 和 `candidate_top_n` 是本地批处理选材配置，不会透传给 connector。下例仅表示容器结构，`list`/`detail` 内的字段和枚举必须以本次 `schema` 输出为准：
 
 ```json
-{
-  "list": {"industry": "食品饮料", "date_type": "LAST_7_DAYS"},
-  "detail": {"date_type": "LAST_7_DAYS"},
-  "target_top_n": 10,
-  "candidate_top_n": 20
-}
+{"list": {"industry": "食品饮料", "date_type": "LAST_7_DAYS"}, "detail": {"date_type": "LAST_7_DAYS"}, "target_top_n": 10, "candidate_top_n": 20}
 ```
 
 ```bash
@@ -74,6 +78,8 @@ python <skill-root>/scripts/rpa_connector.py status --output-dir "云图数据�
 
 固定顺序：三次列表（query、previous_period、industry）→ 验证 `list_context` 并选择唯一数字型 `material_id` → 详情 → 规范化 → 事实包 → 当前对话模型洞察 → 报告。RPA 优先 `files-envelope`/CSV：先落盘 `raw-csv/list.csv`、`raw-csv/details/<material_id>.csv`，再生成 `normalized/list-records.json`、`normalized/detail-records/<material_id>.json`；CSV 为主路径，兼容旧 `list-response.json`、`details/<material_id>.json`、`manifest.json`。
 
+三份逻辑榜单保留各自用途；业务请求完全一致时复用一次取数并记录来源，筛选或周期不同仍独立获取。榜单最多三路并行，详情固定三路，不因等待较长擅自提高远端并发。高光使用全分辨率精确 seek，新生成的帧以 frame-source.json 绑定视频及 JPEG 哈希，续跑只复用来源一致的帧、补缺失或损坏帧；保持每个应分析时间点和失败记录。
+
 `fetch` 通过异步任务协议观察，单个远端任务最多轮询 3600 秒。`run-summary.json` 保存参数指纹和 `taskRuns` 汇总投影；`batch-manifest.json` 在提交后立即保存 `task_group_id`，并记录 `unresolvedMaterials`。同一输出目录恢复时只轮询已登记任务，不重复提交；没有可复用任务 ID 的失败项保持失败，不提供 RPA 重提命令。`status --output-dir` 同时核对摘要、manifest、规范化列表和详情。列表请求失败写清单并非零退出且不发详情；详情请求失败继续处理其余素材，最终非零但保留成功文件。
 
 ## 分析与交付
@@ -82,23 +88,21 @@ python <skill-root>/scripts/rpa_connector.py status --output-dir "云图数据�
 
 当前对话模型直接完成一次分析任务：先读 manifest 和提示词一次，运行 `begin-analysis` 创建独立工作目录，再用 `read-analysis --workspace <目录> --part <key> --page 0` 读取任务页，按 scopedFacts、outputSkeleton、当前范围及引用清单填写 `*.json` 的 `content`。新任务内的事实视图已按章节、品牌、素材准备，不要求再全文读取五包、完整 Schema 或脚本；factInput 留作必要溯源。实际查看全部可用本地 JPEG，按素材同次完成第四章逐帧理解和第五章观察，再完成整批分类；第四章的 `viewedFrameRefs` 只记录实际查看过的成功 JPEG。四个章节草稿、第三章各品牌草稿及每个素材的草稿分别检查、保存和恢复，具体操作见 [分析草稿入口](references/analysis-drafts.md)。新批次 manifest 的 `analysisContract` 绑定五包、Schema、提示词、渲染事实和成功资产；恢复时由命令自动核对，变更后另建工作目录。`single_model_call` 保留为既有契约标识，不限制当前任务的读取或保存次数。
 
+开始草稿后先运行一次 `analysis-overview --workspace <目录>`，一次获取各草稿、范围、脚本可用性、分页和看图批次数。后续按需 `read-analysis --section facts|schema|skeleton|guidance`，不要逐层 `jq` 探字段；第三章 `evidence` 先选引用的 `material_ids`，再从 guidance 给出的正文/公式路径逐字摘录，概括与建议放在 summary。看图用 `read-frame-batch --workspace <目录> --batch 0`，按 nextBatch 继续，每批最多 20 张。请求逐帧短记录、每个观察字段建议 40 字以内、不分节重复长文，字段仍以 Schema 为准；同次保存两章所需观察，不能用截断的批次回复补猜剩余帧。
+
 草稿写完立即保存，每完成一组相关草稿，用可重复的 `--part <key1> --part <key2>` 一次检查；单份报错只修受影响草稿。全部完成后直接运行 `assemble-analysis`，其内部完整检查通过才会组装，无需紧邻组装前再做一次全量检查。组装器只合并模型已写出的 JSON，保留按哈希命名的原始草稿快照和 assembly 收据，不生成、补齐或改写业务结论。新契约的 attest 必须验证草稿到最终 JSON 的无损对应。禁止程序化兜底，禁止新建承载业务结论的 Python/JS 生成脚本（包括沿用历史 `build_current_ai_analysis.py`），禁止 `codex exec`、子进程或外部模型服务调用模型。不得仅凭 `--generator` 认定模型；它和草稿来源都是调用者声明，哈希与收据不能证明模型身份、实际看图或业务判断正确。脚本和生成的提示词是 schema 权威，只生成当前报告实际展示的分析模块；固定规则负责统计，当前模型负责判断。
 
 校验失败先读工作目录的 `validation.json`，按 `part/file/path` 修复受影响草稿。引用从该素材或 scope 的清单原样选择；帧覆盖报错列出重复、缺失和额外引用；`unsupported claim` 只核对具体句子中的跨事实源或指标因果断言。缺失事实保留不可用状态。不要删证据、关闭 provenance 或绕过 CLI；报告正文没有字数硬门槛，不为凑字数反复改写；输入未变化时不重复检查。仅报告生成任务中发现事实投影或校验器缺陷，应保留失败现场并报告具体契约问题，不以修改通用技能代码来放行；用户明确要求修复技能时可在该授权范围内修复并测试。
 
-```bash
-python <skill-root>/scripts/rpa_connector.py prepare-analysis --input-dir "云图数据资源/yuntu-rankings-analysis" --output-dir "云图数据资源/yuntu-rankings-analysis/diagnostic-analysis"
-python <skill-root>/scripts/rpa_connector.py begin-analysis --fact-pack-json ".../diagnostic-analysis/analysis-units/analysis-unit-manifest.json" --workspace ".../diagnostic-analysis/model-drafts"
-# 当前模型保存一组草稿后检查；--part 可重复。全部完成后 assemble 会执行全量检查。
-python <skill-root>/scripts/rpa_connector.py check-analysis --workspace ".../diagnostic-analysis/model-drafts" --part ranking --part audience
-python <skill-root>/scripts/rpa_connector.py assemble-analysis --workspace ".../diagnostic-analysis/model-drafts" --output ".../diagnostic-analysis/yuntu-ai-analysis.json"
-python <skill-root>/scripts/rpa_connector.py attest-analysis --analysis-json ".../diagnostic-analysis/yuntu-ai-analysis.json" --fact-pack-json ".../diagnostic-analysis/analysis-units/analysis-unit-manifest.json" --prompt ".../diagnostic-analysis/yuntu-analysis-prompt.md" --source model_generated --generator "<模型或人工执行者>"
-python <skill-root>/scripts/rpa_connector.py render-report --analysis-json ".../diagnostic-analysis/yuntu-ai-analysis.json" --output-dir ".../final-report"
-```
+使用 `python <skill-root>/scripts/rpa_connector.py prepare-analysis` 准备事实，完成 `yuntu-ai-analysis.json` 并通过 `attest-analysis` 后用 `python <skill-root>/scripts/rpa_connector.py render-report` 渲染。完整导航、检查、组装、认证和验收命令见 [分析草稿入口](references/analysis-drafts.md#完整命令示例)。
 
-报告只能由 `render-report` 渲染，使用 `assets/report/` 的离线资源并内联 CSS/JavaScript，不新增判断、不下载视频、不得手工修改 HTML。交付同级的 HTML 报告 `final-report/final-report.html` 和 `final-report.zip`；ZIP 仅含 `final-report/` 目录。报告验收只执行自动化产物校验：HTML、Markdown、报告数据、presentation JSON 与 `final-report/highlight-frames.xlsx` 非空，导航和本地帧引用有效，ZIP 含 Excel 且无占位符；不要启动实际浏览器，也不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤。报告前确认 `status == success`、选中数量达标且无拒绝，否则按部分完成交付。
+报告只能由 `render-report` 渲染，使用 `assets/report/` 的离线资源并内联 CSS/JavaScript，不新增判断、不下载视频、不得手工修改 HTML。交付同级的 HTML 报告 `final-report/final-report.html` 和 `final-report.zip`；ZIP 仅含 `final-report/` 目录。报告验收只执行自动化产物校验：HTML、Markdown、报告数据和 presentation JSON 非空，导航和本地帧引用有效；有成功帧时 `final-report/highlight-frames.xlsx` 非空且 ZIP 含 Excel，正文无占位符；不要启动实际浏览器，也不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤。报告前确认 `status == success`、选中数量达标且无拒绝，否则按部分完成交付。
+
+`verify-report` 使用 Python 检查实际文件、章节锚点、本地引用、工作簿、ZIP CRC 与逐文件一致性；有成功帧时 Excel 必须存在。无需安装 `unzip` 或编写临时猜字段验收脚本；JavaScript 中合法的 `undefined` 不按正文占位符误报。Excel 三个视图共享同一份原图字节，报告仍保留视频与原图；JPEG/MP4/XLSX 在外层 ZIP 不重复压缩。超过 200 MiB 时输出体积提醒，默认归档 ZIP 一份并提供 HTML 入口，不把整目录与同一 ZIP 再各上传一遍；用户明确要求双份归档时遵从。
 
 优化效果按 workspace.json 的 inputMetrics 与 validation.json 的 timingsSeconds 核对：字节量衡量模型读取体积，本地耗时衡量校验开销；实际模型耗时还需从执行日志单独计时，不用字节缩减率代替提速率。
+
+耗时归因同时记录采集内部阶段墙钟、远端提交/完成、看图批次、模型撰写及交付耗时。并行榜单的各任务耗时不能直接相加当作墙钟；Bash 工具回执耗时不一定涵盖后台执行。`exit -9` 只证明进程被终止，缺少宿主证据时不要断言 OOM 或超时。
 
 新分析同时执行 `analysisQualityVersion=4` 的范围与证据契约：02、03 必须引用当前 scope 的事实，04 每个非空标准分类组默认输出一条共性结论与一个对应的裂变方向（结构兼容1–3条）。模型须核对具体观察、业务含义、建议与验证边界，禁止重复凑字；校验器不以字数或句数判定正文质量。03 和 04 必须覆盖全部指定品牌，缺失品牌保留入口并明确数据不足。品牌脚本在 `script-brand-<index>.json` 独立撰写；只引用同品牌原文。
 

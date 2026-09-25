@@ -1,10 +1,12 @@
 """Select and extract auditable highlight frames from normalized Yuntu details."""
 
 import json
+import hashlib
 import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -333,6 +335,8 @@ def _validate_jpeg(path, *, ffmpeg_bin=None):
     image = Path(path)
     if not image.is_file() or image.stat().st_size == 0:
         raise HighlightFrameError("JPEG output is empty")
+    if image.stat().st_size < 4:
+        raise HighlightFrameError("JPEG markers are invalid")
     with image.open("rb") as handle:
         header = handle.read(2)
         handle.seek(-2, os.SEEK_END)
@@ -342,17 +346,15 @@ def _validate_jpeg(path, *, ffmpeg_bin=None):
 
 
 def _batch_filter_graph(seconds):
-    labels = "".join(f"[s{index}]" for index in range(len(seconds)))
-    branches = [f"[0:v]split={len(seconds)}{labels}"]
-    branches.extend(
-        f"[s{index}]trim=start={second:g},setpts=PTS-STARTPTS[out{index}]"
-        for index, second in enumerate(seconds)
+    # Each input already accurately discards frames before its target timestamp.
+    return ";".join(
+        f"[{index}:v]setpts=PTS-STARTPTS[out{index}]"
+        for index, _ in enumerate(seconds)
     )
-    return ";".join(branches)
 
 
 def extract_frames_batch(video_path, requests, *, ffmpeg_bin=None):
-    """Extract a material's unique target seconds in one FFmpeg process."""
+    """Precisely seek local target seconds in one bounded FFmpeg process."""
     staged = []
     seen_seconds = set()
     for request in requests:
@@ -376,15 +378,16 @@ def extract_frames_batch(video_path, requests, *, ffmpeg_bin=None):
         "error",
         "-nostdin",
         "-y",
-        "-threads",
-        "1",
-        "-filter_threads",
-        "1",
-        "-i",
-        str(video_path),
-        "-filter_complex",
-        _batch_filter_graph([second for second, _, _ in staged]),
     ]
+    # Input-side -ss retains FFmpeg's default accurate_seek: decode from the
+    # preceding keyframe and discard up to the requested instant. Each input
+    # uses one decoder thread; the report has at most six standard targets.
+    for second, _, _ in staged:
+        command.extend(["-threads", "1", "-ss", str(second), "-i", str(video_path)])
+    command.extend([
+        "-filter_complex_threads", "1",
+        "-filter_complex", _batch_filter_graph([second for second, _, _ in staged]),
+    ])
     for index, (_, _, staging) in enumerate(staged):
         command.extend(
             [
@@ -504,9 +507,76 @@ def load_video_asset_records(output_dir, material_ids):
     }
 
 
-def _reused_frame_record(candidate, *, material_id, root, index):
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _frame_source_receipt(root, material_id, video_path):
+    path = root / "highlights" / material_id / "frame-source.json"
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        receipt = {}
+    if not isinstance(receipt, dict):
+        receipt = {}
+    if not path.exists() and video_path is None:
+        # Preserve established frame-only reanalysis from a legacy manifest.
+        # This is deliberately not persisted as proof of a video's identity.
+        known_frames = {}
+        for frame in load_highlights_manifest(root).get(material_id, []):
+            if not isinstance(frame, dict) or not frame.get("available"):
+                continue
+            relative = frame.get("relative_path")
+            if not isinstance(relative, str):
+                continue
+            try:
+                image = (root / relative).resolve()
+                image.relative_to(root.resolve())
+                _validate_jpeg(image)
+                known_frames[image.name] = {"second": frame.get("second"), "sha256": _sha256_file(image)}
+            except (OSError, ValueError, HighlightFrameError):
+                continue
+        if known_frames:
+            return {"frames": known_frames}, None
+    video_sha = _sha256_file(video_path) if video_path is not None else None
+    if (
+        not isinstance(receipt.get("videoSha256"), str)
+        or not isinstance(receipt.get("frames"), dict)
+        or (video_sha is not None and receipt.get("videoSha256") != video_sha)
+    ):
+        return {}, video_sha
+    return receipt, video_sha
+
+
+def _save_frame_source_receipt(root, material_id, video_sha, frames):
+    """Bind published JPEGs to the exact local input before worker completion."""
+    frame_receipts = {}
+    for frame in frames:
+        if frame.get("available") and frame.get("relative_path"):
+            path = root / frame["relative_path"]
+            frame_receipts[path.name] = {
+                "second": frame["second"], "sha256": _sha256_file(path),
+            }
+    _write_json_atomically(
+        {"schemaVersion": 1, "videoSha256": video_sha, "frames": frame_receipts},
+        root / "highlights" / material_id / "frame-source.json",
+    )
+
+
+def _reused_frame_record(candidate, *, material_id, root, index, receipt=None):
     target = root / "highlights" / material_id / _highlight_filename(index, candidate)
-    if not target.is_file() or target.stat().st_size == 0:
+    expected = (receipt or {}).get("frames", {}).get(target.name)
+    if not isinstance(expected, dict) or expected.get("second") != candidate["second"]:
+        return None
+    try:
+        _validate_jpeg(target)
+        if expected.get("sha256") != _sha256_file(target):
+            return None
+    except (HighlightFrameError, OSError):
         return None
     return _frame_record(
         candidate,
@@ -517,7 +587,7 @@ def _reused_frame_record(candidate, *, material_id, root, index):
     )
 
 
-def _failed_frames_with_local_reuse(candidates, *, material_id, root, failure_reason):
+def _failed_frames_with_local_reuse(candidates, *, material_id, root, failure_reason, receipt=None):
     frames = []
     for index, candidate in enumerate(candidates, start=1):
         frames.append(
@@ -526,6 +596,7 @@ def _failed_frames_with_local_reuse(candidates, *, material_id, root, failure_re
                 material_id=material_id,
                 root=root,
                 index=index,
+                receipt=receipt,
             )
             or _frame_record(
                 candidate,
@@ -538,10 +609,15 @@ def _failed_frames_with_local_reuse(candidates, *, material_id, root, failure_re
 
 
 def _extract_frames_individually(
-    video_path, candidates, root, material_id, material_root, frame_extractor, ffmpeg_bin
+    video_path, candidates, root, material_id, material_root, frame_extractor, ffmpeg_bin,
+    receipt=None,
 ):
     frames = []
     for index, candidate in enumerate(candidates, start=1):
+        reused = _reused_frame_record(candidate, material_id=material_id, root=root, index=index, receipt=receipt)
+        if reused is not None:
+            frames.append(reused)
+            continue
         filename = _highlight_filename(index, candidate)
         target = material_root / filename
         relative_path = str(target.relative_to(root))
@@ -562,6 +638,7 @@ def _extract_frames_individually(
                     material_id=material_id,
                     root=root,
                     index=index,
+                    receipt=receipt,
                 )
                 or _frame_record(
                     candidate,
@@ -574,25 +651,43 @@ def _extract_frames_individually(
 
 
 def _material_frames(
-    detail, candidates, root, downloader, frame_extractor, ffmpeg_bin, batch_extractor=None
+    detail, candidates, root, downloader, frame_extractor, ffmpeg_bin, batch_extractor=None,
+    timings=None,
 ):
     material_id = str(detail.get("material_id") or "")
+    video_path = find_local_video_asset(root, material_id)
+    receipt, video_sha = _frame_source_receipt(root, material_id, video_path)
+    reused = {
+        index: frame
+        for index, candidate in enumerate(candidates, start=1)
+        if (frame := _reused_frame_record(candidate, material_id=material_id, root=root, index=index, receipt=receipt)) is not None
+    }
+    if len(reused) == len(candidates):
+        return [reused[index] for index in range(1, len(candidates) + 1)]
     video_url = detail.get("video_url")
-    if not isinstance(video_url, str) or not video_url.strip():
+    if video_path is None and (not isinstance(video_url, str) or not video_url.strip()):
         return _failed_frames_with_local_reuse(
             candidates,
             material_id=material_id,
             root=root,
             failure_reason="missing_video_url",
+            receipt=receipt,
         )
 
     material_root = root / "highlights" / material_id
     try:
-        video_path = find_local_video_asset(root, material_id)
         if video_path is None:
             video_path = root / "video-assets" / f"{material_id}.mp4"
             video_path.parent.mkdir(parents=True, exist_ok=True)
-            downloader(video_url, video_path)
+            download_started = time.monotonic()
+            try:
+                downloader(video_url, video_path)
+            finally:
+                if timings is not None:
+                    timings["videoDownloadSec"] = round(time.monotonic() - download_started, 6)
+            video_sha = _sha256_file(video_path)
+            if receipt.get("videoSha256") != video_sha:
+                receipt, reused = {}, {}
         material_root.mkdir(parents=True, exist_ok=True)
         requests = [
             {
@@ -600,13 +695,15 @@ def _material_frames(
                 "destination": material_root / _highlight_filename(index, candidate),
             }
             for index, candidate in enumerate(candidates, start=1)
+            if index not in reused
         ]
+        extraction_started = time.monotonic()
         try:
             (batch_extractor or extract_frames_batch)(
                 video_path, requests, ffmpeg_bin=ffmpeg_bin
             )
         except Exception:
-            return _extract_frames_individually(
+            frames = _extract_frames_individually(
                 video_path,
                 candidates,
                 root,
@@ -614,22 +711,30 @@ def _material_frames(
                 material_root,
                 frame_extractor,
                 ffmpeg_bin,
+                receipt=receipt,
             )
-        return [
-            _frame_record(
-                candidate,
-                material_id=material_id,
-                available=True,
-                relative_path=str(request["destination"].relative_to(root)),
-            )
-            for candidate, request in zip(candidates, requests)
-        ]
+        else:
+            frames = [
+                reused.get(index) or _frame_record(
+                    candidate,
+                    material_id=material_id,
+                    available=True,
+                    relative_path=str((material_root / _highlight_filename(index, candidate)).relative_to(root)),
+                )
+                for index, candidate in enumerate(candidates, start=1)
+            ]
+        finally:
+            if timings is not None:
+                timings["frameExtractionSec"] = round(time.monotonic() - extraction_started, 6)
+        _save_frame_source_receipt(root, material_id, video_sha, frames)
+        return frames
     except Exception:
         return _failed_frames_with_local_reuse(
             candidates,
             material_id=material_id,
             root=root,
             failure_reason="download_failed",
+            receipt=receipt,
         )
 
 
@@ -681,6 +786,29 @@ def _reusable_standard_frames(detail, root):
     if not isinstance(frames, list) or len(frames) != len(candidates):
         return None
 
+    receipt_path = root / "highlights" / material_id / "frame-source.json"
+    video_path = find_local_video_asset(root, material_id)
+    if receipt_path.exists():
+        receipt, _ = _frame_source_receipt(root, material_id, video_path)
+        if not receipt:
+            return None
+        for frame in frames:
+            if not isinstance(frame, dict):
+                return None
+            relative = frame.get("relative_path")
+            if not isinstance(relative, str):
+                return None
+            expected = receipt["frames"].get(Path(relative).name)
+            if not isinstance(expected, dict) or expected.get("second") != frame.get("second"):
+                return None
+            try:
+                path = (root / relative).resolve()
+                path.relative_to(root.resolve())
+                if expected.get("sha256") != _sha256_file(path):
+                    return None
+            except (OSError, ValueError):
+                return None
+
     by_key = {}
     for frame in frames:
         if not isinstance(frame, dict):
@@ -702,7 +830,9 @@ def _reusable_standard_frames(detail, root):
             path.relative_to(root_path)
         except ValueError:
             return None
-        if not path.is_file() or not path.stat().st_size:
+        try:
+            _validate_jpeg(path)
+        except (HighlightFrameError, OSError):
             return None
         reusable.append(
             _frame_record(
@@ -734,8 +864,11 @@ def generate_standard_highlights_for_detail(
     frame_extractor=extract_frame,
     batch_extractor=None,
     ffmpeg_bin=None,
+    timings=None,
 ):
     """Generate or reuse the report's standard highlighter set for one material."""
+    if timings is not None:
+        timings.update({"videoDownloadSec": 0.0, "frameExtractionSec": 0.0})
     root = Path(output_dir)
     reusable = _reusable_standard_frames(detail, root)
     if reusable is not None:
@@ -748,6 +881,7 @@ def generate_standard_highlights_for_detail(
         frame_extractor,
         ffmpeg_bin,
         batch_extractor,
+        timings=timings,
     )
 
 

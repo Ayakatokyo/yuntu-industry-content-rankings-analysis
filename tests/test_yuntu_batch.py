@@ -441,6 +441,141 @@ class YuntuBatchTests(unittest.TestCase):
         self.assertTrue(all(run["status"] == "success" for run in manifest["rankingRuns"].values()))
         self.assertEqual(summary["rankingRuns"]["previous_period"]["actualDateRange"], {"startDate": "2026-07-30", "endDate": "2026-08-09"})
 
+    def test_all_industry_identical_query_reuses_one_remote_ranking_result(self):
+        batch = load_batch()
+
+        class IndustryInvoker(MultiPeriodInvoker):
+            def invoke_list(self, shop_id, params):
+                result = super().invoke_list(shop_id, params)
+                result["data"][0]["page_brand_scope"] = "全行业"
+                result["data"][0]["page_brands"] = []
+                return result
+
+        invoker = IndustryInvoker()
+        params = {
+            "industry": "食品饮料", "date_type": "CUSTOM",
+            "custom_start_date": "20260810", "custom_end_date": "20260820",
+            "brand_scope_type": "ALL_INDUSTRY",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            status = batch.fetch_batch(
+                shop_id="shop-42", list_params=params,
+                detail_date_params={"date_type": "CUSTOM", "custom_start_date": "20260810", "custom_end_date": "20260820"},
+                target_top_n=1, candidate_top_n=1, output_dir=root, invoker=invoker,
+            )
+            manifest = json.loads((root / "batch-manifest.json").read_text())
+            query = json.loads((root / manifest["rankingRuns"]["query"]["normalizedPath"]).read_text())
+            industry = json.loads((root / manifest["rankingRuns"]["industry"]["normalizedPath"]).read_text())
+            self.assertEqual(status, 0)
+            self.assertEqual(len(invoker.list_calls), 2)
+            self.assertEqual(query, industry)
+            self.assertEqual(manifest["rankingRuns"]["industry"]["reusedFromRun"], "query")
+            self.assertEqual(manifest["rankingRuns"]["industry"]["timingsSec"]["listFetchSec"], 0)
+            # Recreate the interruption between the query checkpoint and its
+            # equivalent industry projection; resume must not request either.
+            del manifest["rankingRuns"]["industry"]
+            (root / "batch-manifest.json").write_text(json.dumps(manifest))
+            resumed = IndustryInvoker()
+            batch.fetch_batch(
+                shop_id="shop-42", list_params=params,
+                detail_date_params={"date_type": "CUSTOM", "custom_start_date": "20260810", "custom_end_date": "20260820"},
+                target_top_n=1, candidate_top_n=1, output_dir=root, invoker=resumed,
+            )
+            self.assertEqual(resumed.list_calls, [])
+            self.assertEqual(resumed.detail_calls, [])
+
+    def test_relative_period_resume_does_not_repeat_previous_ranking(self):
+        batch = load_batch()
+        class RelativeInvoker(MultiPeriodInvoker):
+            def invoke_list(self, shop_id, params):
+                result = super().invoke_list(shop_id, params)
+                if params.get("date_type") == "LAST_7_DAYS":
+                    result["data"][0].update({
+                        "page_custom_date_range": "2026-08-10 ~ 2026-08-20",
+                        "page_actual_start_date": "2026-08-10", "page_actual_end_date": "2026-08-20",
+                    })
+                return result
+        params = {"industry": "食品饮料", "date_type": "LAST_7_DAYS", "brand_scope_type": "SPECIFIED_BRANDS", "brands": ["小仙炖", "燕之屋", "五个女博士"]}
+        with tempfile.TemporaryDirectory() as directory:
+            first = RelativeInvoker()
+            options = dict(shop_id="shop-42", list_params=params, detail_date_params={"date_type": "LAST_7_DAYS"}, target_top_n=1, candidate_top_n=1, output_dir=directory)
+            self.assertEqual(batch.fetch_batch(**options, invoker=first), 0)
+            resumed = RelativeInvoker()
+            self.assertEqual(batch.fetch_batch(**options, invoker=resumed), 0)
+            self.assertEqual(resumed.list_calls, [])
+            self.assertEqual(resumed.detail_calls, [])
+
+    def test_relative_period_is_derived_when_query_is_restored_from_industry(self):
+        batch = load_batch()
+
+        class RelativeIndustryInvoker(MultiPeriodInvoker):
+            def invoke_list(self, shop_id, params):
+                result = super().invoke_list(shop_id, params)
+                result["data"][0].update(page_brand_scope="全行业", page_brands=[])
+                if params.get("date_type") == "LAST_7_DAYS":
+                    result["data"][0].update(
+                        page_custom_date_range="2026-08-10 ~ 2026-08-20",
+                        page_actual_start_date="2026-08-10", page_actual_end_date="2026-08-20")
+                return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            options = dict(shop_id="shop-42",
+                           list_params={"industry": "食品饮料", "date_type": "LAST_7_DAYS", "brand_scope_type": "ALL_INDUSTRY"},
+                           detail_date_params={"date_type": "LAST_7_DAYS"},
+                           target_top_n=1, candidate_top_n=1, output_dir=root)
+            self.assertEqual(batch.fetch_batch(**options, invoker=RelativeIndustryInvoker()), 0)
+            path = root / "batch-manifest.json"
+            manifest = json.loads(path.read_text())
+            # Only the equivalent industry checkpoint remains readable.
+            for key in ("query", "previous_period"):
+                (root / manifest["rankingRuns"][key]["normalizedPath"]).unlink()
+            resumed = RelativeIndustryInvoker()
+            self.assertEqual(batch.fetch_batch(**options, invoker=resumed), 0)
+            self.assertEqual([params["custom_start_date"] for _, params in resumed.list_calls], ["20260730"])
+            self.assertEqual(resumed.detail_calls, [])
+            manifest = json.loads(path.read_text())
+            self.assertEqual(manifest["rankingRuns"]["query"]["reusedFromRun"], "industry")
+            self.assertEqual(manifest["rankingRuns"]["previous_period"]["status"], "success")
+            self.assertEqual(manifest["rankingRuns"]["previous_period"]["actualDateRange"],
+                             {"startDate": "2026-07-30", "endDate": "2026-08-09"})
+
+    def test_completed_material_preserves_postprocess_timings_on_resume(self):
+        from PIL import Image
+        batch = load_batch()
+        import yuntu_highlights as highlights
+
+        def complete_highlights(detail, root, *, timings=None):
+            frames = []
+            for index, candidate in enumerate(highlights.select_standard_highlight_candidates(detail), 1):
+                target = root / "highlights" / detail["material_id"] / highlights._highlight_filename(index, candidate)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (8, 8), "white").save(target, "JPEG")
+                frames.append(highlights._frame_record(candidate, material_id=detail["material_id"],
+                              available=True, relative_path=str(target.relative_to(root))))
+            timings.update(videoDownloadSec=8.0, frameExtractionSec=4.0)
+            return frames
+
+        batch.generate_standard_highlights_for_detail = complete_highlights
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            options = dict(shop_id="shop-42", list_params={"industry": "食品饮料"},
+                           detail_date_params={"date_type": "LAST_7_DAYS"},
+                           target_top_n=1, candidate_top_n=1, output_dir=root)
+            self.assertEqual(batch.fetch_batch(**options, invoker=ConcurrentInvoker(["101"], detail_result)), 0)
+            path = root / "batch-manifest.json"
+            original = json.loads(path.read_text())["selectedMaterials"][0]
+            self.assertEqual(original["postprocessStatus"], "succeeded")
+            self.assertEqual(original["postprocessTimingsSec"]["videoDownloadSec"], 8.0)
+            self.assertEqual(original["postprocessTimingsSec"]["frameExtractionSec"], 4.0)
+            self.assertEqual(batch.fetch_batch(**options, invoker=ConcurrentInvoker(["101"], detail_result)), 0)
+            restored = json.loads(path.read_text())["selectedMaterials"][0]
+            self.assertEqual(restored.get("postprocessStatus"), "succeeded")
+            self.assertEqual(restored.get("postprocessTimingsSec"), original["postprocessTimingsSec"])
+            summary = json.loads((root / "run-summary.json").read_text())
+            self.assertEqual(summary["stages"]["details"]["postprocessSucceededCount"], 1)
+
     def files_result(self, url):
         return {
             "success": True,
@@ -769,7 +904,7 @@ class YuntuBatchTests(unittest.TestCase):
                 release_details.wait(timeout=1)
             return detail_result(material_id)
 
-        def highlighter(detail, _root):
+        def highlighter(detail, _root, **_kwargs):
             if detail["material_id"] == "101":
                 highlights_started.set()
             return []
@@ -806,7 +941,7 @@ class YuntuBatchTests(unittest.TestCase):
         first_highlight_started = threading.Event()
         release_highlight = threading.Event()
 
-        def highlighter(detail, _root):
+        def highlighter(detail, _root, **_kwargs):
             if detail["material_id"] == "101":
                 first_highlight_started.set()
                 release_highlight.wait(timeout=1)
@@ -843,7 +978,7 @@ class YuntuBatchTests(unittest.TestCase):
     def test_highlight_failure_does_not_request_an_extra_detail(self):
         batch = load_batch()
 
-        def failing_highlighter(detail, _root):
+        def failing_highlighter(detail, _root, **_kwargs):
             if detail["material_id"] == "101":
                 raise RuntimeError("ffmpeg unavailable")
             return []

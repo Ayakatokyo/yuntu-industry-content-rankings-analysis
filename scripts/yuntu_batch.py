@@ -402,6 +402,9 @@ def _restore_persisted_details(root, manifest, candidates):
                 "rawDetailPath": previous.get("rawDetailPath")
                 or _detail_source_path(root, material_id),
                 "timingsSec": previous.get("timingsSec", {}),
+                **{key: previous[key] for key in (
+                    "postprocessStatus", "postprocessTimingsSec", "postprocessError"
+                ) if key in previous},
             }
         )
     manifest["selectedMaterials"] = sorted(restored, key=lambda entry: entry["rank"])
@@ -782,6 +785,30 @@ def _persist_ranking_response(
         return None, entry
 
 
+def _reuse_equivalent_ranking_run(*, root, manifest, summary, run_key, source_key, records):
+    """Project one exactly equal request into both logical ranking scopes."""
+    entry = manifest["rankingRuns"][run_key]
+    source = manifest["rankingRuns"][source_key]
+    if entry.get("requestParams") != source.get("requestParams"):
+        raise YuntuBatchError("ranking reuse requires identical request parameters")
+    entry.update({
+        key: source[key]
+        for key in ("status", "actualDateRange", "sampleCount", "contextVerification", "rawPath", "rawJsonPath", "error")
+        if key in source
+    })
+    entry.update({
+        "requestStatus": "reused_equivalent",
+        "reusedFromRun": source_key,
+        "timingsSec": {"listFetchSec": 0.0},
+    })
+    if records is not None and source.get("status") == "success":
+        normalized_path = root / entry["normalizedPath"]
+        write_json_atomically(records, normalized_path)
+        _record_artifact(summary, root, f"rankingList:{run_key}", normalized_path, f"equivalent_ranking_{source_key}")
+        return records
+    return None
+
+
 def _reusable_ranking_records(root, manifest, run_key):
     """Return a verified normalized ranking list from a previous checkpoint."""
     entry = manifest.get("rankingRuns", {}).get(run_key)
@@ -956,11 +983,13 @@ def _persist_detail(
 def _generate_highlight_result(detail, root):
     """Run a material's video download and frame extraction in a worker."""
     started = time.monotonic()
+    timings = {}
     try:
         return {
             "material_id": detail["material_id"],
-            "frames": generate_standard_highlights_for_detail(detail, root),
+            "frames": generate_standard_highlights_for_detail(detail, root, timings=timings),
             "duration": _elapsed(started),
+            "timingsSec": timings,
             "error": None,
         }
     except Exception as exc:
@@ -968,6 +997,7 @@ def _generate_highlight_result(detail, root):
             "material_id": detail["material_id"],
             "frames": [],
             "duration": _elapsed(started),
+            "timingsSec": timings,
             "error": exc,
         }
 
@@ -1189,13 +1219,38 @@ def fetch_batch(
         for run_key, records in reused_records.items():
             ranking_records[run_key] = records
 
-        # Relative periods cannot be derived until the query response exposes
-        # its actual closed date range. Query and industry still run together;
-        # the previous-period request is submitted as soon as that range is
-        # available, without moving any persistence into a worker.
+        # Request equality includes every filter and the date mode. Do not
+        # infer equivalence from ALL_INDUSTRY alone or normalize absent fields
+        # against connector defaults that can change independently.
+        equivalent_runs = {}
+        for run_key in list(pending_specs):
+            source_key = next((
+                key for key in RANKING_RUN_ORDER
+                if key != run_key
+                and key not in equivalent_runs
+                and (key in reused_records or RANKING_RUN_ORDER.index(key) < RANKING_RUN_ORDER.index(run_key))
+                and manifest["rankingRuns"][key].get("requestParams") == pending_specs[run_key]["params"]
+            ), None)
+            if source_key is None:
+                continue
+            equivalent_runs[run_key] = source_key
+            pending_specs.pop(run_key)
+            manifest["rankingRuns"][run_key]["requestStatus"] = "waiting_equivalent"
+            if source_key in reused_records:
+                records = _reuse_equivalent_ranking_run(
+                    root=root, manifest=manifest, summary=summary,
+                    run_key=run_key, source_key=source_key, records=reused_records[source_key],
+                )
+                if records is not None:
+                    ranking_records[run_key] = records
+
+        # Restored query facts may come directly from its checkpoint or from
+        # an equivalent industry checkpoint. Derive the relative baseline only
+        # after either recovery path has exposed the actual closed date range.
         if (
             not specs["previous_period"].get("params")
-            and "query" in reused_records
+            and "previous_period" not in reused_records
+            and "query" in ranking_records
             and manifest["rankingRuns"]["query"].get("actualDateRange")
         ):
             specs = build_ranking_run_specs(
@@ -1209,6 +1264,9 @@ def fetch_batch(
             entry["requestStatus"] = "requested"
             manifest["rankingRuns"]["previous_period"] = entry
             pending_specs["previous_period"] = previous_spec
+
+        write_json_atomically(manifest, manifest_path)
+        _save_summary(root, summary)
 
         with ThreadPoolExecutor(max_workers=3) as ranking_executor:
             pending = {
@@ -1231,11 +1289,22 @@ def fetch_batch(
                     records, entry = persist_ranking_result(
                         run_key, pending_specs[run_key], response
                     )
+                    for equivalent_key, source_key in equivalent_runs.items():
+                        if source_key == run_key:
+                            equivalent_records = _reuse_equivalent_ranking_run(
+                                root=root, manifest=manifest, summary=summary,
+                                run_key=equivalent_key, source_key=source_key, records=records,
+                            )
+                            if equivalent_records is not None:
+                                ranking_records[equivalent_key] = equivalent_records
+                    write_json_atomically(manifest, manifest_path)
+                    _save_summary(root, summary)
                     if (
                         run_key == "query"
                         and records is not None
                         and entry["status"] == "success"
                         and not specs["previous_period"].get("params")
+                        and "previous_period" not in reused_records
                     ):
                         query_range = entry.get("actualDateRange")
                         if query_range:
@@ -1371,6 +1440,7 @@ def fetch_batch(
         entry = _selected_entry(manifest, material_id)
         if entry is not None:
             entry["postprocessStatus"] = "running"
+            entry.pop("postprocessError", None)
         future = executor.submit(_generate_highlight_result, detail, root)
         pending_highlights[future] = material_id
 
@@ -1590,7 +1660,8 @@ def fetch_batch(
                     entry = _selected_entry(manifest, material_id)
                     if entry is not None:
                         entry["postprocessTimingsSec"] = {
-                            "highlightSec": result["duration"]
+                            "highlightSec": result["duration"],
+                            **result.get("timingsSec", {}),
                         }
                         if result["error"] is None:
                             entry["postprocessStatus"] = "succeeded"

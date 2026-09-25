@@ -288,6 +288,11 @@ def load_params(args: argparse.Namespace) -> dict[str, Any]:
         raise ValidationContractError(f"业务入参不是合法 JSON：{exc}") from exc
     if not isinstance(params, dict):
         raise ValidationContractError("业务入参顶层必须是 JSON 对象")
+    section = getattr(args, "params_section", None)
+    if section:
+        if not isinstance(params.get(section), dict):
+            raise ValidationContractError(f"批参数必须包含对象字段 {section}")
+        params = params[section]
     return params
 
 
@@ -602,6 +607,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate_parser = subparsers.add_parser("validate", help="按实时连接器契约校验业务 JSON")
     add_params_source(validate_parser)
+    validate_parser.add_argument("--params-section", choices=("list", "detail"), help="仅校验批参数容器中的指定业务对象；不传则校验整个对象")
     validate_parser.set_defaults(func=cmd_validate)
 
     fetch_parser = subparsers.add_parser("fetch", help="校验、异步取数、下载并解析 CSV")

@@ -1,5 +1,6 @@
 """Stable HTML renderers for independently migrated Yuntu report sections."""
 
+from yuntu_top_materials import aggregate_scope_label
 import json
 
 from yuntu_presentation import content_formula_label
@@ -780,7 +781,7 @@ def render_audience_insights(
         scope_fact = chapter02_facts.get(scope_key, {})
         selected = index == 0
         tab_id, panel_id = f"chapter02-tab-{index}", f"chapter02-panel-{index}"
-        label = "所有指定品牌" if scope_key == "all" else scope_fact.get("label", scope_key)
+        label = aggregate_scope_label(fact_pack) if scope_key == "all" else scope_fact.get("label", scope_key)
         tabs.append(
             '<button type="button" role="tab" id="' + tab_id + '" aria-controls="' + panel_id
             + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1")
@@ -1049,7 +1050,7 @@ def render_highlight_insights(
             brand_id = str(view["id"] or f"highlight-brand-{index}")
             panel_id = f"highlight-brand-panel-{brand_id}"
             tab_id = f"highlight-brand-tab-{brand_id}"
-            display_brand = "所有指定品牌" if view["brand"] == "全品牌" else view["brand"]
+            display_brand = presentation.get("aggregateLabel", "全品牌") if view["brand"] == "全品牌" else view["brand"]
             brand_tabs.append('<button type="button" role="tab" id="' + esc(tab_id) + '" aria-controls="' + esc(panel_id) + '" aria-selected="' + str(selected).lower() + '" tabindex="' + ("0" if selected else "-1") + '" data-highlight-brand-tab data-highlight-brand-target="' + esc(panel_id) + '">' + esc(display_brand) + '</button>')
             modes = view.get("modes", [])
             if modes:

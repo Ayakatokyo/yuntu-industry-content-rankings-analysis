@@ -15,6 +15,7 @@ from rpa_io import write_json_atomically
 from yuntu_highlights import find_local_video_asset
 from yuntu_presentation import build_yuntu_presentation, _chapter05_script_projection
 from yuntu_highlight_export import export_highlight_workbook, match_brands_from_title
+from yuntu_top_materials import aggregate_scope_label, configured_brands
 from yuntu_report_sections import (
     _chapter01_baseline_metric_value,
     _chapter01_current_metric_value,
@@ -94,7 +95,10 @@ def _archive_report_directory(output):
         ) as archive:
             for path in sorted(path for path in output.rglob("*") if path.is_file()):
                 relative_path = path.relative_to(output).as_posix()
-                archive.write(path, f"{output.name}/{relative_path}")
+                compression = (zipfile.ZIP_STORED if path.suffix.lower() in
+                               {".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".xlsx", ".zip"}
+                               else zipfile.ZIP_DEFLATED)
+                archive.write(path, f"{output.name}/{relative_path}", compress_type=compression)
         temporary_path.replace(archive_path)
     finally:
         temporary_path.unlink(missing_ok=True)
@@ -104,7 +108,6 @@ def _archive_report_directory(output):
 REQUIRED_FIELDS = (
     "topMaterialCombination",
 )
-TOP_MATERIAL_BRAND_ORDER = ("万益蓝/WONDERLAB", "五个女博士", "燕之屋")
 AUDIENCE_DIMENSION_LABELS = {
     "age": "年龄",
     "gender": "性别",
@@ -454,7 +457,7 @@ def _validate_top_material_combination(
     if aggregate is not None:
         if not isinstance(aggregate, dict) or aggregate.get("brand") != "全品牌":
             raise YuntuReportError("topMaterialCombination.allBrandsConclusion must be the 全品牌 aggregate")
-        if aggregate.get("classificationSource") not in {"title_rule", "runtime_title_rule"}:
+        if aggregate.get("classificationSource") not in {"title_rule", "runtime_title_rule", "scope_aggregate"}:
             raise YuntuReportError("topMaterialCombination.allBrandsConclusion classificationSource is invalid")
         _validate_summary(aggregate.get("dataSummary"), "topMaterialCombination.allBrandsConclusion dataSummary")
         _validate_evidence_and_material_ids(aggregate, "topMaterialCombination.allBrandsConclusion")
@@ -604,9 +607,18 @@ def _validate_ranking_scope_contract(analysis, fact_pack):
     industry = fact_pack["industryTop1000Facts"]
     if industry.get("source_scope") != "industry_top1000":
         raise YuntuReportError("industryTop1000Facts must describe the industry ranking scope")
-    brands = fact_pack.get("filters", {}).get("brands") or []
+    brands = configured_brands(fact_pack.get("filters", {}))
     conclusions = analysis.get("topMaterialCombination", {}).get("brandConclusions", [])
     actual_names = [item.get("brand") for item in conclusions if isinstance(item, dict)]
+    strict_brand_scope = fact_pack.get("brandScope", {}).get("version") == 1
+    if strict_brand_scope and actual_names != brands:
+        raise YuntuReportError("brand conclusions must preserve the configured brand scope and order")
+    if strict_brand_scope:
+        aggregate = analysis.get("topMaterialCombination", {}).get("allBrandsConclusion", {})
+        if aggregate.get("classificationSource") != "scope_aggregate":
+            raise YuntuReportError("allBrandsConclusion classificationSource must be scope_aggregate")
+        if any(item.get("classificationSource") != "runtime_title_rule" for item in conclusions):
+            raise YuntuReportError("brand conclusions classificationSource must be runtime_title_rule")
     if brands and set(actual_names) != set(brands):
         raise YuntuReportError("brand conclusions must preserve the complete input brand names")
     brand_facts = _brand_ranking_facts(fact_pack).get("brands", {})
@@ -629,6 +641,13 @@ def _validate_ranking_scope_contract(analysis, fact_pack):
                 # let the report state that the sample is insufficient.
                 continue
             raise YuntuReportError(f"missing processed brand facts for {brand}")
+        if strict_brand_scope and scope.get("sample_count") == 0:
+            item = conclusions_by_brand[brand]
+            if item.get("material_ids") or item.get("evidence"):
+                raise YuntuReportError(f"empty brand conclusion must not borrow evidence for {brand}")
+            if "数据不足" not in item.get("dataSummary", ""):
+                raise YuntuReportError(f"empty brand conclusion must explain 数据不足 for {brand}")
+            continue
         if not strict_audience_contract:
             continue
         data_summary = conclusions_by_brand[brand]["dataSummary"]
@@ -788,8 +807,7 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
     lines.extend(["## 01｜素材榜单数据洞察", ""])
     lines.extend(["---", "", "### 各品牌榜单分析", ""])
     brand_conclusions = {item["brand"]: item for item in combination["brandConclusions"]}
-    configured_brands = (fact_pack or {}).get("filters", {}).get("brands", [])
-    brand_order = configured_brands or TOP_MATERIAL_BRAND_ORDER
+    brand_order = configured_brands((fact_pack or {}).get("filters", {}))
     aggregate = combination.get("allBrandsConclusion")
     ordered_brands = ([aggregate] if isinstance(aggregate, dict) else [])
     ordered_brands.extend([
@@ -805,7 +823,7 @@ def _render_markdown(analysis, audience_dashboard=None, fact_pack=None):
     for index, item in enumerate(ordered_brands):
         if index:
             lines.extend(["---", ""])
-        display_brand = "所有指定品牌" if item.get("brand") == "全品牌" else item["brand"]
+        display_brand = aggregate_scope_label(fact_pack) if item.get("brand") == "全品牌" else item["brand"]
         lines.extend([f"### {display_brand}", ""])
         data_summary = item.get("dataSummary", "")
         if data_summary:
@@ -1307,11 +1325,7 @@ def _validate_highlight_dashboard(analysis, fact_pack):
         if not isinstance(scoped_brands, list) or not scoped_brands:
             raise YuntuReportError("highlightDashboard.brands must be a non-empty list")
         known_refs = {frame["frame_ref"] for frame in successful_frames}
-        brand_order = [
-            str(brand).strip()
-            for brand in (fact_pack.get("filters", {}) or {}).get("brands", [])
-            if str(brand).strip()
-        ]
+        brand_order = configured_brands(fact_pack.get("filters", {}))
         if quality_enabled(fact_pack) and [s.get("brand") for s in scoped_brands] != ["全品牌", *brand_order]:
             raise YuntuReportError("highlightDashboard.brands must cover every configured brand in order")
         seen_brands = set()
@@ -1925,7 +1939,7 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None, highli
         analysis["topMaterialCombination"],
         esc=esc,
         generic_text=_generic_text,
-        brand_order=(fact_pack.get("filters", {}).get("brands") or TOP_MATERIAL_BRAND_ORDER),
+        brand_order=configured_brands(fact_pack.get("filters", {})),
         presentation=(presentation or {}).get("chapters", {}).get("chapter01") if isinstance(presentation, dict) else None,
         jump_material_ids=_selected_material_ids(fact_pack),
     )
@@ -1979,9 +1993,9 @@ def _render_html(analysis, material_frames, fact_pack, presentation=None, highli
     """
     style += '.highlight-export-toolbar{display:flex;justify-content:flex-end;margin:0 0 12px}.highlight-export-button{display:inline-flex;align-items:center;min-height:36px;border:1px solid var(--accent-dark);border-radius:999px;background:#2c1810;color:#fff8ec;padding:7px 14px;text-decoration:none;font-size:.8125rem;font-weight:800}.highlight-export-button:hover{background:var(--accent-dark)}.highlight-brand-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.highlight-brand-tabs button{position:relative;min-height:40px;border:1px solid var(--line);border-radius:999px;background:#f7ead8;color:var(--muted);padding:8px 14px;cursor:pointer;white-space:nowrap}.highlight-brand-tabs button[aria-selected="true"]{border-color:var(--accent-dark);background:#2c1810;color:#fff;font-weight:800}.highlight-brand-panel[hidden]{display:none!important}.highlight-insight{margin:0 0 10px;padding:0;border-bottom:0}.highlight-insight:last-child{margin-bottom:0}.highlight-insight h5{margin:0 0 4px;font-size:.82rem}.highlight-insight p{margin:0;color:var(--muted);font-size:.82rem;line-height:1.55}'
     filters = fact_pack.get("filters", {}) if isinstance(fact_pack, dict) else {}
-    industry = str(filters.get("industry") or "食品饮料")
-    brands = filters.get("brands") or []
-    brand_text = "、".join(str(brand) for brand in brands if brand) or "指定品牌"
+    industry = str(filters.get("industry") or "当前")
+    brands = configured_brands(filters)
+    brand_text = "、".join(brands) or aggregate_scope_label(fact_pack)
     date_text = ""
     if filters.get("custom_start_date") and filters.get("custom_end_date"):
         date_text = f"｜{filters['custom_start_date']} 至 {filters['custom_end_date']}"

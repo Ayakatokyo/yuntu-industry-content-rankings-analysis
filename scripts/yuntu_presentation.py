@@ -1,6 +1,7 @@
 """Build a stable presentation projection from validated Yuntu report inputs."""
 
 from copy import deepcopy
+from yuntu_top_materials import aggregate_scope_label, configured_brands
 import math
 import re
 from pathlib import PurePosixPath
@@ -851,7 +852,7 @@ def _project_chapter03(analysis, fact_pack):
     facts = fact_pack.get("scriptFacts", {})
     scoped = analysis.get("scriptBrandInsights")
     if isinstance(scoped, dict):
-        panels = [{"brand": "所有指定品牌", "facts": {"coverage": facts.get("coverage", {})},
+        panels = [{"brand": aggregate_scope_label(fact_pack), "facts": {"coverage": facts.get("coverage", {})},
                    "scriptDashboard": dict(result["scriptDashboard"])}]
         for brand in facts.get("brandScopeOrder", []):
             scope = facts["brandScopes"][brand]
@@ -875,7 +876,7 @@ def _project_chapter01(analysis, fact_pack):
     if isinstance(aggregate, dict) and _text(aggregate.get("dataSummary")):
         panels.append({
             "id": "all-brands",
-            "brand": "所有指定品牌",
+            "brand": aggregate_scope_label(fact_pack),
             "insights": [{"text": _text(aggregate.get("dataSummary")), "dimension": "data"}],
         })
         _attach_chapter01_period_panels(panels[-1], aggregate, "all", fact_pack)
@@ -893,7 +894,7 @@ def _project_chapter01(analysis, fact_pack):
         if facts is not None:
             panels.append({
                 "id": "all-brands",
-                "brand": "所有指定品牌",
+                "brand": aggregate_scope_label(fact_pack),
                 "insights": [{"text": _ranking_scope_fallback_summary(facts), "dimension": "data"}],
             })
             _attach_chapter01_period_panels(panels[-1], {}, "all", fact_pack)
@@ -1228,13 +1229,14 @@ def _project_chapter04(analysis, fact_pack):
     if not isinstance(groups, list) or not groups:
         scoped_brands = dashboard.get("brands") if isinstance(dashboard, dict) else None
         if scoped_brands is not None:
-            brand_order = [str(brand).strip() for brand in (fact_pack.get("filters", {}) or {}).get("brands", []) if str(brand).strip()]
+            brand_order = configured_brands(fact_pack.get("filters", {}))
             chapter = _project_scoped_highlight_brands(scoped_brands, available, brand_order)
+            chapter["aggregateLabel"] = aggregate_scope_label(fact_pack)
             return _attach_highlight_classification_modes(chapter, dashboard, available, brand_order)
         raise YuntuPresentationError("highlight dashboard is required")
     seen, categories, previous_index = [], [], -1
     merged = {}
-    brand_order = [str(brand).strip() for brand in (fact_pack.get("filters", {}) or {}).get("brands", []) if str(brand).strip()]
+    brand_order = configured_brands(fact_pack.get("filters", {}))
     brand_merged = {}
     category_aliases = {"scene": "other", "text_overlay": "other"}
     for group in groups:
@@ -1289,6 +1291,7 @@ def _project_chapter04(analysis, fact_pack):
     # The renderer still accepts historical payloads that contain top-level
     # ``categories`` as a read-only compatibility fallback.
     chapter = {"scopeId": "all", "brands": ordered_brands, "availability": {"status": "complete", "reasons": []}}
+    chapter["aggregateLabel"] = aggregate_scope_label(fact_pack)
     return _attach_highlight_classification_modes(chapter, dashboard, available, brand_order)
 
 

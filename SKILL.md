@@ -96,9 +96,9 @@ python <skill-root>/scripts/rpa_connector.py status --output-dir "云图数据�
 
 使用 `python <skill-root>/scripts/rpa_connector.py prepare-analysis` 准备事实，完成 `yuntu-ai-analysis.json` 并通过 `attest-analysis` 后用 `python <skill-root>/scripts/rpa_connector.py render-report` 渲染。完整导航、检查、组装、认证和验收命令见 [分析草稿入口](references/analysis-drafts.md#完整命令示例)。
 
-报告只能由 `render-report` 渲染，使用 `assets/report/` 的离线资源并内联 CSS/JavaScript，不新增判断、不下载视频、不得手工修改 HTML。交付同级的 HTML 报告 `final-report/final-report.html` 和 `final-report.zip`；ZIP 仅含 `final-report/` 目录。报告验收只执行自动化产物校验：HTML、Markdown、报告数据和 presentation JSON 非空，导航和本地帧引用有效；有成功帧时 `final-report/highlight-frames.xlsx` 非空且 ZIP 含 Excel，正文无占位符；不要启动实际浏览器，也不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤。报告前确认 `status == success`、选中数量达标且无拒绝，否则按部分完成交付。
+报告只能由 `render-report` 渲染，使用 `assets/report/` 的离线资源并内联 CSS/JavaScript，不新增判断、不下载视频、不得手工修改 HTML。最终只提供 HTML 报告入口 `final-report/final-report.html`，不生成或交付报告 ZIP（`final-report.zip`）。保留完整 `final-report/` 目录：图片位于 `assets/highlight-frames/`、视频位于 `assets/videos/`，以及报告引用的 `highlight-frames.xlsx`；移动或分享报告时须连同依赖文件保留相对路径，不能只复制 HTML 后丢失图片、视频或 Excel 下载。Markdown 和数据 JSON 仍作为报告配套文件保留。报告验收只执行自动化产物校验：HTML、Markdown、报告数据和 presentation JSON 非空，导航、本地图片及视频引用有效；有成功帧时 `final-report/highlight-frames.xlsx` 非空且可加载，正文无占位符；不要启动实际浏览器，也不要把桌面端、移动端截图或人工视觉检查列为技能必经步骤。报告前确认 `status == success`、选中数量达标且无拒绝，否则按部分完成交付。
 
-`verify-report` 使用 Python 检查实际文件、章节锚点、本地引用、工作簿、ZIP CRC 与逐文件一致性；有成功帧时 Excel 必须存在。无需安装 `unzip` 或编写临时猜字段验收脚本；JavaScript 中合法的 `undefined` 不按正文占位符误报。Excel 三个视图共享同一份原图字节，报告仍保留视频与原图；JPEG/MP4/XLSX 在外层 ZIP 不重复压缩。超过 200 MiB 时输出体积提醒，默认归档 ZIP 一份并提供 HTML 入口，不把整目录与同一 ZIP 再各上传一遍；用户明确要求双份归档时遵从。
+`verify-report` 使用 Python 检查实际报告文件、章节锚点、本地引用、工作簿内部 CRC 与嵌图数量；有成功帧时 Excel 必须存在。返回 `reportPath`、`reportFileCount`、`reportBytes` 及验收结果，不要求报告 ZIP。无需安装 `unzip` 或编写临时猜字段验收脚本；JavaScript 中合法的 `undefined` 不按正文占位符误报。Excel 三个视图共享同一份原图字节，报告保留视频与原图。超过 200 MiB 时只提醒保留完整依赖目录，不因此删媒体或改为压缩包。历史同级 ZIP 不读取、不覆盖、不删除，也不作为本轮交付；技能安装包与运行后报告属于不同产物。
 
 优化效果按 workspace.json 的 inputMetrics 与 validation.json 的 timingsSeconds 核对：字节量衡量模型读取体积，本地耗时衡量校验开销；实际模型耗时还需从执行日志单独计时，不用字节缩减率代替提速率。
 

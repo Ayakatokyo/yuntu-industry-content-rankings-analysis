@@ -521,7 +521,7 @@ def _parser():
     commands.add_parser("self-test", help="Run offline connector checks")
     status_parser = commands.add_parser("status", help="Read collection lifecycle state")
     status_parser.add_argument("--output-dir", required=True)
-    verify_parser = commands.add_parser("verify-report", help="Verify delivered files, links, workbook and ZIP without external shell utilities")
+    verify_parser = commands.add_parser("verify-report", help="Verify report files, image/video links and workbook without external shell utilities")
     verify_parser.add_argument("--output-dir", required=True)
     prepare_parser = commands.add_parser(
         "prepare-analysis", help="Prepare Yuntu analysis facts"

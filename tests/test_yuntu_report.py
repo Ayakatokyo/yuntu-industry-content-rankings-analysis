@@ -9,6 +9,9 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+from PIL import Image
+from openpyxl import load_workbook
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT / "scripts"
@@ -747,7 +750,7 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("justify-content: flex-start;", css)
         self.assertNotIn("border-left: 3px", css)
 
-    def test_render_report_creates_sibling_zip_with_final_report_directory(self):
+    def test_render_report_writes_report_files_without_creating_sibling_zip(self):
         report = load_module()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -761,20 +764,29 @@ class YuntuReportTests(unittest.TestCase):
                 analysis_json=analysis_path, output_dir=output_dir
             )
 
-            archive_path = root / "final-report.zip"
             self.assertEqual(status, 0)
-            self.assertTrue(archive_path.is_file())
-            with zipfile.ZipFile(archive_path) as archive:
-                names = set(archive.namelist())
-            expected = {
-                f"final-report/{path.relative_to(output_dir).as_posix()}"
-                for path in output_dir.rglob("*")
-                if path.is_file()
-            }
+            for name in ("final-report.html", "final-report.md", "final-report-data.json", "presentation-report.json"):
+                self.assertTrue((output_dir / name).is_file(), name)
+                self.assertGreater((output_dir / name).stat().st_size, 0, name)
+            self.assertFalse((root / "final-report.zip").exists())
 
-        self.assertEqual(names, expected)
+    def test_render_report_preserves_existing_invalid_sibling_zip(self):
+        report = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps(self.analysis_json(), ensure_ascii=False), encoding="utf-8")
+            archive = root / "final-report.zip"
+            archive.write_bytes(b"previous report ZIP must not be replaced")
+            original_bytes, original_mtime = archive.read_bytes(), archive.stat().st_mtime_ns
 
-    def test_render_report_places_highlight_workbook_in_report_directory_and_zip(self):
+            status = report.render_report(analysis_json=analysis_path, output_dir=root / "final-report")
+
+            self.assertEqual(status, 0)
+            self.assertEqual(archive.read_bytes(), original_bytes)
+            self.assertEqual(archive.stat().st_mtime_ns, original_mtime)
+
+    def test_render_report_keeps_downloadable_workbook_with_original_frame_images(self):
         report = load_module()
         fact_pack = self.deep_dive_fact_pack()
 
@@ -786,6 +798,13 @@ class YuntuReportTests(unittest.TestCase):
                 encoding="utf-8",
             )
             output_dir = root / "final-report"
+            original_images = set()
+            for fact in fact_pack["materialFacts"]:
+                for frame in fact["highlightFrames"]:
+                    image = root / frame["relative_path"]
+                    image.parent.mkdir(parents=True, exist_ok=True)
+                    Image.new("RGB", (12, 20), (int(fact["material_id"]), frame["second"], 30)).save(image)
+                    original_images.add(image.read_bytes())
 
             status = report.render_report(
                 analysis_json=analysis_path,
@@ -795,8 +814,6 @@ class YuntuReportTests(unittest.TestCase):
 
             workbook_path = output_dir / "highlight-frames.xlsx"
             rendered = (output_dir / "final-report.html").read_text(encoding="utf-8")
-            with zipfile.ZipFile(root / "final-report.zip") as archive:
-                archive_names = archive.namelist()
             self.assertEqual(status, 0)
             self.assertTrue(workbook_path.is_file())
             self.assertGreater(workbook_path.stat().st_size, 0)
@@ -804,9 +821,18 @@ class YuntuReportTests(unittest.TestCase):
                 'href="highlight-frames.xlsx" download>导出高光帧资产（Excel）</a>',
                 rendered,
             )
-            self.assertIn("final-report/highlight-frames.xlsx", archive_names)
+            with zipfile.ZipFile(workbook_path) as workbook_archive:
+                self.assertIsNone(workbook_archive.testzip())
+                self.assertEqual({
+                    workbook_archive.read(name) for name in workbook_archive.namelist()
+                    if name.startswith("xl/media/")
+                }, original_images)
+            workbook = load_workbook(workbook_path)
+            self.assertEqual(len(workbook["高光帧资产"]._images), 4)
+            workbook.close()
+            self.assertFalse((root / "final-report.zip").exists())
 
-    def test_render_report_places_local_video_left_of_six_highlight_frames_and_archives_it(self):
+    def test_render_report_keeps_local_video_and_frame_bytes_with_working_html_references(self):
         report = load_module()
         fact_pack = self.deep_dive_fact_pack()
         fact_pack["materialFacts"][0]["localVideo"] = {
@@ -817,11 +843,13 @@ class YuntuReportTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            expected_frames = {}
             for fact in fact_pack["materialFacts"]:
                 for frame in fact["highlightFrames"]:
                     image = root / frame["relative_path"]
                     image.parent.mkdir(parents=True, exist_ok=True)
-                    image.write_bytes(b"fake-jpeg")
+                    Image.new("RGB", (12, 20), (int(fact["material_id"]), frame["second"], 30)).save(image)
+                    expected_frames[f'assets/highlight-frames/{fact["material_id"]}/{image.name}'] = image.read_bytes()
             source_video = root / "video-assets" / "101.mp4"
             source_video.parent.mkdir(parents=True, exist_ok=True)
             source_video.write_bytes(b"local-video-bytes")
@@ -832,8 +860,11 @@ class YuntuReportTests(unittest.TestCase):
 
             html = (root / "final-report" / "final-report.html").read_text(encoding="utf-8")
             presentation = json.loads((root / "final-report" / "presentation-report.json").read_text(encoding="utf-8"))
-            with zipfile.ZipFile(root / "final-report.zip") as archive:
-                archive_names = set(archive.namelist())
+            self.assertEqual((root / "final-report/assets/videos/101.mp4").read_bytes(), source_video.read_bytes())
+            for relative_path, expected_bytes in expected_frames.items():
+                self.assertEqual((root / "final-report" / relative_path).read_bytes(), expected_bytes)
+                self.assertIn(f'src="{relative_path}"', html)
+            self.assertFalse((root / "final-report.zip").exists())
 
         self.assertIn('class="deep-visual-layout"', html)
         self.assertIn('<video class="material-video" controls preload="metadata"', html)
@@ -845,7 +876,6 @@ class YuntuReportTests(unittest.TestCase):
         self.assertIn("aspect-ratio: 9 / 16;", css)
         self.assertIn("grid-template-columns: minmax(260px, 0.8fr) minmax(300px, 1fr);", css)
         self.assertEqual(presentation["chapters"]["chapter05"]["panels"][0]["video"]["src"], "assets/videos/101.mp4")
-        self.assertIn("final-report/assets/videos/101.mp4", archive_names)
 
     def test_report_maps_legacy_working_video_when_fact_pack_has_no_video_descriptor(self):
         report = load_module()

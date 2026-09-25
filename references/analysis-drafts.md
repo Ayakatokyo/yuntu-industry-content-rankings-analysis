@@ -26,7 +26,7 @@
 6. 各组草稿完成后直接运行 `assemble-analysis --workspace <目录> --output <新JSON文件>`。程序内部先执行完整检查（失败仍写 validation.json 并拒绝输出），通过后复制原始草稿到 `<文件名>.drafts/<SHA256>.json`，无损合并，复用报告校验并生成 `<文件名>.assembly.json`。已有输出不覆盖；修改草稿后使用新的输出文件名。快照保留原始字节，后续修改工作草稿不影响此前快照；改写快照会导致验证失败。
 7. 按 SKILL.md 的命令 attest，再 render。两者都加载相同的 manifest 绑定事实；第二章范围来自 `audience-marketing-input.json`，第五章脚本引用来自 `material-deep-dive-input.json`，不会从图表范围或另一章拼凑引用。render 的显式事实路径必须与已证明的渲染事实一致。
 
-8. `verify-report --output-dir <final-report>` 一次核查 HTML/Markdown/JSON、导航及资产、Excel 嵌图数量、ZIP CRC 和交付目录逐文件一致性。无成功帧时不强求空 Excel；有成功帧却缺 Excel 必须修复导出。超过 200 MiB 的提醒不代表验证失败，优先只归档 ZIP 一份并保留 HTML 入口，避免双份大文件复制。
+8. `verify-report --output-dir <final-report>` 一次核查 HTML/Markdown/JSON、导航、图片/视频引用及 Excel 内部 CRC 和嵌图数量。最终只提供 `final-report/final-report.html` 报告入口，不生成或交付报告 ZIP；保留完整报告目录和相对路径，包括原图、视频、Excel 及配套 JSON/Markdown。无成功帧时不强求空 Excel；有成功帧却缺 Excel 必须修复导出。超过 200 MiB 的提醒不代表验证失败，不能为减小体积删除报告依赖。历史同级 ZIP 原样保留，验收不依赖也不返回它。
 
 新 `analysisContract` 批次要求组装收据；没有该字段的历史批次仍支持原来已签名 JSON 的重渲染，并回填正式章节事实进行校验。历史 JSON 可用于离线回归，但不能改称本轮重新分析。重新准备事实或修改提示词后需新建草稿目录，不能迁移旧绑定。
 

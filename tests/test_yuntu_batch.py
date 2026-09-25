@@ -1,4 +1,6 @@
 import importlib.util
+import csv
+import io
 import inspect
 import json
 import sys
@@ -20,11 +22,26 @@ def load_batch():
     spec = importlib.util.spec_from_file_location("yuntu_batch", BATCH_PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.FileDownloader = FakeDownloader
     return module
 
 
+def as_csv_result(result):
+    """Model the live detail connector's CSV transport with existing business fixtures."""
+    if not isinstance(result, dict):
+        return result
+    if isinstance(result.get("data"), dict) and result["data"].get("result_type") == "files":
+        return result
+    records = result.get("data") if result.get("success") is True else result.get("payload")
+    if isinstance(records, dict):
+        records = [records]
+    if not isinstance(records, list) or not records:
+        return result
+    return {"status": "completed", "files": [{"fileUrl": "fixture-csv:" + json.dumps(records)}]}
+
+
 class FakeInvoker:
-    def __init__(self, list_result, detail_results):
+    def __init__(self, list_result, detail_results, *, csv_details=True):
         self.list_result = list_result
         self.detail_results = (
             dict(detail_results)
@@ -33,6 +50,7 @@ class FakeInvoker:
         )
         self.list_calls = []
         self.detail_calls = []
+        self.csv_details = csv_details
 
     def invoke_list(self, shop_id, list_params):
         self.list_calls.append((shop_id, list_params))
@@ -41,20 +59,32 @@ class FakeInvoker:
     def invoke_detail(self, shop_id, detail_params):
         self.detail_calls.append((shop_id, detail_params))
         if isinstance(self.detail_results, dict):
-            return self.detail_results[detail_params["material_id"]]
-        return self.detail_results.pop(0)
+            result = self.detail_results[detail_params["material_id"]]
+        else:
+            result = self.detail_results.pop(0)
+        return as_csv_result(result) if self.csv_details else result
 
 
 class FakeDownloader:
-    def __init__(self, contents_by_url):
-        self.contents_by_url = contents_by_url
+    def __init__(self, contents_by_url=None):
+        self.contents_by_url = contents_by_url or {}
         self.downloads = []
 
     def download_file(self, file_url, target_path):
         self.downloads.append((file_url, str(target_path)))
         target = Path(target_path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(self.contents_by_url[file_url], encoding="utf-8")
+        if file_url.startswith("fixture-csv:"):
+            records = json.loads(file_url.removeprefix("fixture-csv:"))
+            stream = io.StringIO()
+            writer = csv.DictWriter(stream, fieldnames=list(records[0]))
+            writer.writeheader()
+            writer.writerows({key: json.dumps(value) if isinstance(value, (dict, list)) else value
+                              for key, value in record.items()} for record in records)
+            content = stream.getvalue()
+        else:
+            content = self.contents_by_url[file_url]
+        target.write_text(content, encoding="utf-8")
         return target
 
 
@@ -75,7 +105,7 @@ class RecoveringDetailInvoker(FakeInvoker):
 
     def wait_detail(self, task_group_id):
         self.waits.append(task_group_id)
-        return self.detail_result
+        return as_csv_result(self.detail_result)
 
 
 class ConcurrentInvoker:
@@ -114,7 +144,7 @@ class ConcurrentInvoker:
             self._active += 1
             self.max_active = max(self.max_active, self._active)
         try:
-            return self.detail_handler(material_id)
+            return as_csv_result(self.detail_handler(material_id))
         finally:
             with self._lock:
                 self._active -= 1
@@ -164,7 +194,7 @@ class MultiPeriodInvoker:
         if result["data"][0]["dateRangeType"] == "CUSTOM":
             result["data"][0]["customStartDate"] = detail_params["custom_start_date"]
             result["data"][0]["customEndDate"] = detail_params["custom_end_date"]
-        return result
+        return as_csv_result(result)
 
 
 class ParallelRankingInvoker:
@@ -231,7 +261,7 @@ class ParallelRankingInvoker:
             self.detail_calls.append((shop_id, dict(detail_params)))
         if self.fail_details:
             raise RuntimeError("detail should not be requested on resume")
-        return detail_result(material_id)
+        return as_csv_result(detail_result(material_id))
 
 
 def detail_result(material_id):
@@ -1150,6 +1180,9 @@ class YuntuBatchTests(unittest.TestCase):
             root = Path(temporary_directory)
             (root / "raw-csv").mkdir(parents=True)
             (root / "normalized" / "detail-records").mkdir(parents=True)
+            (root / "raw-csv" / "details").mkdir()
+            (root / "raw-csv" / "details" / "101.csv").write_text(
+                "materialId,dateRangeType,trends\n101,LAST_7_DAYS,[]\n", encoding="utf-8")
             (root / "raw-csv" / "list.csv").write_text(
                 "material_id\x01title\x01object_index\x01people_tag_entry\x01material_tag_entry\x01page_industry\n"
                 '101\x01A\x01{"ctr":0.7}\x01[]\x01[]\x01食品饮料\n'
@@ -1289,10 +1322,9 @@ class YuntuBatchTests(unittest.TestCase):
                 (root / "batch-manifest.json").read_text(encoding="utf-8")
             )
 
-        self.assertEqual(status, 0)
-        self.assertEqual(
-            [params["material_id"] for _, params in invoker.detail_calls], ["202"]
-        )
+        self.assertEqual(status, 1)
+        self.assertEqual(invoker.detail_calls, [])
+        self.assertEqual(manifest["firstBatchCsvGate"]["status"], "unconfirmed")
         self.assertEqual(
             [item["material_id"] for item in manifest["unresolvedMaterials"]],
             ["101"],

@@ -80,7 +80,7 @@ python <skill-root>/scripts/rpa_connector.py status --output-dir "云图数据�
 
 三份逻辑榜单保留各自用途；业务请求完全一致时复用一次取数并记录来源，筛选或周期不同仍独立获取。榜单最多三路并行，详情固定三路，不因等待较长擅自提高远端并发。高光使用全分辨率精确 seek，新生成的帧以 frame-source.json 绑定视频及 JPEG 哈希，续跑只复用来源一致的帧、补缺失或损坏帧；保持每个应分析时间点和失败记录。
 
-`fetch` 通过异步任务协议观察，单个远端任务最多轮询 3600 秒。`run-summary.json` 保存参数指纹和 `taskRuns` 汇总投影；`batch-manifest.json` 在提交后立即保存 `task_group_id`，并记录 `unresolvedMaterials`。同一输出目录恢复时只轮询已登记任务，不重复提交；没有可复用任务 ID 的失败项保持失败，不提供 RPA 重提命令。`status --output-dir` 同时核对摘要、manifest、规范化列表和详情。列表请求失败写清单并非零退出且不发详情；详情请求失败继续处理其余素材，最终非零但保留成功文件。
+`fetch` 通过异步任务协议观察，单个远端任务最多轮询 3600 秒。`run-summary.json` 保存参数指纹和 `taskRuns` 汇总投影；`batch-manifest.json` 在提交后立即保存 `task_group_id`，并记录 `unresolvedMaterials`。同一输出目录恢复时只轮询已登记任务，不重复提交；没有可复用任务 ID 的失败项保持失败，不提供 RPA 重提命令。`status --output-dir` 同时核对摘要、manifest、规范化列表和详情。列表请求失败写清单并非零退出且不发详情；详情请求失败仅在首批 CSV 门禁通过后允许继续其余素材和候选补位，最终非零但保留成功文件。首批最多 3 条，全部结果确认且至少 1 份真实下载、解析并通过素材身份/周期校验的业务 CSV 后，`firstBatchCsvGate` 才 `passed`；全无有效 CSV 则 `blocked`、整体 `paused`，提示“当前入参可能有问题，已暂停后续所有 RPA”。JSON payload 不算 CSV，视频/抽帧失败不撤销有效 CSV。提交不明、超时或未知状态记 `unconfirmed`，只查已有任务 ID，禁止下一批、补位和重提。普通恢复保留门禁，修正入参后必须新建运行目录验证首批；不得删除状态绕过。完整状态和有效性规则见[详情首批 CSV 门禁](references/connectors/juliang-yt/rpa_conn_juliang_yt_industry_content_rankings_details.md#素材详情首批-csv-门禁2026-09-25)。
 
 ## 分析与交付
 

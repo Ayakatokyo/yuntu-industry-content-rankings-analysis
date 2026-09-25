@@ -803,6 +803,10 @@ def main(argv=None):
             output_dir=args.output_dir,
         )
         print(Path(args.output_dir) / "batch-manifest.json")
+        if status:
+            gate = collection_status(output_dir=args.output_dir).get("firstBatchCsvGate")
+            if isinstance(gate, dict) and gate.get("message"):
+                print(gate["message"], file=sys.stderr)
         return status
     except RpaConnectorError as exc:
         parser.error(str(exc))

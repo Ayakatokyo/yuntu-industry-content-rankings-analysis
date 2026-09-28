@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from PIL import Image
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT / "scripts"
@@ -1048,7 +1050,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             )
             image = root / "highlights" / "1" / "01-000s.jpg"
             image.parent.mkdir(parents=True)
-            image.write_bytes(b"jpeg")
+            Image.new("RGB", (8, 8), (32, 64, 96)).save(image, format="JPEG")
             analysis.write_highlights_manifest(root, {"1": [frame]})
 
             analysis.prepare_analysis(
@@ -1157,7 +1159,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(ranking["schemaVersion"], 4)
         brand_item_schema = ranking["outputSchema"]["properties"][
             "brandConclusions"
-        ]["items"]
+        ]["prefixItems"][0]
         self.assertNotIn(
             "executiveSummary",
             ranking["outputSchema"]["properties"],
@@ -1165,11 +1167,11 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertEqual(
             set(ranking["outputSchema"]["properties"]), {"brandConclusions", "allBrandsConclusion"}
         )
-        self.assertEqual(ranking["outputSchema"]["required"], ["brandConclusions"])
+        self.assertEqual(ranking["outputSchema"]["required"], ["brandConclusions", "allBrandsConclusion"])
         self.assertNotIn("peopleSummary", brand_item_schema["required"])
         self.assertEqual(
-            brand_item_schema["properties"]["classificationSource"]["enum"],
-            ["title_rule", "runtime_title_rule"],
+            brand_item_schema["properties"]["classificationSource"],
+            {"const": "runtime_title_rule"},
         )
         self.assertEqual(
             set(ranking["evidence"]),
@@ -1200,7 +1202,7 @@ class YuntuAnalysisTests(unittest.TestCase):
         self.assertIn("同一次分析任务", prompt)
         self.assertIn("ranking-brand-input.json` 的 `outputSchema", prompt)
         self.assertIn(
-            '`classificationSource` 只能是 `title_rule` 或 `runtime_title_rule`',
+            '`allBrandsConclusion` 固定为 `scope_aggregate`',
             prompt,
         )
         self.assertNotIn("brandComparisonConclusion", prompt)
@@ -1275,7 +1277,7 @@ class YuntuAnalysisTests(unittest.TestCase):
             self._write_input(root, records, selected, details)
             image = root / "highlights" / "1" / "01-000s.jpg"
             image.parent.mkdir(parents=True)
-            image.write_bytes(b"jpeg")
+            Image.new("RGB", (8, 8), (32, 64, 96)).save(image, format="JPEG")
             analysis.write_highlights_manifest(root, {"1": frames})
             with mock.patch.object(analysis, "generate_standard_highlights_for_detail") as generate:
                 analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
@@ -1324,6 +1326,10 @@ class YuntuAnalysisTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_input(root, records, selected, details)
+            manifest_path = root / "batch-manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["filters"]["brands"] = ["万益蓝/WONDERLAB", "五个女博士"]
+            manifest_path.write_text(json.dumps(manifest))
             analysis.prepare_analysis(
                 input_dir=root, output_dir=root / "diagnostic-analysis"
             )
@@ -1411,6 +1417,10 @@ class YuntuAnalysisTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_input(root, records, selected, details)
+            manifest_path = root / "batch-manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["filters"]["brands"] = ["万益蓝/WONDERLAB", "五个女博士"]
+            manifest_path.write_text(json.dumps(manifest))
             analysis.prepare_analysis(input_dir=root, output_dir=root / "diagnostic-analysis")
             data = json.loads((root / "diagnostic-analysis" / "report-data.json").read_text(encoding="utf-8"))
 

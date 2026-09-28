@@ -23,6 +23,8 @@ from yuntu_highlights import (
 )
 from yuntu_highlight_export import match_brands_from_title
 from yuntu_top_materials import (
+    configured_brands,
+    normalize_brand_values,
     build_audience_dashboard,
     build_marketing_dashboard,
     build_top_material_combination,
@@ -63,6 +65,7 @@ REPORT_DATA_FIELDS = (
     "schemaVersion",
     "analysisQualityVersion",
     "filters",
+    "brandScope",
     "selectedMaterials",
     "rejectedMaterials",
     "summaryMetrics",
@@ -827,6 +830,7 @@ def _report_data(fact_pack):
             brand: {
                 "source_scope": facts.get("source_scope"),
                 "sample_count": facts.get("sample_count"),
+                **{key: facts[key] for key in ("availability", "missingReason") if key in facts},
                 "materials": [
                     {"material_id": str(item["material_id"])}
                     for item in facts.get("materials", [])
@@ -1028,7 +1032,7 @@ def _model_material_facts(material_facts):
     return projected
 
 
-def _ranking_output_schema(*, include_period_contract=False):
+def _ranking_output_schema(*, include_period_contract=False, brand_scope=None):
     hot_material_insight_schema = {
         "type": "object",
         "additionalProperties": False,
@@ -1069,7 +1073,7 @@ def _ranking_output_schema(*, include_period_contract=False):
             "material_ids": {"type": "array", "items": {"type": "string"}},
         },
     }
-    return {
+    result = {
         "type": "object",
         "additionalProperties": False,
         "required": ["brandConclusions", "allBrandsConclusion"]
@@ -1083,6 +1087,26 @@ def _ranking_output_schema(*, include_period_contract=False):
             "allBrandsConclusion": brand_conclusion_schema,
         },
     }
+
+    if isinstance(brand_scope, dict) and brand_scope.get("version") == 1:
+        from copy import deepcopy
+        order = brand_scope.get("brands", [])
+        items = []
+        for brand in order:
+            item = deepcopy(brand_conclusion_schema)
+            item["properties"]["brand"] = {"const": brand}
+            item["properties"]["classificationSource"] = {"const": "runtime_title_rule"}
+            items.append(item)
+        result["properties"]["brandConclusions"] = {
+            "type": "array", **({"prefixItems": items} if items else {}), "items": False,
+            "minItems": len(items), "maxItems": len(items),
+        }
+        aggregate = deepcopy(brand_conclusion_schema)
+        aggregate["properties"]["brand"] = {"const": "全品牌"}
+        aggregate["properties"]["classificationSource"] = {"const": "scope_aggregate"}
+        result["properties"]["allBrandsConclusion"] = aggregate
+        result["required"] = ["brandConclusions", "allBrandsConclusion"]
+    return result
 
 
 def _analysis_insight_schema():
@@ -1332,7 +1356,7 @@ def _analysis_output_schema(fact_pack):
     include_period_contract = "hotMaterialFacts" in fact_pack
     properties = {
         "topMaterialCombination": _ranking_output_schema(
-            include_period_contract=include_period_contract
+            include_period_contract=include_period_contract, brand_scope=fact_pack.get("brandScope")
         ),
         "chapter02Insights": _chapter02_output_schema(fact_pack),
     }
@@ -1458,7 +1482,7 @@ def _write_analysis_units(fact_pack, output):
         }
         if unit_name == "ranking_brand":
             payload["outputSchema"] = _ranking_output_schema(
-                include_period_contract="hotMaterialFacts" in fact_pack
+                include_period_contract="hotMaterialFacts" in fact_pack, brand_scope=fact_pack.get("brandScope")
             )
         elif unit_name == "script_insights":
             schema = _analysis_output_schema(fact_pack)
@@ -1482,6 +1506,7 @@ def _write_analysis_units(fact_pack, output):
         "executionMode": "single_model_call",
         "sharedContext": {
             "filters": fact_pack["filters"],
+            **({"brandScope": fact_pack["brandScope"]} if "brandScope" in fact_pack else {}),
             "reportScopes": fact_pack["reportScopes"],
             "dataAvailabilitySummary": fact_pack["dataAvailabilitySummary"],
             "assetRoot": "..",
@@ -1556,32 +1581,19 @@ def _format_hot_material_rule(hot_material_rule=None):
 
 
 def _brand_values(value):
-    """Normalize persisted connector brand values before local iteration."""
-    if isinstance(value, (list, tuple, set)):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if not isinstance(value, str):
-        return []
-    text = value.strip()
-    if not text:
-        return []
-    try:
-        decoded = json.loads(text)
-    except json.JSONDecodeError:
-        decoded = None
-    if isinstance(decoded, list):
-        return [str(item).strip() for item in decoded if str(item).strip()]
-    return [part.strip() for part in text.replace("/", ",").split(",") if part.strip()]
+    """Backward-compatible entry point for run-local brand normalization."""
+    return normalize_brand_values(value)
 
 
 def _prompt_text(*, filters, hot_material_rule=None):
-    brand_values = _brand_values(filters.get("brands", []))
+    brand_values = configured_brands(filters)
     brands = "、".join(brand_values)
     scope_labels = "、".join(
         ["all（全量 TOP1000）", *brand_values]
     )
     return (
         _load_prompt_template()
-        .replace("__BRANDS__", brands or "未指定品牌")
+        .replace("__BRANDS__", brands or "全行业（未指定品牌，不生成品牌分类）")
         .replace("__SCOPE_LABELS__", scope_labels)
         .replace(
             "__HOT_MATERIAL_RULE__",
@@ -1692,9 +1704,17 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None, local_o
     except HotMaterialConfigError as exc:
         raise YuntuAnalysisError(str(exc)) from exc
     manifest = _load_json(root / "batch-manifest.json")
-    filters = manifest.get("filters")
-    if isinstance(filters, dict) and "brands" in filters:
-        manifest["filters"] = {**filters, "brands": _brand_values(filters["brands"])}
+    filters = manifest.get("filters") or {}
+    brands = configured_brands(filters)
+    manifest["filters"] = {**filters, "brands": brands}
+    brand_scope_metadata = {
+        "version": 1,
+        "mode": "specified_brands" if brands else "all_industry",
+        "brands": list(brands),
+        "aggregateLabel": "所有指定品牌" if brands else "全行业",
+        "classificationSource": "runtime_title_rule" if brands else "not_configured",
+        "missingReason": None if brands else "brands_not_specified",
+    }
     list_records = _load_json(root / "normalized" / "list-records.json")
     selected = manifest.get("selectedMaterials", [])
     rejected = manifest.get("rejectedMaterials", [])
@@ -1789,20 +1809,21 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None, local_o
                     [list_by_id[item["material_id"]] for item in group["topMaterials"]],
                     source_scope="brand_in_top1000",
                 ),
+                "availability": group["availability"],
+                "missingReason": group["missingReason"],
             }
             for brand, group in combination.get("brands", {}).items()
         },
     }
-    configured_brands = brands or list(brand_facts["brands"])
     comparison_facts["scopes"] = {}
     records_by_run = {
         "query": pool_records,
         "previous_period": previous_records,
         "industry": industry_records,
     }
-    for scope in ["all", *configured_brands]:
+    for scope in ["all", *brands]:
         _periods, scope_comparisons = _scope_period_facts(
-            manifest, records_by_run, scope=scope, brands=configured_brands
+            manifest, records_by_run, scope=scope, brands=brands
         )
         comparison_facts["scopes"][scope] = scope_comparisons
     hot_material_facts = None
@@ -1812,8 +1833,8 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None, local_o
                 pool_records, scope="all", hot_material_rule=hot_material_rule
             )
         }
-        for brand in configured_brands:
-            brand_records = _scope_records(pool_records, brand, configured_brands)
+        for brand in brands:
+            brand_records = _scope_records(pool_records, brand, brands)
             hot_material_facts[brand] = _hot_material_scope_facts(
                 brand_records, scope="brand", hot_material_rule=hot_material_rule
             )
@@ -1826,7 +1847,7 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None, local_o
         "scopeOrder": scope_order,
         "all": _chapter02_scope_fact(pool_records, label="全量 TOP1000", limit=1000),
     }
-    for brand in configured_brands:
+    for brand in brands:
         # Retain zero-match brands as explicit scopes. They are unavailable,
         # not a license to borrow evidence from all/another brand.
         brand_scope = brand_facts["brands"].get(brand, {})
@@ -1857,6 +1878,7 @@ def prepare_analysis(*, input_dir, output_dir, hot_material_config=None, local_o
         "schemaVersion": 8 if has_period_contract else 7,
         "analysisQualityVersion": QUALITY_VERSION,
         "filters": manifest.get("filters", {}),
+        "brandScope": brand_scope_metadata,
         "selectedMaterials": selected,
         "rejectedMaterials": rejected,
         "summaryMetrics": {"selectedCount": len(selected), "rejectedCount": len(rejected), "candidateCount": len(pool_records)},

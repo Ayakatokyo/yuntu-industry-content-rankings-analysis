@@ -29,6 +29,10 @@ class YuntuBatchError(RuntimeError):
 
 DETAIL_WAVE_CONCURRENCY = 3
 HIGHLIGHT_CONCURRENCY = 3
+FIRST_BATCH_NO_CSV_MESSAGE = (
+    "首批素材详情 RPA 未返回有效 CSV，当前入参可能有问题，已暂停后续所有 RPA；"
+    "请检查账号、日期、筛选/素材定位参数，修正后使用新运行目录重新验证首批。"
+)
 RANKING_RUN_ORDER = ("query", "previous_period", "industry")
 SELECTION_GROUP_FIELDS = {
     "selectionGroupId": "id",
@@ -282,6 +286,7 @@ def _new_manifest(
         "parameterFingerprint": summary["parameterFingerprint"],
         "collectionContract": summary["collectionContract"],
         "status": "running",
+        "firstBatchCsvGate": {"status": "pending", "materialIds": [], "outcomes": {}},
         "rankingRuns": {},
         "taskRuns": {},
         "filters": _manifest_filters(list_params),
@@ -402,6 +407,9 @@ def _restore_persisted_details(root, manifest, candidates):
                 "rawDetailPath": previous.get("rawDetailPath")
                 or _detail_source_path(root, material_id),
                 "timingsSec": previous.get("timingsSec", {}),
+                **{key: previous[key] for key in (
+                    "postprocessStatus", "postprocessTimingsSec", "postprocessError"
+                ) if key in previous},
             }
         )
     manifest["selectedMaterials"] = sorted(restored, key=lambda entry: entry["rank"])
@@ -782,6 +790,30 @@ def _persist_ranking_response(
         return None, entry
 
 
+def _reuse_equivalent_ranking_run(*, root, manifest, summary, run_key, source_key, records):
+    """Project one exactly equal request into both logical ranking scopes."""
+    entry = manifest["rankingRuns"][run_key]
+    source = manifest["rankingRuns"][source_key]
+    if entry.get("requestParams") != source.get("requestParams"):
+        raise YuntuBatchError("ranking reuse requires identical request parameters")
+    entry.update({
+        key: source[key]
+        for key in ("status", "actualDateRange", "sampleCount", "contextVerification", "rawPath", "rawJsonPath", "error")
+        if key in source
+    })
+    entry.update({
+        "requestStatus": "reused_equivalent",
+        "reusedFromRun": source_key,
+        "timingsSec": {"listFetchSec": 0.0},
+    })
+    if records is not None and source.get("status") == "success":
+        normalized_path = root / entry["normalizedPath"]
+        write_json_atomically(records, normalized_path)
+        _record_artifact(summary, root, f"rankingList:{run_key}", normalized_path, f"equivalent_ranking_{source_key}")
+        return records
+    return None
+
+
 def _reusable_ranking_records(root, manifest, run_key):
     """Return a verified normalized ranking list from a previous checkpoint."""
     entry = manifest.get("rankingRuns", {}).get(run_key)
@@ -910,16 +942,20 @@ def _invoke_detail_result(*, item, shop_id, detail_date_params, invoker):
 
 def _persist_detail(
     *, root, summary, item, gateway_result, downloader, detail_fetch_sec,
-    expected_context=None,
+    expected_context=None, require_csv=False, on_csv_valid=None,
 ):
     """Normalize a successful detail response and build its durable manifest entry."""
     material_id = item["material_id"]
+    if require_csv and unpack_gateway_result(gateway_result).kind != "files":
+        raise YuntuBatchError("detail RPA must return a downloadable CSV file")
     raw_detail, detail_source = _materialize_records(
         gateway_result,
         csv_path=root / "raw-csv" / "details" / f"{material_id}.csv",
         json_path=root / "raw-json" / "details" / f"{material_id}.json",
         downloader=downloader,
     )
+    if require_csv:
+        _require_detail_csv_records(raw_detail)
     detail_record = normalize_detail_records(
         raw_detail,
         material_id=material_id,
@@ -935,6 +971,8 @@ def _persist_detail(
             else None
         ),
     )
+    if require_csv and on_csv_valid is not None:
+        on_csv_valid()
     detail_output = root / "normalized" / "detail-records" / f"{material_id}.json"
     write_json_atomically(detail_record, detail_output)
     _record_artifact(
@@ -956,11 +994,13 @@ def _persist_detail(
 def _generate_highlight_result(detail, root):
     """Run a material's video download and frame extraction in a worker."""
     started = time.monotonic()
+    timings = {}
     try:
         return {
             "material_id": detail["material_id"],
-            "frames": generate_standard_highlights_for_detail(detail, root),
+            "frames": generate_standard_highlights_for_detail(detail, root, timings=timings),
             "duration": _elapsed(started),
+            "timingsSec": timings,
             "error": None,
         }
     except Exception as exc:
@@ -968,6 +1008,7 @@ def _generate_highlight_result(detail, root):
             "material_id": detail["material_id"],
             "frames": [],
             "duration": _elapsed(started),
+            "timingsSec": timings,
             "error": exc,
         }
 
@@ -1037,6 +1078,98 @@ def _selected_entry(manifest, material_id):
     )
 
 
+def _require_detail_csv_records(records):
+    """Do not let error rows or the normalizer's ID fallback pass the gate."""
+    if not isinstance(records, list) or len(records) != 1 or not isinstance(records[0], dict):
+        raise YuntuBatchError("detail CSV must contain exactly one business record")
+    raw = records[0]
+    core = raw.get("coreData") if isinstance(raw.get("coreData"), dict) else {}
+    identities = [raw.get(key) for key in (
+        "materialId", "material_id", "coreData.materialId", "core_data.material_id",
+    )] + [core.get("objectId"), core.get("materialId")]
+    if not any(value not in (None, "") for value in identities):
+        raise YuntuBatchError("detail CSV has no material identity")
+    structured_fields = {"trends", "coreData", "secondTrend", "audiencePortrait",
+                         "contentFormula", "creativeBreakdown"}
+    business_fields = {"title", "videoUrl", "video_url"}
+    if not any(
+        (key in structured_fields and isinstance(value, (dict, list)))
+        or (key in business_fields and isinstance(value, str) and bool(value.strip()))
+        or (key.startswith(("coreData.", "core_data.", "secondTrend.", "contentFormula.",
+                            "creativeBreakdown.")) and value not in (None, ""))
+        for key, value in raw.items()
+    ):
+        raise YuntuBatchError("detail CSV has no detail business fields")
+
+
+def _refresh_first_batch_gate(manifest):
+    gate = manifest["firstBatchCsvGate"]
+    if gate["status"] in {"blocked", "passed"} or not gate["materialIds"]:
+        return gate
+    results = [gate["outcomes"].get(material_id) for material_id in gate["materialIds"]]
+    gate["validCsvCount"] = results.count("valid_csv")
+    if any(result not in {"valid_csv", "invalid_csv"} for result in results):
+        gate["status"] = "unconfirmed"
+        gate["errorCode"] = "first_batch_result_unconfirmed"
+        gate["message"] = (
+            "首批素材详情 RPA 结果尚未确认，已暂停后续所有 RPA 提交；"
+            "仅可继续查询已登记任务 ID，不得重提、补位或启动下一批。"
+        )
+    elif gate["validCsvCount"]:
+        gate["status"] = "passed"
+        gate.pop("errorCode", None)
+        gate.pop("message", None)
+    else:
+        gate.update(status="blocked", errorCode="first_batch_no_valid_csv",
+                    message=FIRST_BATCH_NO_CSV_MESSAGE)
+    return gate
+
+
+def _restore_first_batch_gate(root, manifest, detail_date_params):
+    """Old ledgers need CSV evidence too; normalized JSON alone cannot release RPA."""
+    gate = manifest.get("firstBatchCsvGate")
+    if not isinstance(gate, dict):
+        submitted = [item.get("material_id") for item in manifest.get("submittedMaterials", [])
+                     if isinstance(item, dict) and item.get("material_id")]
+        groups = manifest.get("selectionGroups") or [{}]
+        first_size = min(DETAIL_WAVE_CONCURRENCY, manifest["targetTopN"] * len(groups))
+        gate = {"status": "pending", "materialIds": list(dict.fromkeys(submitted))[:first_size], "outcomes": {}}
+        manifest["firstBatchCsvGate"] = gate
+    if gate["status"] in {"blocked", "passed"}:
+        return gate
+    rejected = {item.get("material_id") for item in manifest.get("rejectedMaterials", [])}
+    candidates = {item.get("material_id"): item for item in manifest.get("candidateMaterials", [])}
+    for material_id in gate["materialIds"]:
+        if gate["outcomes"].get(material_id) in {"valid_csv", "invalid_csv"}:
+            continue
+        path = root / "raw-csv" / "details" / f"{material_id}.csv"
+        try:
+            records = parse_csv_records(path)
+            _require_detail_csv_records(records)
+            normalize_detail_records(records, material_id=material_id,
+                                     source_path=_relative(root, path),
+                                     expected_selection_group=_expected_selection_group(candidates.get(material_id, {})),
+                                     expected_context=detail_date_params if "date_type" in detail_date_params else None)
+        except Exception:
+            gate["outcomes"][material_id] = "invalid_csv" if material_id in rejected else "unconfirmed"
+        else:
+            gate["outcomes"][material_id] = "valid_csv"
+    return _refresh_first_batch_gate(manifest)
+
+
+def _pause_first_batch(root, manifest, summary, manifest_path):
+    gate = _refresh_first_batch_gate(manifest)
+    manifest["status"] = summary["status"] = "paused"
+    manifest["error"] = gate["message"]
+    summary["firstBatchCsvGate"] = gate
+    summary["taskRuns"] = manifest.get("taskRuns", {})
+    summary["stages"]["details"]["requestStatus"] = "paused"
+    _sync_stage_counts(summary, manifest, root)
+    write_json_atomically(manifest, manifest_path)
+    _save_summary(root, summary)
+    return 1
+
+
 def fetch_batch(
     *,
     shop_id,
@@ -1076,6 +1209,14 @@ def fetch_batch(
         candidate_top_n=candidate_top_n,
         summary=summary,
     )
+    prior_gate = manifest.get("firstBatchCsvGate", {})
+    resume_first_batch = bool(prior_gate.get("materialIds") or (
+        not prior_gate and manifest.get("submittedMaterials")
+    )) and prior_gate.get("status") not in {"passed", "blocked"}
+    gate = _restore_first_batch_gate(root, manifest, detail_date_params)
+    summary["firstBatchCsvGate"] = gate
+    if gate["status"] == "blocked":
+        return _pause_first_batch(root, manifest, summary, manifest_path)
     write_json_atomically(manifest, manifest_path)
 
     started = time.monotonic()
@@ -1086,7 +1227,23 @@ def fetch_batch(
             and _reusable_list_artifact(root, list_params, detail_date_params) is not None
         )
     )
-    if legacy_single_run:
+    if resume_first_batch:
+        # No new ranking request may bypass an unresolved first detail batch.
+        normalized_list = root / "normalized" / "list-records.json"
+        try:
+            if normalized_list.is_file():
+                list_records = _load_json(normalized_list)
+            else:
+                list_path = _reusable_list_artifact(root, list_params, detail_date_params)
+                if list_path is None:
+                    raise YuntuBatchError("first batch list evidence is unavailable")
+                list_records = normalize_list_records(parse_csv_records(list_path),
+                                                      source_path=_relative(root, list_path))
+                write_json_atomically(list_records, normalized_list)
+        except (OSError, ValueError, YuntuBatchError):
+            _refresh_first_batch_gate(manifest)
+            return _pause_first_batch(root, manifest, summary, manifest_path)
+    elif legacy_single_run:
         try:
             reusable_list = _reusable_list_artifact(root, list_params, detail_date_params)
             if reusable_list is not None:
@@ -1189,13 +1346,38 @@ def fetch_batch(
         for run_key, records in reused_records.items():
             ranking_records[run_key] = records
 
-        # Relative periods cannot be derived until the query response exposes
-        # its actual closed date range. Query and industry still run together;
-        # the previous-period request is submitted as soon as that range is
-        # available, without moving any persistence into a worker.
+        # Request equality includes every filter and the date mode. Do not
+        # infer equivalence from ALL_INDUSTRY alone or normalize absent fields
+        # against connector defaults that can change independently.
+        equivalent_runs = {}
+        for run_key in list(pending_specs):
+            source_key = next((
+                key for key in RANKING_RUN_ORDER
+                if key != run_key
+                and key not in equivalent_runs
+                and (key in reused_records or RANKING_RUN_ORDER.index(key) < RANKING_RUN_ORDER.index(run_key))
+                and manifest["rankingRuns"][key].get("requestParams") == pending_specs[run_key]["params"]
+            ), None)
+            if source_key is None:
+                continue
+            equivalent_runs[run_key] = source_key
+            pending_specs.pop(run_key)
+            manifest["rankingRuns"][run_key]["requestStatus"] = "waiting_equivalent"
+            if source_key in reused_records:
+                records = _reuse_equivalent_ranking_run(
+                    root=root, manifest=manifest, summary=summary,
+                    run_key=run_key, source_key=source_key, records=reused_records[source_key],
+                )
+                if records is not None:
+                    ranking_records[run_key] = records
+
+        # Restored query facts may come directly from its checkpoint or from
+        # an equivalent industry checkpoint. Derive the relative baseline only
+        # after either recovery path has exposed the actual closed date range.
         if (
             not specs["previous_period"].get("params")
-            and "query" in reused_records
+            and "previous_period" not in reused_records
+            and "query" in ranking_records
             and manifest["rankingRuns"]["query"].get("actualDateRange")
         ):
             specs = build_ranking_run_specs(
@@ -1209,6 +1391,9 @@ def fetch_batch(
             entry["requestStatus"] = "requested"
             manifest["rankingRuns"]["previous_period"] = entry
             pending_specs["previous_period"] = previous_spec
+
+        write_json_atomically(manifest, manifest_path)
+        _save_summary(root, summary)
 
         with ThreadPoolExecutor(max_workers=3) as ranking_executor:
             pending = {
@@ -1231,11 +1416,22 @@ def fetch_batch(
                     records, entry = persist_ranking_result(
                         run_key, pending_specs[run_key], response
                     )
+                    for equivalent_key, source_key in equivalent_runs.items():
+                        if source_key == run_key:
+                            equivalent_records = _reuse_equivalent_ranking_run(
+                                root=root, manifest=manifest, summary=summary,
+                                run_key=equivalent_key, source_key=source_key, records=records,
+                            )
+                            if equivalent_records is not None:
+                                ranking_records[equivalent_key] = equivalent_records
+                    write_json_atomically(manifest, manifest_path)
+                    _save_summary(root, summary)
                     if (
                         run_key == "query"
                         and records is not None
                         and entry["status"] == "success"
                         and not specs["previous_period"].get("params")
+                        and "previous_period" not in reused_records
                     ):
                         query_range = entry.get("actualDateRange")
                         if query_range:
@@ -1363,6 +1559,7 @@ def fetch_batch(
         )
         _sync_stage_counts(summary, manifest, root)
         summary["taskRuns"] = manifest.get("taskRuns", {})
+        summary["firstBatchCsvGate"] = gate
         write_json_atomically(manifest, manifest_path)
         _save_summary(root, summary)
 
@@ -1371,8 +1568,13 @@ def fetch_batch(
         entry = _selected_entry(manifest, material_id)
         if entry is not None:
             entry["postprocessStatus"] = "running"
+            entry.pop("postprocessError", None)
         future = executor.submit(_generate_highlight_result, detail, root)
         pending_highlights[future] = material_id
+
+    def record_valid_csv(material_id):
+        if material_id in gate["materialIds"]:
+            gate["outcomes"][material_id] = "valid_csv"
 
     # Resume never repeats a persisted detail. Missing frames are a separate job.
     restored_details = []
@@ -1397,6 +1599,10 @@ def fetch_batch(
         if _supports_detail_task_recovery(invoker):
             candidate_by_id = {item["material_id"]: item for item in candidates}
             for material_id, item in candidate_by_id.items():
+                if material_id in selected_ids:
+                    continue
+                if gate["status"] != "passed" and material_id not in gate["materialIds"]:
+                    continue
                 attempt = _active_detail_task_attempt(manifest, material_id)
                 if attempt is None:
                     continue
@@ -1414,6 +1620,8 @@ def fetch_batch(
 
         while True:
             if not pending_details and not pending_highlights:
+                if gate["materialIds"] and _refresh_first_batch_gate(manifest)["status"] != "passed":
+                    return _pause_first_batch(root, manifest, summary, manifest_path)
                 wave, next_index = _next_detail_wave(
                     candidates,
                     next_index,
@@ -1426,6 +1634,9 @@ def fetch_batch(
                 )
                 if not wave:
                     break
+                if not gate["materialIds"]:
+                    gate["materialIds"] = [item["material_id"] for item in wave]
+                    checkpoint()
                 for item in wave:
                     manifest["submittedMaterials"].append(_manifest_material(item))
                     if _supports_detail_task_recovery(invoker):
@@ -1469,6 +1680,8 @@ def fetch_batch(
                                 }
                             )
                             unresolved_ids.add(item["material_id"])
+                            if item["material_id"] in gate["materialIds"]:
+                                gate["outcomes"][item["material_id"]] = "unconfirmed"
                             manifest["unresolvedMaterials"].append(
                                 {
                                     **_manifest_material(item),
@@ -1488,6 +1701,8 @@ def fetch_batch(
                         )
                     pending_details[future] = item["material_id"]
                 checkpoint()
+                if not pending_details and not pending_highlights:
+                    continue
 
             done, _ = wait(
                 set(pending_details) | set(pending_highlights),
@@ -1502,6 +1717,8 @@ def fetch_batch(
                     task_attempt = _active_detail_task_attempt(manifest, material_id)
                     try:
                         if result["error"] is not None:
+                            if material_id in gate["materialIds"] and "RPA task failed" not in str(result["error"]):
+                                gate["outcomes"][material_id] = "unconfirmed"
                             if task_attempt is not None:
                                 task_attempt.update(
                                     {
@@ -1528,7 +1745,30 @@ def fetch_batch(
                                             }
                                         )
                                     continue
+                            elif "RPA task failed" not in str(result["error"]):
+                                unresolved_ids.add(material_id)
+                                manifest["unresolvedMaterials"].append({
+                                    **_manifest_material(item), "reason": "poll_unconfirmed",
+                                    "error": str(result["error"]),
+                                })
+                                continue
                             raise result["error"]
+                        response = result["result"]
+                        if isinstance(response, dict) and "status" in response and response["status"] not in {
+                            "completed", "partial_success", "failed"
+                        }:
+                            if material_id in gate["materialIds"]:
+                                gate["outcomes"][material_id] = "unconfirmed"
+                            if task_attempt is not None:
+                                task_attempt.update(remoteStatus="pending", lastObservedAt=_now_iso())
+                            unresolved_ids.add(material_id)
+                            manifest["unresolvedMaterials"] = [entry for entry in manifest["unresolvedMaterials"]
+                                                               if entry.get("material_id") != material_id]
+                            manifest["unresolvedMaterials"].append({
+                                **_manifest_material(item), "reason": "poll_unconfirmed",
+                                "error": f"unconfirmed remote status: {response['status']}",
+                            })
+                            continue
                         if task_attempt is not None:
                             task_attempt.update(
                                 {
@@ -1544,7 +1784,12 @@ def fetch_batch(
                             downloader=downloader,
                             detail_fetch_sec=_elapsed(result["started"]),
                             expected_context=detail_date_params,
+                            require_csv=True,
+                            on_csv_valid=lambda: record_valid_csv(material_id),
                         )
+                        unresolved_ids.discard(material_id)
+                        manifest["unresolvedMaterials"] = [entry for entry in manifest["unresolvedMaterials"]
+                                                           if entry.get("material_id") != material_id]
                         if task_attempt is not None:
                             task_attempt.update(
                                 {
@@ -1564,6 +1809,11 @@ def fetch_batch(
                         )
                         submit_highlight(highlight_executor, detail_record)
                     except Exception as exc:
+                        if material_id in gate["materialIds"] and gate["outcomes"].get(material_id) != "valid_csv":
+                            gate["outcomes"][material_id] = "invalid_csv"
+                        unresolved_ids.discard(material_id)
+                        manifest["unresolvedMaterials"] = [entry for entry in manifest["unresolvedMaterials"]
+                                                           if entry.get("material_id") != material_id]
                         rejected_ids.add(material_id)
                         if task_attempt is not None:
                             task_attempt.update(
@@ -1590,7 +1840,8 @@ def fetch_batch(
                     entry = _selected_entry(manifest, material_id)
                     if entry is not None:
                         entry["postprocessTimingsSec"] = {
-                            "highlightSec": result["duration"]
+                            "highlightSec": result["duration"],
+                            **result.get("timingsSec", {}),
                         }
                         if result["error"] is None:
                             entry["postprocessStatus"] = "succeeded"
@@ -1647,6 +1898,7 @@ def collection_status(*, output_dir):
         "parameterFingerprint": summary.get("parameterFingerprint"),
         "collectionContract": summary.get("collectionContract"),
         "rankingRuns": summary.get("rankingRuns") or manifest.get("rankingRuns", {}),
+        "firstBatchCsvGate": manifest.get("firstBatchCsvGate") or summary.get("firstBatchCsvGate"),
         "stages": {
             "list": {
                 "requestStatus": list_stage.get("requestStatus", "unknown"),

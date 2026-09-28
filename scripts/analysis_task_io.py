@@ -1,6 +1,21 @@
 """Readable, bounded JSON task pages. No sampling or business-text generation."""
 import json
 
+TASK_SECTIONS = ("all", "facts", "schema", "skeleton", "guidance")
+
+
+def task_section(task, section):
+    """Select complete structural sections without dropping facts within them."""
+    if section not in TASK_SECTIONS:
+        raise ValueError(f"unknown analysis section: {section}")
+    if section == "all":
+        return task
+    fields = {"facts": "scopedFacts", "schema": "outputSchema", "skeleton": "outputSkeleton"}
+    if section in fields:
+        key = fields[section]
+        return {key: task[key]}
+    return {key: value for key, value in task.items() if key not in fields.values()}
+
 
 def pretty_json(value):
     return json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)

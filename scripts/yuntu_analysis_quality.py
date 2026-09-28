@@ -5,6 +5,7 @@ evidence integrity without forcing a model to pad otherwise valid report copy.
 """
 from copy import deepcopy
 from yuntu_highlight_export import match_brands_from_title
+from yuntu_top_materials import configured_brands
 
 QUALITY_VERSION = 4
 SCRIPT_FIELDS = ("scriptInsights", "keywordCloudReview", "keywordCloudInsight")
@@ -63,7 +64,7 @@ def apply_schema(schema, facts):
                 category_reason={"type": "string", "minLength": 1})
             dashboard["standardClassification"]["properties"]["status"] = {"const": "complete"}
         original = dashboard["brands"]["items"]
-        brands = ["全品牌", *facts.get("filters", {}).get("brands", [])]
+        brands = ["全品牌", *configured_brands(facts.get("filters", {}))]
         scopes = []
         for brand in brands:
             item = deepcopy(original)

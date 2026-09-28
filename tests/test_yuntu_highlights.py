@@ -1,6 +1,9 @@
 import importlib.util
+import hashlib
 import json
+import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -186,7 +189,7 @@ class YuntuHighlightTests(unittest.TestCase):
             def __call__(self, _video_path, second, destination, *, ffmpeg_bin=None):
                 if second == 0:
                     raise highlights.HighlightFrameError("broken cover")
-                Path(destination).write_bytes(b"jpeg")
+                Path(destination).write_bytes(b"\xff\xd8jpeg\xff\xd9")
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -237,7 +240,7 @@ class YuntuHighlightTests(unittest.TestCase):
         self.assertFalse(result["101"][0]["available"])
         self.assertEqual(result["101"][0]["failure_reason"], "missing_video_url")
 
-    def test_standard_highlights_reuse_existing_frames_when_video_download_fails(self):
+    def test_standard_highlights_reject_unattributed_frames_when_video_download_fails(self):
         highlights = load_module()
 
         def failing_downloader(_url, _destination):
@@ -247,7 +250,7 @@ class YuntuHighlightTests(unittest.TestCase):
             root = Path(directory)
             existing = root / "highlights" / "101" / "01-000s.jpg"
             existing.parent.mkdir(parents=True)
-            existing.write_bytes(b"jpeg")
+            existing.write_bytes(b"\xff\xd8jpeg\xff\xd9")
 
             result = highlights.generate_standard_highlights(
                 [{"material_id": "101", "video_url": "https://video.example/101.mp4", "trend_series": []}],
@@ -255,9 +258,8 @@ class YuntuHighlightTests(unittest.TestCase):
                 downloader=failing_downloader,
             )
 
-        self.assertTrue(result["101"][0]["available"])
-        self.assertEqual(result["101"][0]["relative_path"], "highlights/101/01-000s.jpg")
-        self.assertEqual(result["101"][0]["frame_source"], "reused_local_extracted_frame")
+        self.assertFalse(result["101"][0]["available"])
+        self.assertEqual(result["101"][0]["failure_reason"], "download_failed")
 
     def test_standard_highlights_retains_downloaded_video_and_records_it_in_manifest(self):
         highlights = load_module()
@@ -296,7 +298,7 @@ class YuntuHighlightTests(unittest.TestCase):
             root = Path(directory)
             image = root / "highlights" / "101" / "01-000s.jpg"
             image.parent.mkdir(parents=True)
-            image.write_bytes(b"jpeg")
+            image.write_bytes(b"\xff\xd8jpeg\xff\xd9")
             highlights.write_highlights_manifest(
                 root,
                 {
@@ -352,7 +354,7 @@ class YuntuHighlightTests(unittest.TestCase):
 
         self.assertEqual([item["material_id"] for item in missing], ["101", "202"])
 
-    def test_generate_highlights_reuses_existing_frame_when_extraction_fails(self):
+    def test_generate_highlights_rejects_unattributed_frame_when_extraction_fails(self):
         highlights = load_module()
 
         def downloader(_url, destination):
@@ -365,7 +367,7 @@ class YuntuHighlightTests(unittest.TestCase):
             root = Path(directory)
             existing = root / "highlights" / "101" / "01-000s.jpg"
             existing.parent.mkdir(parents=True)
-            existing.write_bytes(b"jpeg")
+            existing.write_bytes(b"\xff\xd8jpeg\xff\xd9")
 
             result = highlights.generate_highlights(
                 [{"material_id": "101", "video_url": "https://video.example/101.mp4", "trend_series": []}],
@@ -375,10 +377,84 @@ class YuntuHighlightTests(unittest.TestCase):
                 frame_extractor=failing_extractor,
             )
 
-        self.assertTrue(result["101"][0]["available"])
-        self.assertEqual(result["101"][0]["frame_source"], "reused_local_extracted_frame")
+        self.assertFalse(result["101"][0]["available"])
+        self.assertEqual(result["101"][0]["failure_reason"], "extract_failed")
 
-    def test_extract_frames_batch_uses_one_exact_decode_graph_with_limited_threads(self):
+    def test_orphan_frames_require_receipt_matching_current_video_and_frame(self):
+        highlights = load_module()
+        detail = {"material_id": "101", "trend_series": []}
+        calls = []
+        def extract(video, requests, **_kwargs):
+            calls.append(Path(video).read_bytes())
+            for request in requests:
+                Path(request["destination"]).write_bytes(b"\xff\xd8" + calls[-1] + b"\xff\xd9")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = root / "video-assets/101.mp4"
+            video.parent.mkdir(parents=True)
+            video.write_bytes(b"blue-video")
+            cover = root / "highlights/101/01-000s.jpg"
+            cover.parent.mkdir(parents=True)
+            cover.write_bytes(b"\xff\xd8stale-red-frame\xff\xd9")
+            highlights.generate_standard_highlights_for_detail(detail, root, batch_extractor=extract)
+            self.assertEqual(cover.read_bytes(), b"\xff\xd8blue-video\xff\xd9")
+            highlights.generate_standard_highlights_for_detail(detail, root, batch_extractor=extract)
+            self.assertEqual(len(calls), 1)
+            video.write_bytes(b"green-video")
+            highlights.generate_standard_highlights_for_detail(detail, root, batch_extractor=extract)
+            self.assertEqual(cover.read_bytes(), b"\xff\xd8green-video\xff\xd9")
+            self.assertEqual(len(calls), 2)
+            cover.write_bytes(b"\xff\xd8replaced-image\xff\xd9")
+            highlights.generate_standard_highlights_for_detail(detail, root, batch_extractor=extract)
+            self.assertEqual(cover.read_bytes(), b"\xff\xd8green-video\xff\xd9")
+            self.assertEqual(len(calls), 3)
+
+    def test_interrupted_highlights_reuse_valid_frames_and_extract_only_missing_seconds(self):
+        highlights = load_module()
+        detail = {
+            "material_id": "101", "trend_series": [{"trend_name": "点击指数", "series": [
+                {"second": 0, "value": 0}, {"second": 1, "value": 9},
+                {"second": 2, "value": 0}, {"second": 3, "value": 8}, {"second": 4, "value": 0},
+            ]}],
+        }
+        extracted = []
+        def batch_extractor(_video, requests, **_kwargs):
+            extracted.extend(request["second"] for request in requests)
+            for request in requests:
+                Path(request["destination"]).write_bytes(b"\xff\xd8new\xff\xd9")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = root / "video-assets" / "101.mp4"
+            video.parent.mkdir(parents=True)
+            video.write_bytes(b"local-video")
+            cover = root / "highlights" / "101" / "01-000s.jpg"
+            cover.parent.mkdir(parents=True)
+            cover.write_bytes(b"\xff\xd8old-cover\xff\xd9")
+            (cover.parent / "frame-source.json").write_text(json.dumps({
+                "schemaVersion": 1, "videoSha256": hashlib.sha256(video.read_bytes()).hexdigest(),
+                "frames": {cover.name: {"second": 0, "sha256": hashlib.sha256(cover.read_bytes()).hexdigest()}},
+            }))
+            # This file exists but was interrupted before a complete JPEG landed.
+            (cover.parent / "02-001s.jpg").write_bytes(b"\xff\xd8broken")
+            frames = highlights.generate_standard_highlights_for_detail(
+                detail, root, downloader=lambda *_args: self.fail("local video must be reused"),
+                batch_extractor=batch_extractor,
+            )
+            self.assertEqual(extracted, [1, 3])
+            self.assertEqual(cover.read_bytes(), b"\xff\xd8old-cover\xff\xd9")
+            self.assertTrue(all(frame["available"] for frame in frames))
+            self.assertEqual([frame["relative_path"] for frame in frames], [
+                "highlights/101/01-000s.jpg", "highlights/101/02-001s.jpg", "highlights/101/03-003s.jpg",
+            ])
+            self.assertEqual(frames[0]["frame_source"], "reused_local_extracted_frame")
+            # Files published before the manifest checkpoint are still reusable.
+            again = highlights.generate_standard_highlights_for_detail(
+                detail, root, downloader=lambda *_args: self.fail("unexpected download"),
+                batch_extractor=lambda *_args, **_kwargs: self.fail("unexpected extraction"),
+            )
+            self.assertTrue(all(frame["available"] for frame in again))
+
+    def test_extract_frames_batch_seeks_each_target_exactly_in_one_process(self):
         highlights = load_module()
 
         def run(command, **_kwargs):
@@ -399,16 +475,79 @@ class YuntuHighlightTests(unittest.TestCase):
 
             command = invoke.call_args_list[0].args[0]
             graph = command[command.index("-filter_complex") + 1]
-            self.assertEqual(command.count("-i"), 1)
+            self.assertEqual(command.count("-i"), 2)
+            self.assertEqual([command[index + 1] for index, token in enumerate(command) if token == "-ss"], ["0", "2"])
             self.assertEqual(command[command.index("-threads") + 1], "1")
-            self.assertEqual(command[command.index("-filter_threads") + 1], "1")
-            self.assertIn("[0:v]split=2[s0][s1]", graph)
-            self.assertIn("[s0]trim=start=0,setpts=PTS-STARTPTS[out0]", graph)
-            self.assertIn("[s1]trim=start=2,setpts=PTS-STARTPTS[out1]", graph)
+            self.assertEqual(command[command.index("-filter_complex_threads") + 1], "1")
+            self.assertNotIn("-noaccurate_seek", command)
+            for index, token in enumerate(command):
+                if token == "-i":
+                    self.assertEqual(command[index - 2], "-ss")
+            self.assertIn("[0:v]setpts=PTS-STARTPTS[out0]", graph)
+            self.assertIn("[1:v]setpts=PTS-STARTPTS[out1]", graph)
             self.assertEqual(command.count("-frames:v"), 2)
             self.assertEqual(invoke.call_count, 1)
             self.assertEqual(targets, [root / "cover.jpg", root / "peak.jpg"])
             self.assertTrue(all(path.is_file() for path in targets))
+
+    def test_highlight_timings_separate_download_extraction_and_reuse(self):
+        highlights = load_module()
+        detail = {"material_id": "101", "video_url": "https://example.invalid/video.mp4", "trend_series": []}
+        def download(_url, path):
+            Path(path).write_bytes(b"local-video")
+        def extract(_video, requests, **_kwargs):
+            for request in requests:
+                Path(request["destination"]).write_bytes(b"\xff\xd8frame\xff\xd9")
+        with tempfile.TemporaryDirectory() as directory:
+            timings = {}
+            with mock.patch.object(time, "monotonic", side_effect=[100.0, 102.0, 105.0, 109.0]):
+                highlights.generate_standard_highlights_for_detail(detail, directory, downloader=download, batch_extractor=extract, timings=timings)
+            self.assertEqual(timings, {"videoDownloadSec": 2.0, "frameExtractionSec": 4.0})
+            reused_timings = {}
+            highlights.generate_standard_highlights_for_detail(detail, directory, downloader=download, batch_extractor=extract, timings=reused_timings)
+            self.assertEqual(reused_timings, {"videoDownloadSec": 0.0, "frameExtractionSec": 0.0})
+
+    def test_exact_seek_matches_full_decode_for_cfr_vfr_and_nonzero_start(self):
+        highlights = load_module()
+        try:
+            ffmpeg = highlights._resolve_ffmpeg()
+        except highlights.HighlightFrameError as exc:
+            self.skipTest(str(exc))
+        seconds = [0, 1, 2, 4]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, options in (
+                ("cfr", []),
+                ("vfr", ["-vf", "select='not(mod(n,3))'", "-fps_mode", "vfr"]),
+                ("offset", ["-output_ts_offset", "5"]),
+            ):
+                with self.subTest(video=name):
+                    video = root / f"{name}.mp4"
+                    subprocess.run([
+                        ffmpeg, "-loglevel", "error", "-f", "lavfi", "-i",
+                        "testsrc2=size=192x108:rate=30000/1001:duration=6", *options,
+                        "-c:v", "libx264", "-g", "30", "-bf", "2", "-y", str(video),
+                    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=20)
+                    # Independent baseline: decode from the beginning, then trim
+                    # each target on the original presentation timeline.
+                    graph = "[0:v]split=4[s0][s1][s2][s3];" + ";".join(
+                        f"[s{index}]trim=start={second},setpts=PTS-STARTPTS[out{index}]"
+                        for index, second in enumerate(seconds)
+                    )
+                    command = [ffmpeg, "-loglevel", "error", "-y", "-threads", "1", "-i", str(video), "-filter_complex", graph]
+                    for index, second in enumerate(seconds):
+                        command.extend(["-map", f"[out{index}]", "-frames:v", "1", "-q:v", "2", "-f", "image2", str(root / f"{name}-baseline-{second}.jpg")])
+                    subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=20)
+                    highlights.extract_frames_batch(video, [
+                        {"second": second, "destination": root / f"{name}-seek-{second}.jpg"}
+                        for second in seconds
+                    ], ffmpeg_bin=ffmpeg)
+                    for second in seconds:
+                        self.assertEqual(
+                            (root / f"{name}-baseline-{second}.jpg").read_bytes(),
+                            (root / f"{name}-seek-{second}.jpg").read_bytes(),
+                            f"{name} frame at {second}s changed",
+                        )
 
     def test_validate_jpeg_rejects_empty_and_truncated_files(self):
         highlights = load_module()

@@ -279,16 +279,19 @@ class AnalysisSkillContractTests(unittest.TestCase):
             skill,
         )
 
-    def test_documents_html_and_zip_final_delivery(self):
+    def test_documents_report_directory_delivery_without_runtime_zip(self):
         skill = self.read_skill()
 
         for phrase in (
-            "final-report.zip",
+            "final-report/final-report.html",
             "HTML 报告",
-            "final-report/` 目录",
-            "同级",
+            "final-report/highlight-frames.xlsx",
+            "视频",
+            "原图",
         ):
             self.assertIn(phrase, skill)
+        self.assertRegex(skill, r"不(?:再)?生成.{0,30}(?:ZIP|压缩包)")
+        self.assertNotIn("交付同级的 HTML 报告", skill)
 
     def test_report_acceptance_is_automated_without_browser_visual_check(self):
         skill = self.read_skill()

@@ -288,6 +288,11 @@ def load_params(args: argparse.Namespace) -> dict[str, Any]:
         raise ValidationContractError(f"业务入参不是合法 JSON：{exc}") from exc
     if not isinstance(params, dict):
         raise ValidationContractError("业务入参顶层必须是 JSON 对象")
+    section = getattr(args, "params_section", None)
+    if section:
+        if not isinstance(params.get(section), dict):
+            raise ValidationContractError(f"批参数必须包含对象字段 {section}")
+        params = params[section]
     return params
 
 
@@ -518,10 +523,24 @@ def cmd_list_accounts(_args: argparse.Namespace) -> None:
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
+    if _connector_code() == "rpa.conn.juliang.yt.industry.content.rankings.details":
+        raise ContractError(
+            "素材详情采集必须使用 scripts/rpa_connector.py fetch 的首批 CSV 门禁；"
+            "本入口只用于 detail/schema/validate/list-accounts。"
+        )
+    output_dir = workspace_root / args.output_dir if args.output_dir else default_output_dir()
+    manifest_path = output_dir / "batch-manifest.json"
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ContractError("批次状态不可读取，请使用 scripts/rpa_connector.py status 复核。") from exc
+        gate = manifest.get("firstBatchCsvGate", {})
+        if manifest.get("status") == "paused" or gate.get("status") in {"blocked", "unconfirmed"}:
+            raise ContractError(gate.get("message") or "当前批次已暂停后续所有 RPA，请复核入参。")
     detail = fetch_connector_detail()
     params = validate_business_params(detail, load_params(args))
     result = invoke(detail, args.shop_id, params)
-    output_dir = workspace_root / args.output_dir if args.output_dir else default_output_dir()
     file_summaries = [] if args.no_download else download_and_parse_files(detail, result, output_dir, args.preview_limit)
     print(
         json.dumps(
@@ -602,6 +621,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate_parser = subparsers.add_parser("validate", help="按实时连接器契约校验业务 JSON")
     add_params_source(validate_parser)
+    validate_parser.add_argument("--params-section", choices=("list", "detail"), help="仅校验批参数容器中的指定业务对象；不传则校验整个对象")
     validate_parser.set_defaults(func=cmd_validate)
 
     fetch_parser = subparsers.add_parser("fetch", help="校验、异步取数、下载并解析 CSV")

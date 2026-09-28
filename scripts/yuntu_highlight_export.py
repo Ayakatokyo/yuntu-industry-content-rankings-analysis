@@ -3,6 +3,11 @@
 from collections import OrderedDict
 from pathlib import Path
 import sys
+import hashlib
+import posixpath
+import tempfile
+import zipfile
+from xml.etree import ElementTree
 
 from yuntu_top_materials import classify_brand
 
@@ -383,6 +388,49 @@ def _build_gallery_sheet(workbook, title, rows, category_key, category_order, un
     return sheet
 
 
+def _deduplicate_workbook_images(path):
+    """Share byte-identical embedded media without resampling images or changing anchors."""
+    with zipfile.ZipFile(path) as source:
+        canonical, replacements = {}, {}
+        for name in source.namelist():
+            if not name.startswith("xl/media/") or name.endswith("/"):
+                continue
+            key = (Path(name).suffix.lower(), hashlib.sha256(source.read(name)).digest())
+            if key in canonical:
+                replacements[name] = canonical[key]
+            else:
+                canonical[key] = name
+        if not replacements:
+            return
+        with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".xlsx", delete=False) as stream:
+            temporary = Path(stream.name)
+        try:
+            with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as target:
+                for info in source.infolist():
+                    if info.filename in replacements:
+                        continue
+                    data = source.read(info.filename)
+                    if info.filename.endswith(".rels"):
+                        document = ElementTree.fromstring(data)
+                        changed = False
+                        base = posixpath.dirname(posixpath.dirname(info.filename))
+                        for relationship in document:
+                            if relationship.get("TargetMode") == "External":
+                                continue
+                            value = relationship.get("Target", "")
+                            resolved = (value.lstrip("/") if value.startswith("/")
+                                        else posixpath.normpath(posixpath.join(base, value)))
+                            if resolved in replacements:
+                                relationship.set("Target", "/" + replacements[resolved])
+                                changed = True
+                        if changed:
+                            data = ElementTree.tostring(document, encoding="utf-8", xml_declaration=True)
+                    target.writestr(info, data)
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
 def _export_highlight_workbook_python(rows, output_path):
     """Generate the workbook with openpyxl and Pillow."""
     try:
@@ -415,9 +463,15 @@ def _export_highlight_workbook_python(rows, output_path):
         unavailable_reason=f"本批次标准不可用：{batch_reason or '没有有效分类分组'}",
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=output_path.parent, suffix=".xlsx", delete=False) as stream:
+        temporary = Path(stream.name)
     try:
-        workbook.save(output_path)
+        workbook.save(temporary)
+        _deduplicate_workbook_images(temporary)
+        temporary.replace(output_path)
     except Exception as exc:
         print(f"[yuntu] 高光帧资产导出不可用：Python XLSX 写入失败：{exc}", file=sys.stderr)
         return None
+    finally:
+        temporary.unlink(missing_ok=True)
     return output_path if output_path.is_file() and output_path.stat().st_size > 0 else None

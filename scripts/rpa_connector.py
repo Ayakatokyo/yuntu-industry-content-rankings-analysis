@@ -521,6 +521,8 @@ def _parser():
     commands.add_parser("self-test", help="Run offline connector checks")
     status_parser = commands.add_parser("status", help="Read collection lifecycle state")
     status_parser.add_argument("--output-dir", required=True)
+    verify_parser = commands.add_parser("verify-report", help="Verify report files, image/video links and workbook without external shell utilities")
+    verify_parser.add_argument("--output-dir", required=True)
     prepare_parser = commands.add_parser(
         "prepare-analysis", help="Prepare Yuntu analysis facts"
     )
@@ -544,6 +546,12 @@ def _parser():
     begin_parser = commands.add_parser("begin-analysis", help="Create bound model JSON drafts and scoped contracts")
     begin_parser.add_argument("--fact-pack-json", required=True)
     begin_parser.add_argument("--workspace", required=True)
+    overview_parser = commands.add_parser("analysis-overview", help="List bound drafts, scope, fact pages and image batches in one read")
+    overview_parser.add_argument("--workspace", required=True)
+    frame_parser = commands.add_parser("read-frame-batch", help="Read at most 20 successful images and both chapter write targets")
+    frame_parser.add_argument("--workspace", required=True)
+    frame_parser.add_argument("--batch", type=int, default=0)
+    frame_parser.add_argument("--batch-size", type=_positive_int_argument, default=20)
     check_parser = commands.add_parser("check-analysis", help="Check drafts without attestation or rendering")
     check_parser.add_argument("--workspace", required=True)
     check_parser.add_argument("--part", action="append", help="Check this chapter or material key; repeat to check a group with one input verification")
@@ -551,6 +559,8 @@ def _parser():
     read_parser.add_argument('--workspace', required=True)
     read_parser.add_argument('--part', required=True)
     read_parser.add_argument('--page', type=int, default=0)
+    from analysis_task_io import TASK_SECTIONS
+    read_parser.add_argument('--section', choices=TASK_SECTIONS, default='all')
     assemble_parser = commands.add_parser("assemble-analysis", help="Losslessly assemble checked model drafts")
     assemble_parser.add_argument("--workspace", required=True)
     assemble_parser.add_argument("--output", required=True)
@@ -671,6 +681,11 @@ def main(argv=None):
         if args.command == "self-test":
             _cmd_self_test()
             return 0
+        if args.command == "verify-report":
+            from yuntu_delivery import verify_report
+            result = verify_report(args.output_dir)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result["valid"] else 1
         if args.command == "status":
             if collection_status is None:
                 raise RpaConnectorError("batch status support is unavailable")
@@ -685,6 +700,8 @@ def main(argv=None):
             }
             if args.hot_material_config:
                 prepare_kwargs["hot_material_config"] = args.hot_material_config
+            if args.local_only:
+                prepare_kwargs["local_only"] = True
             return prepare_analysis(**prepare_kwargs)
         if args.command == "attest-analysis":
             if attest_analysis is None:
@@ -703,15 +720,19 @@ def main(argv=None):
                 raise RpaConnectorError(str(exc)) from exc
             print(receipt)
             return 0
-        if args.command in {"begin-analysis", "check-analysis", "assemble-analysis", "read-analysis"}:
-            from yuntu_analysis_workspace import begin_workspace, check_workspace, assemble_workspace, read_task
+        if args.command in {"begin-analysis", "check-analysis", "assemble-analysis", "read-analysis", "analysis-overview", "read-frame-batch"}:
+            from yuntu_analysis_workspace import begin_workspace, check_workspace, assemble_workspace, read_task, read_workspace_navigation, read_frame_batch
             try:
                 if args.command == "begin-analysis":
                     result = begin_workspace(args.fact_pack_json, args.workspace)
                 elif args.command == "check-analysis":
                     result = check_workspace(args.workspace, args.part)
                 elif args.command == 'read-analysis':
-                    result = read_task(args.workspace, args.part, args.page)
+                    result = read_task(args.workspace, args.part, args.page, section=args.section)
+                elif args.command == 'analysis-overview':
+                    result = read_workspace_navigation(args.workspace)
+                elif args.command == 'read-frame-batch':
+                    result = read_frame_batch(args.workspace, args.batch, args.batch_size)
                 else:
                     result = {"analysisJson": str(assemble_workspace(args.workspace, args.output))}
             except (ValueError, OSError) as exc:
@@ -782,6 +803,10 @@ def main(argv=None):
             output_dir=args.output_dir,
         )
         print(Path(args.output_dir) / "batch-manifest.json")
+        if status:
+            gate = collection_status(output_dir=args.output_dir).get("firstBatchCsvGate")
+            if isinstance(gate, dict) and gate.get("message"):
+                print(gate["message"], file=sys.stderr)
         return status
     except RpaConnectorError as exc:
         parser.error(str(exc))

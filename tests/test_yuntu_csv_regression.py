@@ -13,10 +13,10 @@ from yuntu_analysis import build_script_facts  # noqa: E402
 from yuntu_normalizer import normalize_detail_records  # noqa: E402
 
 
-REAL_SAMPLE_DIR = Path(
-    "/Users/shuzida/Desktop/FDE客户/小仙炖/"
-    "yuntu-industry-content-rankings-analysis/RPA数据汇总/"
-    "yuntu-rankings-analysis-20260810-20260820-top12/raw-csv/latest-details"
+REAL_SAMPLE_DIR = (
+    ROOT / "RPA数据汇总"
+    / "yuntu-rankings-analysis-20260810-20260820-top12"
+    / "raw-csv" / "latest-details"
 )
 
 

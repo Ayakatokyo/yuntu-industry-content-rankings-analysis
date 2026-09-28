@@ -1,15 +1,11 @@
 """Build post-RPA facts for the TOP material combination report block."""
 
 from statistics import median
+import json
 import re
 import unicodedata
 
 
-BRAND_RULES = (
-    ("万益蓝/WONDERLAB", ("万益蓝", "wonderlab")),
-    ("五个女博士", ("五个女博士",)),
-    ("燕之屋", ("燕之屋",)),
-)
 CORE_METRICS = (
     "ctr",
     "cvr",
@@ -40,9 +36,50 @@ def _number(value):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def normalize_brand_values(value):
+    """Normalize connector strings or persisted lists without inventing brands.
+
+    Array entries retain slash aliases; plain connector strings retain the
+    documented comma/slash multi-value syntax. Preserve the first input spelling.
+    """
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            decoded = None
+        value = decoded if isinstance(decoded, list) else re.split(r"[,，/、]", value)
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    result, seen = [], set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        name = item.strip()
+        key = unicodedata.normalize("NFKC", name).casefold()
+        if name and key not in seen:
+            result.append(name)
+            seen.add(key)
+    return result
+
+
+def configured_brands(filters):
+    filters = filters if isinstance(filters, dict) else {}
+    if filters.get("brand_scope_type") == "ALL_INDUSTRY":
+        return []
+    return normalize_brand_values(filters.get("brands"))
+
+
+def aggregate_scope_label(facts):
+    scope = facts.get("brandScope", {}) if isinstance(facts, dict) else {}
+    if scope.get("version") == 1:
+        return "所有指定品牌" if scope.get("brands") else "全行业"
+    # Historical reports may not have retained their original selection mode.
+    return "所有指定品牌"
+
+
 def _runtime_brand_rules(brands):
     rules = []
-    for brand in brands or ():
+    for brand in normalize_brand_values(brands):
         canonical = str(brand or "").strip()
         if not canonical:
             continue
@@ -80,12 +117,10 @@ def _brand_token_matches(text, token):
 
 def classify_brand(title, *, brands=None):
     """Classify a title using only the current run's user-provided brands."""
-    if brands is None:
-        rules = BRAND_RULES
-        source = "title_rule"
-    else:
-        rules = _runtime_brand_rules(brands)
-        source = "runtime_title_rule"
+    rules = _runtime_brand_rules(brands)
+    if not rules:
+        return {"value": "未知品牌", "source": "not_configured"}
+    source = "runtime_title_rule"
     text = str(title or "")
     matches = [
         brand
@@ -409,27 +444,26 @@ def _group_summary(records, pool_records, top_n):
 
 def build_top_material_combination(records, *, top_n=30, brands=None):
     """Build auditable overall and run-scoped brand TOPN facts."""
-    runtime_brands = [str(brand).strip() for brand in (brands or ()) if str(brand).strip()]
-    classification_brands = runtime_brands or [brand for brand, _keywords in BRAND_RULES]
+    runtime_brands = normalize_brand_values(brands)
     classified = [
-        _classified_record(record, brands=runtime_brands or None)
+        _classified_record(record, brands=runtime_brands)
         for record in records
         if isinstance(record, dict)
     ]
     pool_records = select_top_materials(classified, limit=len(classified))
     warnings = []
     brands = {}
-    for brand in classification_brands:
+    for brand in runtime_brands:
         brand_records = [
             record for record in classified
             if brand in _classification_brands(record.get("brandClassification"))
         ]
-        if not brand_records:
-            continue
         summary = _group_summary(brand_records, brand_records, top_n)
         summary.update({
             "brand": brand,
-            "classificationSource": "runtime_title_rule" if runtime_brands else "title_rule",
+            "classificationSource": "runtime_title_rule",
+            "availability": "available" if brand_records else "unavailable",
+            "missingReason": None if brand_records else "no_matching_material_in_scope",
             "identifiedMaterialCount": len(brand_records),
         })
         brands[brand] = summary
@@ -439,13 +473,9 @@ def build_top_material_combination(records, *, top_n=30, brands=None):
             {
                 "brand": brand,
                 "keywords": list(keywords),
-                "source": "runtime_title_rule" if runtime_brands else "title_rule",
+                "source": "runtime_title_rule",
             }
-            for brand, keywords in (
-                _runtime_brand_rules(runtime_brands)
-                if runtime_brands
-                else BRAND_RULES
-            )
+            for brand, keywords in _runtime_brand_rules(runtime_brands)
         ],
         "overall": _group_summary(pool_records, pool_records, top_n),
         "brands": brands,

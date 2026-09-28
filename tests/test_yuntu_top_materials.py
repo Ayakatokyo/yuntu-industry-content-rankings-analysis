@@ -65,25 +65,11 @@ class YuntuTopMaterialsTests(unittest.TestCase):
         )
         self.assertEqual(result["value"], "Joyoung soymilk/九阳豆浆")
 
-    def test_classify_brand_uses_confirmed_title_rules(self):
+    def test_classify_brand_without_configuration_never_infers_default_brands(self):
         subject = load_module()
-
-        self.assertEqual(
-            subject.classify_brand("#万益蓝 WONDERLAB"),
-            {"value": "万益蓝/WONDERLAB", "source": "title_rule"},
-        )
-        self.assertEqual(
-            subject.classify_brand("五个女博士富铁软糖"),
-            {"value": "五个女博士", "source": "title_rule"},
-        )
-        self.assertEqual(
-            subject.classify_brand("燕之屋精炖燕窝"),
-            {"value": "燕之屋", "source": "title_rule"},
-        )
-        self.assertEqual(
-            subject.classify_brand("未标注素材"),
-            {"value": "未知品牌", "source": "unclassified"},
-        )
+        for title in ("#万益蓝 WONDERLAB", "五个女博士富铁软糖", "燕之屋精炖燕窝", "未标注素材"):
+            self.assertEqual(subject.classify_brand(title),
+                             {"value": "未知品牌", "source": "not_configured"})
 
     def test_select_top_materials_uses_exposure_rank_and_material_id(self):
         subject = load_module()
@@ -119,6 +105,7 @@ class YuntuTopMaterialsTests(unittest.TestCase):
                 record("4", 300, 4, "万益蓝和五个女博士"),
             ],
             top_n=2,
+            brands=["万益蓝/WONDERLAB", "五个女博士"],
         )
 
         overall = result["overall"]

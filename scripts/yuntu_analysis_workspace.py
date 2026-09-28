@@ -12,7 +12,7 @@ from yuntu_analysis_bundle import (
 import yuntu_report as report
 from yuntu_analysis_quality import WRITING_RUBRIC, SCRIPT_FIELDS
 from yuntu_analysis_inputs import READING_RULES, json_bytes, model_reading_view, concise_reading_view
-from analysis_task_io import task_pages
+from analysis_task_io import TASK_SECTIONS, task_pages, task_section
 
 
 def _skeleton(schema):
@@ -94,8 +94,11 @@ def _task(bundle, part):
     facts = bundle["facts"]
     task["writingRubric"] = WRITING_RUBRIC
     if part["key"] == "script" or "brand" in part:
-        task["scope"] = part.get("brand", "所有指定品牌")
-        task["evidenceFormat"] = "evidence 填本范围脚本文本或公式中的原文短语；material_ids 仅填本范围素材。正文缺失时 evidence=[]，明确数据不足以判断。"
+        task["scope"] = part.get("brand", facts.get("brandScope", {}).get("aggregateLabel") or
+                                 ("所有指定品牌" if facts.get("scriptFacts", {}).get("brandScopeOrder") else "全品牌"))
+        task["evidenceFormat"] = "先选择本范围 material_ids，再从这些素材的 quoteSourcePaths 中逐字引用连续原文短语到 evidence；概括词、标题、画面、关键词统计不是可替代原文。正文缺失时 evidence=[]，明确数据不足以判断。"
+        task["quoteSourcePaths"] = ["scopedFacts.materials[].script_text", "scopedFacts.materials[].content_formula.labels",
+                                    "scopedFacts.materials[].content_formula.sources.script.detail"]
         task['requiredScriptTitles'] = ['一二级内容公式：', '脚本文案：']
         task['scopeLimitationExample'] = '本批次样本尚不足以代表行业普遍规律。'
     if "materialId" in part:
@@ -158,18 +161,102 @@ def begin_workspace(manifest_path, workspace):
     return state
 
 
-def read_task(workspace, part_key, page=0):
-    state, bundle = _load_workspace(workspace)
+def _workspace_task(workspace, state, bundle, part_key):
     part = next((part for part in state['parts'] if part['key'] == part_key), None)
     if part is None:
         raise AnalysisBundleError('unknown draft part')
     # Persisted task is hash-verified by _load_workspace. Do not silently replace it.
-    task = read_json(Path(workspace) / f'{part_key}.task.json') if 'readingViewVersion' in state else _task(bundle, part)
-    pages = task_pages(task)
+    return read_json(Path(workspace) / f'{part_key}.task.json') if 'readingViewVersion' in state else _task(bundle, part)
+
+
+def read_task(workspace, part_key, page=0, section="all"):
+    if section not in TASK_SECTIONS:
+        raise AnalysisBundleError(f"unknown analysis section: {section}")
+    state, bundle = _load_workspace(workspace)
+    task = _workspace_task(workspace, state, bundle, part_key)
+    pages = task_pages(task_section(task, section))
     if type(page) is not int or not 0 <= page < len(pages):
         raise AnalysisBundleError('analysis page is out of range')
-    return {'part': part_key, 'binding': state['binding'], 'page': page, 'pageCount': len(pages),
+    return {'part': part_key, 'binding': state['binding'], 'section': section, 'page': page, 'pageCount': len(pages),
             'nextPage': page + 1 if page + 1 < len(pages) else None, 'records': pages[page]}
+
+
+def read_workspace_navigation(workspace):
+    """Describe every task and read section without replaying facts or schemas."""
+    state, bundle = _load_workspace(workspace)
+    parts = []
+    for part in state["parts"]:
+        task = _workspace_task(workspace, state, bundle, part["key"])
+        entry = {"part": part["key"], "draft": part["path"], "writeField": "content",
+                 "outputFields": part["outputFields"],
+                 "sectionPages": {section: len(task_pages(task_section(task, section))) for section in TASK_SECTIONS}}
+        for key in ("materialId", "brand"):
+            if key in part:
+                entry[key] = part[key]
+        for key in ("scope", "scriptTextAvailable"):
+            if key in task:
+                entry[key] = task[key]
+        if "scopes" in task:
+            entry["scopes"] = list(task["scopes"])
+        if "requiredFrameRefs" in task:
+            entry["successfulFrameCount"] = len(task["requiredFrameRefs"])
+        parts.append(entry)
+    frames = report._overview_highlight_frames(bundle["facts"])
+    return {"binding": state["binding"], "workspace": str(Path(workspace).resolve()),
+            "promptPath": str(bundle["root"] / "yuntu-analysis-prompt.md"), "parts": parts,
+            "frames": {"successfulCount": len(frames), "maxBatchSize": 20, "batchCount": (len(frames) + 19) // 20},
+            "workflow": ["读取提示词一次；首次按 part 读取默认 all 并沿 nextPage 读完；修复时仅按需重读 facts、guidance、skeleton 或 schema 分区。",
+                         "read-frame-batch 按素材顺序读取全部批次；每张成功 JPEG 同次填写第四章理解与第五章观察，及时保存。",
+                         "全部逐帧理解保存后完成第四章两套分类及品牌分析；每套分类仍须各自覆盖全部成功帧。",
+                         "每组草稿保存后 check-analysis --part 可重复；全部完成后 assemble-analysis 内部执行完整检查。"],
+            "readingMetrics": state.get("inputMetrics", {}),
+            "note": "导航和图片批次不会生成分析正文或声明已看图；每次读取仍核对完整事实、任务和成功资产绑定。"}
+
+
+def read_frame_batch(workspace, batch=0, batch_size=20):
+    """One viewing queue for both chapters, with every successful frame retained."""
+    if type(batch_size) is not int or not 1 <= batch_size <= 20:
+        raise AnalysisBundleError("frame batch size must be an integer from 1 to 20")
+    if type(batch) is not int or batch < 0:
+        raise AnalysisBundleError("frame batch is out of range")
+    state, bundle = _load_workspace(workspace)
+    frames = report._overview_highlight_frames(bundle["facts"])
+    batch_count = (len(frames) + batch_size - 1) // batch_size
+    if batch >= max(1, batch_count):
+        raise AnalysisBundleError("frame batch is out of range")
+    # Manifest paths are the verified images, not a guessed report-relative path.
+    paths = {asset["frame_ref"]: asset["path"] for asset in
+             bundle["manifest"].get("analysisContract", {}).get("visualAssets", [])}
+    if not paths:
+        paths = {frame["frame_ref"]: frame.get("image_path", "")
+                 for material in bundle["units"].get("material_deep_dive", {}).get("evidence", {}).get("materialFacts", [])
+                 for frame in material.get("highlightFrames", []) if frame.get("available")}
+    rows, material_offsets = [], {}
+    for index, frame in enumerate(frames):
+        mid = frame["material_id"]
+        offset = material_offsets.get(mid, 0)
+        material_offsets[mid] = offset + 1
+        if not batch * batch_size <= index < (batch + 1) * batch_size:
+            continue
+        image_path = paths.get(frame["frame_ref"])
+        if not image_path:
+            raise AnalysisBundleError(f"successful image has no bound path: {frame['frame_ref']}")
+        rows.append({"frame_ref": frame["frame_ref"], "materialPart": f"material-{mid}",
+                     "image_path": str((bundle["root"] / image_path).resolve()),
+                     "frame_type": frame["frame_type"], "second": frame.get("second"),
+                     "highlightIndex": index, "materialObservationIndex": offset})
+    highlight = _workspace_task(workspace, state, bundle, "highlight") if frames else {}
+    schema = highlight.get("outputSchema", {}).get("properties", {}).get("highlightDashboard", {}).get("properties", {}).get("frameUnderstanding", {}).get("items", {})
+    return {"binding": state["binding"], "batch": batch, "batchSize": batch_size,
+            "batchCount": batch_count, "totalSuccessfulFrames": len(frames),
+            "nextBatch": batch + 1 if batch + 1 < batch_count else None,
+            "frames": rows, "understandingSchema": schema,
+            "writeTargets": {"understanding": "highlight.json#/content/highlightDashboard/frameUnderstanding",
+                             "observation": "<materialPart>.json#/content/frame_observations",
+                             "viewedDeclaration": "highlight.json#/viewedFrameRefs"},
+            "readingRule": "逐张查看本批全部原图，同次独立完成两章对应观察；按 frame_ref 定位草稿，索引只对应初始骨架，编辑重排后以引用为准。",
+            "responseRule": "每图保留 frame_ref，直接给必填字段；短句、不另写章节总结，单个画面描述约25–40字。不得因回复预算省略成功帧或必填字段；输出截断时减小 batch-size 并补齐未返回帧。",
+            "completionRule": "实际看图后才追加 viewedFrameRefs；无法理解仍记录已查看并写 unavailable 与原因。全部批次完成后再做整批分类；两套分类各自覆盖成功帧全集。"}
 
 
 def _load_workspace(workspace):

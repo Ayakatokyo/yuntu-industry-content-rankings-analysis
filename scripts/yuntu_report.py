@@ -132,7 +132,8 @@ SCRIPT_ANALYSIS_FORBIDDEN_CLAIM = re.compile(
 
 
 def _load_analysis(
-    path, *, require_people_summary=True, strict_top_material_contract=False
+    path, *, require_people_summary=True, strict_top_material_contract=False,
+    zero_sample_brands=(),
 ):
     try:
         analysis = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -149,6 +150,7 @@ def _load_analysis(
         analysis["topMaterialCombination"],
         require_people_summary=require_people_summary,
         strict_contract=strict_top_material_contract,
+        zero_sample_brands=zero_sample_brands,
     )
     if "chapter02Insights" in analysis:
         analysis["chapter02Insights"] = _normalize_chapter02_insights(
@@ -170,6 +172,7 @@ def validate_analysis_input(*, analysis_json, fact_pack=None):
         analysis_json,
         require_people_summary=require_people_summary,
         strict_top_material_contract=strict_top_material_contract,
+        zero_sample_brands=_zero_sample_brands(fact_pack),
     )
     return validate_analysis_data(analysis, fact_pack)
 
@@ -402,7 +405,8 @@ def _validate_evidence_and_material_ids(item, field):
 
 
 def _validate_top_material_combination(
-    value, *, require_people_summary=True, strict_contract=False
+    value, *, require_people_summary=True, strict_contract=False,
+    zero_sample_brands=(),
 ):
     if not isinstance(value, dict):
         raise YuntuReportError("topMaterialCombination must be an object")
@@ -429,9 +433,15 @@ def _validate_top_material_combination(
                 item.get("peopleSummary"),
                 "topMaterialCombination.brandConclusions peopleSummary",
             )
-        _validate_evidence_and_material_ids(
-            item, "topMaterialCombination.brandConclusions items"
-        )
+        if item["brand"] in zero_sample_brands:
+            if item.get("evidence") != [] or item.get("material_ids") != []:
+                raise YuntuReportError(f"zero-sample brand {item['brand']} must keep evidence and material_ids empty")
+            if "数据不足" not in item["dataSummary"]:
+                raise YuntuReportError(f"empty brand conclusion must explain 数据不足 for {item['brand']}")
+        else:
+            _validate_evidence_and_material_ids(
+                item, "topMaterialCombination.brandConclusions items"
+            )
     aggregate = value.get("allBrandsConclusion")
     if aggregate is not None:
         if not isinstance(aggregate, dict) or aggregate.get("brand") != "全品牌":
@@ -450,6 +460,27 @@ def _brand_ranking_facts(fact_pack):
         return facts
     legacy_facts = fact_pack.get("brandTopNFacts")
     return legacy_facts if isinstance(legacy_facts, dict) else {}
+
+
+def _zero_sample_brands(fact_pack):
+    if not isinstance(fact_pack, dict):
+        return set()
+    brand_facts = _brand_ranking_facts(fact_pack).get("brands", {})
+    brand_facts = brand_facts if isinstance(brand_facts, dict) else {}
+    empty = {
+        brand for brand, scope in brand_facts.items()
+        if isinstance(scope, dict) and scope.get("sample_count") == 0
+    }
+    comparison_facts = fact_pack.get("comparisonFacts")
+    comparison = comparison_facts.get("scopes", {}) if isinstance(comparison_facts, dict) else {}
+    if isinstance(comparison, dict):
+        empty.update(
+            brand for brand, scope in comparison.items()
+            if brand not in brand_facts and isinstance(scope, dict)
+            and isinstance(scope.get("current"), dict)
+            and scope["current"].get("sampleCount") == 0
+        )
+    return empty
 
 
 def _normalized_semantic_text(value):

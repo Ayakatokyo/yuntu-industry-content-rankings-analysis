@@ -93,6 +93,48 @@ class BrandScopeContractTests(unittest.TestCase):
         self.assertIn('missing_reason', highlight[-1]['required'])
         Draft202012Validator.check_schema(schema)
 
+    def test_zero_sample_brand_conclusion_uses_its_own_fact_scope(self):
+        facts = {
+            'schemaVersion': 6,
+            'filters': {'brand_scope_type': 'SPECIFIED_BRANDS', 'brands': ['无样本']},
+            'brandScope': {'version': 1},
+            'industryTop1000Facts': {'source_scope': 'industry_top1000'},
+            'brandRankingFacts': {'brands': {'无样本': {
+                'source_scope': 'brand_in_top1000', 'sample_count': 0, 'materials': [],
+            }}},
+        }
+        conclusion = {
+            'brand': '无样本', 'classificationSource': 'runtime_title_rule',
+            'dataSummary': '当前榜单没有匹配素材，数据不足以判断。',
+            'evidence': [], 'material_ids': [],
+        }
+        analysis = {'topMaterialCombination': {
+            'brandConclusions': [conclusion],
+            'allBrandsConclusion': {
+                'brand': '全品牌', 'classificationSource': 'scope_aggregate',
+                'dataSummary': '全行业素材仍可观察。',
+                'evidence': ['行业榜单'], 'material_ids': ['101'],
+            },
+        }}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'analysis.json'
+            def validate():
+                path.write_text(json.dumps(analysis, ensure_ascii=False), encoding='utf-8')
+                return report.validate_analysis_input(analysis_json=path, fact_pack=facts)
+
+            self.assertIsNotNone(validate())
+            conclusion['material_ids'] = ['101']
+            with self.assertRaisesRegex(report.YuntuReportError, 'zero-sample brand'):
+                validate()
+            conclusion['material_ids'] = []
+            conclusion['dataSummary'] = '当前榜单没有匹配素材。'
+            with self.assertRaisesRegex(report.YuntuReportError, '数据不足'):
+                validate()
+            conclusion['dataSummary'] = '当前榜单没有匹配素材，数据不足以判断。'
+            facts['brandRankingFacts']['brands']['无样本']['sample_count'] = 1
+            with self.assertRaisesRegex(report.YuntuReportError, 'must include evidence'):
+                validate()
+
     def test_all_industry_discards_stale_specified_brands(self):
         with tempfile.TemporaryDirectory() as directory:
             facts, _ = self.prepare(Path(directory), {'brand_scope_type': 'ALL_INDUSTRY', 'brands': ['万益蓝']})
